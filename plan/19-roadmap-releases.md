@@ -4,7 +4,7 @@ Datas são forecast, não compromisso. O desenvolvimento é incremental e a capa
 
 ## R0.0 - Planning Baseline | setembro/2026
 
-Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs e arquitetura.
+Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs, arquitetura e autonomia como requisito central.
 
 ## R0.1 - Foundation | set-out/2026
 
@@ -23,7 +23,8 @@ Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs e arquitetura.
 - User Data Stream;
 - OMS/reconciliation;
 - Risk Engine v1;
-- paper simulator.
+- paper simulator;
+- SafeMode/recovery foundation.
 
 **Gate:** migrar runtime para .NET 11 GA assim que publicado e estabilizar antes de qualquer capital real.
 
@@ -33,40 +34,64 @@ Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs e arquitetura.
 - backtest;
 - metrics;
 - walk-forward/sensitivity/Monte Carlo;
-- baseline Trend/Momentum/Breakout.
+- baseline Trend/Momentum/Breakout;
+- experiment/model lineage foundation.
 
-## R0.4 - Multi-Strategy | jan-mar/2027
+## R0.4 - Autonomous Multi-Strategy | jan-mar/2027
 
 - Mean Reversion/Grid;
-- regime detector;
+- regime detector + confidence;
+- Autonomy Orchestrator;
+- automatic strategy eligibility/ranking;
+- dynamic risk-budget allocation;
 - portfolio netting;
-- strategy health;
-- execution quality;
-- dashboard completo.
+- Strategy Health;
+- automatic NO_TRADE;
+- execution quality/adaptive maker-vs-taker;
+- dashboard completo e decision trace.
 
-## R0.5 - Shadow/Canary | mar-abr/2027
+## R0.5 - Shadow/Canary Autônomo | mar-abr/2027
 
-- shadow evidence;
+- unattended shadow soak tests;
+- automatic regime transitions/strategy switching;
 - security hardening;
 - disaster/restore drill;
+- self-healing/reconciliation tests;
 - canary Spot com capital mínimo se gates passarem.
 
-## R1.0 - Stable Spot | alvo mai-jun/2027
+## R1.0 - Stable Autonomous Spot | alvo mai-jun/2027
 
-Critério: operação Spot observável/reconciliável, risk controls maduros, estratégia validada e histórico de canary suficiente. A data cede ao gate de segurança.
+Critério: operação Spot observável/reconciliável e **sem intervenção humana rotineira**, com seleção/alocação automática entre estratégias validadas, `NO_TRADE`, risk controls maduros, recovery seguro, estratégia(s) validadas e histórico de canary suficiente. A data cede ao gate de segurança.
 
-## R1.1 - Futures/Risk | posterior
+O R1.0 usa adaptação bounded/explicável. Ele já deve reagir sozinho a regime, Strategy Health e performance, mas não depende de ML complexo para ser autônomo.
 
-Futures adapter, margin/leverage/liquidation model, shorts/hedging, funding/basis.
+## R1.1 - Continuous Learning
 
-## R1.2 - Market Neutral | posterior
+- Model/Strategy Registry completo;
+- drift monitoring;
+- champion-challenger;
+- bounded parameter adaptation;
+- contextual-bandit/Bayesian meta-allocation em shadow e canary;
+- retraining/validation/promotion/rollback automatizados;
+- modelos adaptativos de slippage/regime quando superarem baselines.
+
+## R1.2 - Futures/Risk
+
+Futures adapter, margin/leverage/liquidation model, shorts/hedging, funding/basis, mantendo os mesmos boundaries de autonomia e risk.
+
+## R1.3 - Market Neutral
 
 Stat-arb, pairs, multi-exchange research, arbitrage.
 
-## R1.3 - Advanced Execution | posterior
+## R1.4 - Advanced Execution / Market Making
 
-L3 replay, market making, SBE/FIX se benchmarks justificarem.
+L3 replay, market making, adverse-selection models, SBE/FIX se benchmarks justificarem.
 
-## R2.x - Adaptive/ML
+## R2.x - Advanced Adaptive Research
 
-Somente após existir baseline simples rentável/robusto o suficiente para comparação e volume de dados operacional próprio.
+- ensembles/Mixture of Experts;
+- RL somente quando houver benchmark forte e controles maduros;
+- automated strategy discovery em research;
+- high availability primary/standby se risco/capital justificarem.
+
+Novas estratégias ou modelos jamais recebem produção automaticamente por simplesmente vencerem um backtest; precisam passar pelo pipeline de evidência e pelos hard risk boundaries.
