@@ -120,3 +120,28 @@
 - **RF-142** Backup e restauração testados.
 - **RF-143** Suportar deployment ARM64 e AMD64.
 - **RF-144** Suportar configuração AWS, Oracle Cloud e VPS sem alteração de domínio.
+
+## Autonomia e aprendizado contínuo
+- **RF-150** Executar continuamente o ciclo perceber → classificar → selecionar → alocar → arriscar → executar → aprender sem intervenção humana rotineira.
+- **RF-151** Construir um `MarketContext` versionado com regime, volatilidade, liquidez, spread, correlação, qualidade dos dados e demais features habilitadas.
+- **RF-152** Determinar automaticamente quais estratégias validadas são elegíveis para o contexto atual.
+- **RF-153** Calcular score/utilidade esperada líquida por estratégia considerando retorno, risco, custos, incerteza e correlação.
+- **RF-154** Ranqueiar estratégias elegíveis e alocar risk budget automaticamente.
+- **RF-155** Escolher `NO_TRADE` quando nenhuma estratégia superar os thresholds de utilidade/segurança.
+- **RF-156** Aplicar hysteresis/cooldown para evitar churn de estratégia causado por ruído de regime.
+- **RF-157** Atualizar automaticamente Strategy Health e reduzir, colocar em quarantine ou desabilitar estratégias deterioradas.
+- **RF-158** Detectar data drift, concept drift, execution drift e strategy decay.
+- **RF-159** Disparar pipeline de retreinamento/retuning quando critérios de drift/performance forem atingidos.
+- **RF-160** Manter Model/Strategy Registry com lineage de dados, código, configuração, features, parâmetros, métricas e status.
+- **RF-161** Executar champion-challenger em paper/shadow antes de promoção.
+- **RF-162** Promover automaticamente challengers apenas quando todos os gates quantitativos, operacionais e de risco forem satisfeitos.
+- **RF-163** Fazer rollback automático para versão anterior segura quando challenger/champion violar envelope de performance/risco/execução.
+- **RF-164** Permitir contextual-bandit/Bayesian allocation entre estratégias já aprovadas, inicialmente em research/shadow e posteriormente live sob budget específico.
+- **RF-165** Permitir autoajuste de parâmetros somente dentro de limites previamente validados e versionados.
+- **RF-166** Impedir que learner/orchestrator aumente hard risk limits, remova circuit breakers ou altere regras de segurança.
+- **RF-167** Selecionar automaticamente tática de execução conforme urgência, spread, liquidez, volatilidade, probabilidade de fill, fees e edge decay.
+- **RF-168** Registrar decision trace com contexto, candidatos, scores, seleção, decisão do Risk Engine, execução e resultado.
+- **RF-169** Separar loops de adaptação rápida, média e lenta para impedir retreinamento pesado no hot path.
+- **RF-170** Entrar automaticamente em `SafeMode` quando estado financeiro, market data ou integridade operacional não puderem ser confiados.
+- **RF-171** Recuperar conexões/processos automaticamente e reconciliar estado antes de liberar novas entradas.
+- **RF-172** Suportar arquitetura primary/standby futura com fencing/leader election para impedir dupla execução.
