@@ -2,7 +2,7 @@
 
 **Estado:** planejamento inicial  
 **Data-base:** 2026-09-01  
-**Produto:** plataforma de trading algorítmico de criptomoedas  
+**Produto:** plataforma autônoma de trading algorítmico de criptomoedas  
 **Exchange inicial:** Binance Spot  
 **Backend-alvo:** .NET 11 + C# 15  
 **Frontend-alvo:** React + TypeScript + Vite 8+
@@ -11,13 +11,13 @@ Este diretório é a fonte de verdade do planejamento. Mudanças relevantes de p
 
 ## Product Goal
 
-Construir uma plataforma de trading algorítmico segura, auditável, modular e orientada a evidências que consiga pesquisar, validar, simular e executar múltiplas estratégias em diferentes regimes de mercado, com gestão de risco independente e capacidade de operar inicialmente na Binance Spot e evoluir para derivativos e estratégias market-neutral.
+Construir uma plataforma de trading algorítmico segura, auditável, modular, resiliente e orientada a evidências que opere 24x7 de forma autônoma: analise o mercado, classifique contexto/regime, escolha e combine automaticamente estratégias previamente validadas, aloque risco, execute, monitore resultados, degrade/desative estratégias deterioradas, recupere-se de falhas e evolua com novos dados dentro de boundaries de segurança.
 
 ## North Star
 
-**Preservação de capital + expectativa líquida positiva + confiabilidade operacional.**
+**Preservação de capital + expectativa líquida positiva + autonomia segura + confiabilidade operacional.**
 
-Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
+Lucro bruto, win rate ou quantidade de operações não são objetivos isolados. `NO_TRADE` é uma decisão válida.
 
 ## Índice
 
@@ -48,7 +48,8 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [24 - ADRs](24-adrs.md)
 - [25 - Glossário](25-glossary.md)
 - [26 - Referências](26-references.md)
-- [Runbooks](27-runbooks.md)
+- [27 - Runbooks](27-runbooks.md)
+- [28 - Autonomia, autoaprendizado e resiliência](28-autonomy-continuous-learning.md)
 
 ## Templates
 
@@ -64,8 +65,9 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - Toda funcionalidade que pode movimentar capital exige critérios de segurança e teste mais fortes.
 - Mudanças em limites de risco exigem versionamento, auditoria e aprovação explícita.
 - Estratégias só chegam a live após gates objetivos de pesquisa e operação.
+- O sistema pode adaptar seleção, pesos e parâmetros dentro de envelopes aprovados, mas nunca remover hard risk limits.
 - Releases devem ser reversíveis.
-- Segurança e observabilidade fazem parte da funcionalidade, não são tarefas finais.
+- Segurança, autonomia, resiliência e observabilidade fazem parte da funcionalidade, não são tarefas finais.
 
 ## Escopo de lançamento 1.0
 
@@ -76,9 +78,14 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 5. Backtest reproduzível com custos.
 6. Paper e shadow trading.
 7. Estratégias baseline: Trend Following, Momentum, Breakout, Mean Reversion e Adaptive Grid.
-8. Regime Detection e seleção controlada de estratégia.
-9. Dashboard React realtime.
-10. Live canary com capital mínimo.
-11. Observabilidade, backups e runbooks.
+8. Regime Detection com confiança.
+9. Autonomy Orchestrator com seleção e alocação automática entre estratégias validadas.
+10. Strategy Health, `NO_TRADE` e redução/desativação automáticas.
+11. Adaptive execution inicial (market vs passive limit conforme contexto).
+12. Dashboard React realtime com decision trace.
+13. SafeMode, self-healing e recuperação/reconciliação automáticos.
+14. Live canary com capital mínimo.
+15. Operação Spot sem intervenção humana rotineira.
+16. Observabilidade, backups e runbooks.
 
-Futures, funding/basis, market making avançado, arbitragem cross-exchange, ML e FIX/SBE avançado são evoluções posteriores, não requisitos de 1.0.
+Continuous learning avançado, contextual bandits live, Futures, funding/basis, market making avançado, arbitragem cross-exchange e FIX/SBE avançado entram após a baseline autônoma estar comprovada. A arquitetura, porém, já nasce preparada para esses recursos.
