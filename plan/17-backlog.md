@@ -97,10 +97,10 @@ Tasks: z-score/VWAP variants; regime guard; costs.
 ### US-064 Quero Adaptive Grid baseline.
 Tasks: grid planner; inventory cap; volatility spacing; simulation.
 
-## EPIC E07 - Regime, Portfolio & Multi-Strategy
+## EPIC E07 - Regime, Portfolio & Autonomous Multi-Strategy
 
 ### US-070 Quero detectar regimes explicáveis.
-Tasks: trend/volatility/liquidity features; classifier; confidence; tests.
+Tasks: trend/volatility/liquidity/correlation features; classifier; confidence; transition hysteresis; tests.
 
 ### US-071 Quero combinar sinais e fazer netting.
 Tasks: intent aggregation; conflict rules; target builder.
@@ -110,6 +110,15 @@ Tasks: allocation model; caps; strategy health integration.
 
 ### US-073 Quero Strategy Health automático.
 Tasks: rolling metrics; state transitions; quarantine/re-enable policy.
+
+### US-074 Quero Autonomy Orchestrator.
+Tasks: MarketContext; candidate eligibility; orchestration API; decision trace; NO_TRADE policy.
+
+### US-075 Quero seleção automática de estratégia.
+Tasks: regime matrix bootstrap; expected-net-utility scorer; risk/cost/uncertainty/correlation penalties; ranking; hysteresis/cooldown.
+
+### US-076 Quero alocação dinâmica entre estratégias.
+Tasks: multi-strategy budget allocator; rebalancing rules; capacity constraints; simulation; audit.
 
 ## EPIC E08 - Execution Quality
 
@@ -122,6 +131,9 @@ Tasks: market vs limit decision; cancel stale; fill tracking.
 ### US-082 Quero execution attribution.
 Tasks: arrival price; implementation shortfall; expected vs realized slippage.
 
+### US-083 Quero adaptive execution.
+Tasks: execution context; tactic scorer; maker/taker choice; urgency/liquidity/edge decay model; bounded adaptive selection.
+
 ## EPIC E09 - Paper, Shadow & Canary
 
 ### US-090 Quero paper trading com mercado real.
@@ -132,6 +144,9 @@ Tasks: full decision pipeline; no exchange send; comparison report.
 
 ### US-092 Quero canary controls.
 Tasks: tiny capital policy; reduced symbols; stricter limits; rollback.
+
+### US-093 Quero operação autônoma prolongada em shadow.
+Tasks: unattended soak test; forced failure scenarios; regime transitions; automatic strategy switching; recovery metrics.
 
 ## EPIC E10 - Web Dashboard
 
@@ -146,6 +161,9 @@ Tasks: limits/breakers; confirmations; audit view.
 
 ### US-103 Quero research dashboard.
 Tasks: experiments; metrics; equity/DD; parameter sensitivity.
+
+### US-104 Quero autonomy dashboard.
+Tasks: current regime; candidate strategies; scores; allocations; health; drift; champion/challenger; decision trace.
 
 ## EPIC E11 - Security & Observability
 
@@ -178,7 +196,10 @@ Tasks: checklist; strategy evidence; keys; risk policy; restore drill.
 Tasks: canary observation window; incident review; scale rules.
 
 ### US-132 Quero relatório pós-release.
-Tasks: reliability; execution quality; strategy performance; backlog update.
+Tasks: reliability; execution quality; strategy performance; autonomy metrics; backlog update.
+
+### US-133 Quero Spot 1.0 operar sem intervenção rotineira.
+Tasks: autonomous regime/selection/allocation; safe fallback; recovery; soak period; intervention-rate KPI.
 
 ## EPIC E14 - Futures & Hedging (pós-1.0)
 US-140 Futures adapter; US-141 leverage/margin/liquidation risk; US-142 shorts; US-143 hedging; US-144 funding/basis.
@@ -189,5 +210,42 @@ US-150 pairs/stat-arb; US-151 triangular arb; US-152 multi-exchange adapter; US-
 ## EPIC E16 - Market Making Advanced (pós-1.0)
 US-160 L3 order-book simulator; US-161 inventory-aware MM; US-162 Avellaneda-Stoikov research; US-163 adverse-selection controls.
 
-## EPIC E17 - ML & Adaptive Allocation (futuro)
-US-170 feature store/registry; US-171 regime ML; US-172 slippage model; US-173 meta-allocation/MoE; US-174 concept drift monitoring.
+## EPIC E17 - Continuous Learning & Adaptive Allocation
+
+### US-170 Quero Model/Strategy Registry com lineage completo.
+Tasks: schema; model/data/code/config versions; status lifecycle; reproducibility query.
+
+### US-171 Quero regime ML challenger.
+Tasks: feature pipeline; baseline comparison; OOS/walk-forward; shadow deployment.
+
+### US-172 Quero slippage/market-impact model adaptativo.
+Tasks: labels; training; calibration; online monitoring; execution integration.
+
+### US-173 Quero meta-allocation contextual.
+Tasks: contextual bandit/Bayesian prototype; offline evaluation; shadow exploration; bounded canary policy.
+
+### US-174 Quero concept/data/execution drift monitoring.
+Tasks: drift metrics; thresholds; alerts; retraining trigger; false-positive analysis.
+
+### US-175 Quero champion-challenger automatizado.
+Tasks: challenger creation; evaluation policy; promotion gates; model registry integration; rollback.
+
+### US-176 Quero bounded parameter adaptation.
+Tasks: parameter envelopes; optimizer/retrainer; automatic validation; promotion/rollback tests.
+
+### US-177 Quero slow learning loop automatizado.
+Tasks: scheduled/triggered training; validation DAG; shadow/canary orchestration; evidence persistence.
+
+## EPIC E18 - Self-Healing & High Availability
+
+### US-180 Quero SafeMode automático.
+Tasks: financial-state trust gate; no-new-entry; reconcile; recovery policy; tests.
+
+### US-181 Quero supervised self-healing.
+Tasks: restart policy; backoff/jitter; bounded queues; failure injection; unattended recovery.
+
+### US-182 Quero disaster recovery verificável.
+Tasks: backup/restore; corrupt-state scenario; RPO/RTO measurement; runbook automation.
+
+### US-183 Quero primary/standby futuro sem double-trading.
+Tasks: leader election design; fencing token; standby state sync; failover simulation; chaos test.
