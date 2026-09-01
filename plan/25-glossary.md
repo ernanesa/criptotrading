@@ -1,0 +1,30 @@
+# 25 - Glossário
+
+- **Alpha:** sinal/expectativa de retorno além de benchmark/custos.
+- **AlphaSignal:** intenção informativa produzida por strategy.
+- **Backtest:** simulação em dados históricos.
+- **Basis:** diferença entre preço spot e derivativo.
+- **Canary:** produção real com exposição mínima e limites reforçados.
+- **Circuit breaker:** bloqueio automático por condição de risco/saúde.
+- **Drawdown:** queda do equity desde um pico.
+- **Edge:** vantagem esperada líquida de custos.
+- **Fill:** execução total ou parcial de uma ordem.
+- **Funding:** pagamento periódico entre lados de perpetual futures.
+- **Implementation shortfall:** diferença entre preço de decisão e execução efetiva.
+- **Intent:** desejo da estratégia antes de portfolio/risk.
+- **Kill switch:** mecanismo de emergência que bloqueia novas exposições.
+- **Market impact:** movimento de preço causado pela própria ordem.
+- **Market making:** prover bids/asks buscando capturar spread, sujeito a inventory/adverse selection.
+- **OOS:** out-of-sample, dados não usados para selecionar a estratégia.
+- **OMS:** Order Management System.
+- **Paper:** execução simulada com mercado atual.
+- **PBO:** Probability of Backtest Overfitting.
+- **PnL:** Profit and Loss.
+- **Portfolio target:** exposição desejada após combinação de sinais.
+- **Regime:** estado de mercado classificado por tendência, volatilidade, liquidez etc.
+- **Reconciliation:** comparação de estado interno com exchange.
+- **Shadow:** pipeline live completo sem enviar ordens.
+- **Slippage:** diferença entre preço esperado e executado.
+- **Strategy Health:** avaliação operacional/estatística contínua de estratégia.
+- **STP:** Self-Trade Prevention.
+- **Walk-forward:** validação temporal repetida usando apenas passado para decidir o próximo período.
