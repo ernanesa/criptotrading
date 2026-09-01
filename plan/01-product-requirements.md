@@ -24,6 +24,22 @@
 - circuit breakers e kill switch;
 - modos paper, shadow, canary e live.
 
+### Autonomy Plane
+- operação 24x7 sem intervenção humana em decisões rotineiras;
+- classificação automática de contexto/regime com confiança;
+- seleção e deselegibilidade automática de estratégias previamente validadas;
+- ranking de estratégias por utilidade líquida esperada ajustada a risco, custos e incerteza;
+- alocação dinâmica de risk budget entre estratégias;
+- `NO_TRADE` automático quando nenhuma alternativa supera os thresholds;
+- Strategy Health com redução, quarantine e desativação automáticas;
+- feedback contínuo de resultados para o seletor/alocador;
+- detecção de data drift, concept drift, execution drift e strategy decay;
+- champion-challenger para modelos adaptativos;
+- retreinamento/retuning e promoção automáticos somente dentro de envelopes e gates predefinidos;
+- rollback automático de modelos/estratégias degradados;
+- auto-recuperação operacional, reconciliação e safe mode;
+- nenhum mecanismo adaptativo pode elevar hard risk limits ou remover circuit breakers.
+
 ### Control Plane
 - configuração versionada;
 - gestão de estratégias;
@@ -42,21 +58,21 @@
 ## Personas funcionais
 
 ### Quant Researcher
-Cria hipóteses, executa testes, compara estratégias e decide se há evidência suficiente para promover uma estratégia.
+Cria hipóteses, executa testes, compara estratégias e define envelopes/gates dentro dos quais o sistema poderá adaptar-se automaticamente.
 
 ### Trader/Operator
-Ativa modos, acompanha posições, limites, alertas e pode acionar kill switch.
+Acompanha posições, limites e alertas e mantém capacidade de intervenção/kill switch. Não deve ser necessário para decisões rotineiras de mercado.
 
 ### Developer/SRE
-Mantém software, performance, segurança, deployment e incidentes.
+Mantém software, performance, segurança, deployment, resiliência e incidentes.
 
 No início, as três personas representam a mesma pessoa, mas as responsabilidades permanecem separadas no desenho.
 
-## Fluxo de promoção de estratégia
+## Fluxo de promoção de estratégia/modelo
 
-Idea → Spec → Unit Tests → Historical Backtest → Out-of-Sample → Walk-Forward → Monte Carlo/Stress → Paper → Shadow → Canary → Live.
+Idea → Spec → Unit Tests → Historical Backtest → Out-of-Sample → Walk-Forward → Monte Carlo/Stress → Paper → Shadow/Challenger → Canary → Champion/Live.
 
-Cada transição gera evidência persistida e pode ser bloqueada por critérios objetivos.
+Cada transição gera evidência persistida e pode ser bloqueada por critérios objetivos. Promoção automática é permitida apenas para candidatos previamente autorizados e dentro de envelopes de risco imutáveis pelo learner.
 
 ## Trading modes
 
@@ -65,14 +81,15 @@ Cada transição gera evidência persistida e pode ser bloqueada por critérios 
 - `Shadow`: sinais e decisões live, nenhuma ordem enviada.
 - `Canary`: capital real mínimo e limites reduzidos.
 - `Live`: limites aprovados de produção.
+- `SafeMode`: nenhuma nova exposição; reconciliação/recuperação conforme política.
 
 ## Modelo de intenção
 
-Estratégias não produzem ordens diretamente. Produzem `TradeIntent`/`AlphaSignal` com direção, confiança, horizonte, invalidação e opcionalmente retorno esperado. Portfolio combina intenções e produz targets. Risk ajusta ou rejeita targets. Execution converte targets autorizados em ordens.
+Estratégias não produzem ordens diretamente. Produzem `TradeIntent`/`AlphaSignal` com direção, confiança, horizonte, invalidação e opcionalmente retorno esperado. O Autonomy Orchestrator seleciona/pondera candidatos elegíveis; Portfolio combina intenções e produz targets; Risk ajusta ou rejeita targets; Execution converte targets autorizados em ordens.
 
 ## Gates de promoção
 
-Uma estratégia não avança se:
+Uma estratégia/modelo não avança se:
 - depende de lookahead;
 - possui amostra insuficiente;
 - resultado é consumido por custos conservadores;
@@ -80,4 +97,10 @@ Uma estratégia não avança se:
 - falha em regimes críticos;
 - excede drawdown/tail-risk aceitos;
 - diverge excessivamente entre backtest e paper/shadow;
-- não possui explicação e versionamento completos.
+- não possui explicação, lineage e versionamento completos;
+- degrada risco, execução ou robustez além de tolerâncias;
+- requer aumento automático de hard risk limits para parecer vantajoso.
+
+## Princípio de autonomia segura
+
+`100% automatizado` significa que o sistema executa sozinho a operação normal, inclusive seleção de estratégia, alocação, risk, execução, monitoramento e recuperação. Não significa autonomia irrestrita: hard risk limits, segurança, kill switch e boundaries de promoção ficam fora do controle de modelos adaptativos.
