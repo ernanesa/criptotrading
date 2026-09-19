@@ -61,12 +61,14 @@ if (( ${#errors[@]} == 0 )); then
     require_text "$canary" '(Status|status):[[:space:]]*(Approved|Go|Conditional)' 'canary status must be approved'
     require_text "$canary" 'Owner([^:]*):[[:space:]]*[^[:space:]]' 'canary owner/approver must be populated'
     require_text "$canary" '(capital|notional).*[0-9]' 'capital/notional envelope must be numeric'
+    require_text "$canary" '(Válida até|Valid until):[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}' 'canary validity is required'
     require_text "$risk_policy" '(Version|Versão):[[:space:]]*[^[:space:]]+' 'RiskPolicy version is required'
     require_text "$risk_policy" '(Hash|SHA-256):[[:space:]]*[0-9a-f]{64}' 'RiskPolicy SHA-256 hash is required'
     require_text "$risk_policy" '(Approved by|Aprovador):[[:space:]]*[^[:space:]]+' 'RiskPolicy approver is required'
     require_text "$risk_policy" '(Valid until|Válida até):[[:space:]]*[0-9]{4}-[0-9]{2}-[0-9]{2}' 'RiskPolicy validity is required'
     require_text "$risk_policy" '(threshold|limite).*[0-9]' 'RiskPolicy numeric thresholds are required'
     validate_valid_until "$prm" '(Válida até|Valid until)'
+    validate_valid_until "$canary" '(Válida até|Valid until)'
     validate_valid_until "$risk_policy" '(Valid until|Válida até)'
     for file in "$prm" "$canary" "$risk_policy"; do reject_placeholders "$file"; done
 fi
