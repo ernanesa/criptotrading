@@ -57,7 +57,10 @@ dotnet run --project src/CryptoTrading.Worker
 
 O fluxo exige PostgreSQL local, consulta apenas account/balances/trades da
 Testnet e não envia nem cancela ordens. Como o vínculo de trades externos ao
-journal ainda é conservador, qualquer trade desconhecido ativa `SafeMode`.
+journal ainda é conservador, qualquer trade desconhecido ativa `SafeMode`. Cada
+execução acrescenta somente um resumo JSONL redigido em
+`WORKER_RECONCILIATION_REPORT_DIRECTORY` (por padrão `artifacts/reconciliation`);
+balances, payloads e segredos não são gravados.
 Sem credenciais, a configuração deve permanecer desabilitada; o startup não
 faz chamadas autenticadas por padrão.
 
