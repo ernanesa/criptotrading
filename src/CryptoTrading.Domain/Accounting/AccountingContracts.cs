@@ -156,6 +156,8 @@ public interface ILedger
 {
     Money GetBalance(AccountId account, Asset asset);
 
+    IReadOnlySet<string> GetAssets(AccountId account);
+
     void Apply(LedgerEntry entry);
 }
 
@@ -175,6 +177,12 @@ public sealed class InMemoryLedger : ILedger
 
     public Money GetBalance(AccountId account, Asset asset) =>
         new(balances.GetValueOrDefault((account, asset)), asset);
+
+    public IReadOnlySet<string> GetAssets(AccountId account) =>
+        balances.Keys
+            .Where(key => key.Account == account)
+            .Select(static key => key.Asset.Value)
+            .ToHashSet(StringComparer.Ordinal);
 
     public void Apply(LedgerEntry entry)
     {

@@ -159,6 +159,8 @@ public interface IReadOnlyAccountSnapshotProvider
 public interface ILocalBalanceReader
 {
     Task<decimal> GetBalanceAsync(AccountId account, string asset, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlySet<string>> GetAssetsAsync(AccountId account, CancellationToken cancellationToken = default);
 }
 
 public interface IKnownTradeReader
@@ -257,25 +259,33 @@ public sealed class AccountReconciliationService
             .ToArray();
         var events = new List<ReconciliationEvent>();
 
-        foreach (var exchangeBalance in snapshot.Balances.OrderBy(static balance => balance.Asset, StringComparer.Ordinal))
+        var exchangeBalances = snapshot.Balances.ToDictionary(static balance => balance.Asset, StringComparer.Ordinal);
+        var localAssets = await balanceReader.GetAssetsAsync(options.LedgerAccount, cancellationToken).ConfigureAwait(false);
+        var assets = exchangeBalances.Keys
+            .Concat(localAssets)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal);
+        foreach (var asset in assets)
         {
             var localBalance = await balanceReader
-                .GetBalanceAsync(options.LedgerAccount, exchangeBalance.Asset, cancellationToken)
+                .GetBalanceAsync(options.LedgerAccount, asset, cancellationToken)
                 .ConfigureAwait(false);
-            var delta = exchangeBalance.Total - localBalance;
+            var exchangeBalance = exchangeBalances.GetValueOrDefault(asset);
+            var exchangeTotal = exchangeBalance?.Total ?? 0m;
+            var delta = exchangeTotal - localBalance;
             var occurredAt = timeProvider.GetUtcNow();
             ReconciliationEvent reconciliationEvent;
             if (snapshotIsFresh && Math.Abs(delta) <= options.AbsoluteTolerance && unknownTradeIds.Length == 0)
             {
                 reconciliationEvent = new BalanceReconciled(
-                    Guid.NewGuid(), correlationId, occurredAt, exchangeBalance.Asset,
-                    localBalance, exchangeBalance.Total, delta, options.AbsoluteTolerance);
+                    Guid.NewGuid(), correlationId, occurredAt, asset,
+                    localBalance, exchangeTotal, delta, options.AbsoluteTolerance);
             }
             else
             {
                 reconciliationEvent = new ReconciliationMismatch(
-                    Guid.NewGuid(), correlationId, occurredAt, exchangeBalance.Asset,
-                    localBalance, exchangeBalance.Total, delta, options.AbsoluteTolerance, unknownTradeIds, snapshotReason);
+                    Guid.NewGuid(), correlationId, occurredAt, asset,
+                    localBalance, exchangeTotal, delta, options.AbsoluteTolerance, unknownTradeIds, snapshotReason);
             }
 
             events.Add(reconciliationEvent);
@@ -386,6 +396,12 @@ public sealed class LedgerBalanceReader : ILocalBalanceReader
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(ledger.GetBalance(account, new Asset(asset)).Amount);
+    }
+
+    public Task<IReadOnlySet<string>> GetAssetsAsync(AccountId account, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(ledger.GetAssets(account));
     }
 }
 

@@ -194,6 +194,24 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         return new(result is null or DBNull ? 0m : (decimal)result, asset);
     }
 
+    public async Task<IReadOnlySet<string>> GetAssetsAsync(
+        AccountId account,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT asset FROM trading.ledger_balances WHERE account_id = @account_id ORDER BY asset;", connection);
+        command.Parameters.Add(Parameter("account_id", NpgsqlDbType.Varchar, account.Value));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var assets = new HashSet<string>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            assets.Add(reader.GetString(0));
+        }
+
+        return assets;
+    }
+
     /// <summary>
     /// Appends an exchange trade ID after its journal event has been committed.
     /// Re-registering the same ID is idempotent; existing rows are immutable.
