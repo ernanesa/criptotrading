@@ -31,6 +31,50 @@ await foreach (var marketEvent in client.ReadAsync(
 }
 ```
 
+## Bounded local order book
+
+The Binance adapter also exposes `BinanceLocalOrderBook` for public diff-depth
+streams. It is intentionally a stateful, read-only projection: it does not
+authenticate, submit orders, or fetch a snapshot by itself.
+
+The synchronization contract is:
+
+1. Fetch a REST depth snapshot and call `ApplySnapshot`.
+2. Buffer WebSocket `depthUpdate` events while the snapshot is being fetched.
+3. Apply the first buffered event only when it bridges `lastUpdateId + 1`
+   (`U <= lastUpdateId + 1 <= u`).
+4. Require every following event to be contiguous (`U == previous u`). When
+   Binance sends `pu`, it must also equal the local last update ID.
+5. If a gap, overlap/out-of-order event, invalid level, or symbol mismatch is
+   detected, the book becomes `Invalid`, the event is quarantined, and
+   `ResyncRequired` remains true until a fresh snapshot is applied.
+
+`BinanceLocalOrderBook` is bounded in two dimensions. `maxLevels` retains only
+the best bid and ask levels, while `quarantineCapacity` bounds diagnostic
+records. Duplicate events (`u <= lastUpdateId`) are quarantined without
+invalidating an otherwise healthy book; they never mutate the projection.
+
+```csharp
+var book = new BinanceLocalOrderBook("BTCUSDT", maxLevels: 1000);
+var snapshotResult = book.ApplySnapshot(snapshot);
+
+if (snapshotResult.ResyncRequired)
+{
+    // Fetch a new snapshot and retry; do not publish this book downstream.
+}
+
+var result = book.ApplyDelta(depthUpdate);
+if (result.ResyncRequired)
+{
+    // Stop consuming this projection, request a REST snapshot, then apply it.
+}
+```
+
+The projection is not a substitute for the exchange adapter's snapshot fetch
+or for persistence. Downstream consumers must not generate a trading decision
+from an `Invalid` book, and should record the resynchronization signal as a
+market-data integrity event.
+
 The transport is injectable through `IBinanceWebSocketTransport`, so parser,
 reconnect and cancellation behavior can be tested without treating fixtures as
 external integration evidence.
