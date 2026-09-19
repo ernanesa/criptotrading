@@ -54,8 +54,11 @@ OWASP ASVS 5.0 é referência de verificação, proporcional a uma aplicação a
 - Trivy;
 - secret scanning;
 - GitHub branch protection;
-- signed/provenance artifacts quando maturidade permitir;
+- OIDC e credenciais efêmeras no CI, sem secrets de longa duração em workflow;
+- signed/provenance artifacts e verificação de assinatura/digest no deploy;
 - SBOM em releases.
+
+Rotação de chaves, secrets e certificados deve ter procedimento, periodicidade, teste de revogação e evidência. Chaves por ambiente devem ser distintas; nenhuma chave live pode aparecer em Testnet, Demo, paper ou fixtures.
 
 ## Network
 

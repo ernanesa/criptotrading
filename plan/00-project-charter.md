@@ -32,6 +32,15 @@ Operador/desenvolvedor único no início. A arquitetura deve permitir múltiplos
 - execução multi-exchange no 1.0;
 - ML como requisito para o primeiro lançamento.
 
+## Escopo congelado do MVP
+
+- Binance Spot, começando por BTC/USDT;
+- uma baseline simples antes de multi-estratégia;
+- paper trading e integração real com Spot Testnet;
+- sem arbitragem, Futures, market making ou multi-exchange;
+- expansão para até 20 ativos somente depois de `UniversePolicy` e capacidade serem validadas;
+- RAG/GraphRAG somente no Research Plane, sem acesso ao hot path ou a credenciais.
+
 ## Restrições
 
 - desenvolvimento incremental, em pequenas sessões diárias;

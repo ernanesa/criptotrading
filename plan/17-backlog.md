@@ -2,6 +2,31 @@
 
 O backlog abaixo é inicial e ordenado por dependência/risco. IDs são estáveis; detalhes podem evoluir.
 
+## Governança de decomposição
+
+Cada história deve ser expandida antes do Sprint para `TASK-US-XXX-NN` e, quando necessário, `SUBTASK-TASK-US-XXX-NN-NN`. Cada task aponta para AC, boundary, teste, comando e `EVIDENCE-<id>-<date>`. As linhas `Tasks:` existentes são sementes de decomposição, não evidência de implementação.
+
+O caminho crítico do MVP é: foundation/CI → journal/correlation → exchange read-only → OMS/reconciliation → RiskPolicy/kill switch → SafeMode/restore → paper/backtest → baseline BTC/USDT → shadow/Testnet. `US-170` e `US-180..182` são pré-requisitos de Research/Live, apesar de permanecerem agrupados em épicos históricos posteriores.
+
+### MVP task registry inicial
+
+| ID | Parent | Resultado verificável |
+|---|---|---|
+| `TASK-US-001-01` | US-001 | repo/manifestos/CI mínimos sem código de trading |
+| `TASK-US-003-01` | US-003 | matriz DEV/PAPER/TESTNET/DEMO/PRODUCTION e banner |
+| `TASK-US-012-01` | US-012 | journal/event envelope versionado |
+| `TASK-US-020-01` | US-020 | exchangeInfo/filtros/limites snapshotados |
+| `TASK-US-030-01` | US-030 | user-data WS moderno + lifecycle/reconnect |
+| `TASK-US-032-01` | US-032 | persist-before-submit + dedupe/query-before-retry |
+| `TASK-US-033-01` | US-033 | startup/reconnect/timeout reconciliation |
+| `TASK-US-040-01` | US-040 | RiskPolicy versionada e auditável |
+| `TASK-US-043-01` | US-043 | kill switch independente e teste de bloqueio |
+| `TASK-US-050-01` | US-050 | dataset/universe point-in-time com hash |
+| `TASK-US-051-01` | US-051 | simulador/backtest com custos e fills |
+| `TASK-US-061-01` | US-061 | baseline BTC/USDT com Strategy Spec completa |
+| `TASK-US-090-01` | US-090 | paper/shadow/Testnet evidence sem mock em integração |
+| `TASK-US-130-01` | US-130 | readiness matrix, restore drill e aprovação explícita |
+
 ## EPIC E00 - Governance & Bootstrap
 
 ### US-001 Como desenvolvedor, quero estrutura de repositório e regras para evoluir com segurança.

@@ -50,6 +50,8 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [26 - Referências](26-references.md)
 - [27 - Runbooks](27-runbooks.md)
 - [28 - Autonomia, autoaprendizado e resiliência](28-autonomy-continuous-learning.md)
+- [29 - Research Plane: RAG híbrido e GraphRAG](29-research-rag.md)
+- [30 - Rastreabilidade e entrega assistida por agentes](30-traceability-and-agent-delivery.md)
 
 ## Templates
 
@@ -58,6 +60,8 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [Strategy Spec](templates/strategy-spec.md)
 - [Experiment](templates/experiment.md)
 - [Incident](templates/incident.md)
+- [Task](templates/task.md)
+- [Universe Policy](templates/universe-policy.md)
 
 ## Regras de governança
 
@@ -72,20 +76,20 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 ## Escopo de lançamento 1.0
 
 1. Binance Spot.
-2. Market data realtime e histórico.
-3. OMS e reconciliação.
-4. Risk Engine independente.
-5. Backtest reproduzível com custos.
-6. Paper e shadow trading.
-7. Estratégias baseline: Trend Following, Momentum, Breakout, Mean Reversion e Adaptive Grid.
-8. Regime Detection com confiança.
-9. Autonomy Orchestrator com seleção e alocação automática entre estratégias validadas.
+2. MVP inicial restrito a BTC/USDT, com expansão para até 20 ativos somente após gate explícito de universo/capacidade.
+3. Market data realtime e histórico.
+4. OMS e reconciliação.
+5. Risk Engine independente.
+6. Backtest reproduzível com custos.
+7. Uma estratégia baseline simples completamente especificada e validada antes de combinar estratégias.
+8. Paper e shadow trading.
+9. Regime Detection, seleção e alocação bounded somente após a baseline.
 10. Strategy Health, `NO_TRADE` e redução/desativação automáticas.
 11. Adaptive execution inicial (market vs passive limit conforme contexto).
 12. Dashboard React realtime com decision trace.
-13. SafeMode, self-healing e recuperação/reconciliação automáticos.
-14. Live canary com capital mínimo.
+13. SafeMode, self-healing, restore e recuperação/reconciliação automáticos.
+14. Live canary com capital mínimo, somente após aprovação explícita.
 15. Operação Spot sem intervenção humana rotineira.
-16. Observabilidade, backups e runbooks.
+16. Observabilidade, backups, runbooks, RAG de Research Plane e rastreabilidade.
 
-Continuous learning avançado, contextual bandits live, Futures, funding/basis, market making avançado, arbitragem cross-exchange e FIX/SBE avançado entram após a baseline autônoma estar comprovada. A arquitetura, porém, já nasce preparada para esses recursos.
+Futures, funding/basis, market making e qualquer arbitragem estão fora do escopo deste produto. Continuous learning avançado, contextual bandits live, multi-exchange e FIX/SBE avançado só podem ser reconsiderados por decisão de escopo posterior, após a baseline Spot estar comprovada.

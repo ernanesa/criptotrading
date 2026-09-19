@@ -13,7 +13,7 @@ Value objects, indicators, sizing, risk rules, state machines.
 - idempotency invariants.
 
 ### Integration
-Binance Testnet/mock server, PostgreSQL, serialization, reconciliação.
+Binance Testnet real, PostgreSQL, serialization, reconciliação. Mock server só em contract tests isolados; não é substituto da integração Testnet.
 
 ### Contract
 Payloads Binance, OpenAPI backend/frontend, schema compatibility.
@@ -30,6 +30,10 @@ Datasets gravados reproduzem comportamento determinístico.
 - DB temporariamente indisponível;
 - clock drift;
 - spread/volatility shock.
+- crash entre persistência e publicação de evento;
+- outbox/inbox duplicate, lag e poison event;
+- audit write failure, redaction failure e alert delivery failure;
+- backup corrompido, PITR/restore e verificação de imagem/digest.
 
 ### Backtest validation
 Lookahead analysis, data leakage tests, cost model tests, known synthetic datasets.
@@ -54,7 +58,10 @@ Coverage é indicador, não meta isolada. Código financeiro/risco/OMS deve ter 
 - dependency/security scan;
 - container build multi-arch ou validação periódica;
 - benchmark gate para mudanças marcadas como hot-path.
+- SBOM, provenance/signature verification, image digest e OIDC policy quando aplicável.
 
 ## Release gates
 
 Live exige testnet/paper/shadow evidence, migration test, restore test, runbook e rollback.
+
+Nenhum gate é considerado aprovado sem comando e saída observada. Cada AC crítico deve apontar para teste, boundary e evidência.

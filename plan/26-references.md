@@ -1,6 +1,6 @@
 # 26 - Referências pesquisadas
 
-Data de revisão: 2026-09-01.
+Data de revisão: 2026-09-18.
 
 ## Processo
 - Scrum Guide 2020: https://scrumguides.org/
@@ -19,8 +19,15 @@ Data de revisão: 2026-09-01.
 - Node releases: https://nodejs.org/en/about/previous-releases
 
 ## Binance
-- Spot API changelog/docs: https://developers.binance.com/docs/binance-spot-api-docs
-- Usar sempre documentação oficial atual antes de implementar autenticação, user data, SBE, FIX, filters e rate limits.
+- Spot REST API: https://developers.binance.com/en/docs/products/spot/rest-api
+- Spot WebSocket API: https://developers.binance.com/en/docs/products/spot/web-socket-api
+- Spot WebSocket Streams: https://developers.binance.com/en/docs/products/spot/web-socket-streams
+- Spot User Data Stream: https://developers.binance.com/en/docs/products/spot/user-data-stream
+- Spot Filters: https://developers.binance.com/en/docs/products/spot/filters
+- Spot Changelog: https://developers.binance.com/en/docs/products/spot/CHANGELOG
+- Spot Testnet: https://developers.binance.com/en/docs/products/spot/testnet/general-info
+- Spot Demo Mode: https://developers.binance.com/en/docs/products/spot/demo-mode/general-info
+- Usar sempre documentação oficial atual antes de implementar autenticação, user data, SBE, FIX, filters e rate limits; registrar data, endpoint e versão/schema consultados.
 
 ## Trading frameworks
 - QuantConnect Algorithm Framework: https://www.quantconnect.com/docs/v2/writing-algorithms/algorithm-framework/overview

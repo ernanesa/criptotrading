@@ -14,6 +14,9 @@ Um PBI pode entrar no Sprint quando:
 - [ ] tamanho cabe no Sprint ou foi fatiado;
 - [ ] dúvidas capazes de bloquear implementação foram resolvidas;
 - [ ] não depende de API presumida sem checar documentação oficial.
+- [ ] parent, prioridade, fonte/frescor e IDs de rastreabilidade definidos;
+- [ ] comando de validação e evidência esperada definidos;
+- [ ] estados de conflito, timeout e falha cobertos.
 
 Spikes podem entrar com hipótese, timebox e saída esperada mesmo sem solução conhecida.
 
@@ -32,6 +35,9 @@ Spikes podem entrar com hipótese, timebox e saída esperada mesmo sem solução
 - [ ] comportamento funciona em ARM64 quando componente de runtime;
 - [ ] container/CI atualizado quando necessário;
 - [ ] incremento demonstrável.
+- [ ] Goal/Epic/Story/AC/Task/Test/Evidence vinculados;
+- [ ] fonte superseded não é usada como autoridade ativa;
+- [ ] risco residual, rollback e limitações registrados.
 
 ## DoD adicional para hot path
 
