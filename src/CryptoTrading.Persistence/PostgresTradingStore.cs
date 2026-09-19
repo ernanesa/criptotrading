@@ -164,7 +164,20 @@ public interface IExperimentGovernanceStore
         DateTimeOffset occurredAtUtc,
         IdempotencyKey idempotencyKey,
         CancellationToken cancellationToken = default);
+
+    Task<ExperimentGovernanceSnapshot?> ReadExperimentGovernanceSnapshotAsync(
+        ExperimentId experimentId,
+        CancellationToken cancellationToken = default);
 }
+
+/// <summary>Read model reconstructed from immutable research evidence after restart.</summary>
+public sealed record ExperimentGovernanceSnapshot(
+    ExperimentPreregistration Preregistration,
+    IReadOnlyList<ExperimentTrial> Trials,
+    int HoldoutAccessCount,
+    bool HoldoutContaminated,
+    string? ReplacementHoldoutVersion,
+    string? ContaminationReason);
 
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
@@ -759,6 +772,119 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;
+    }
+
+    public async Task<ExperimentGovernanceSnapshot?> ReadExperimentGovernanceSnapshotAsync(
+        ExperimentId experimentId,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        await using var preregistrationCommand = new NpgsqlCommand(
+            """
+            SELECT experiment_family_id, hypothesis, search_space, planned_variants, trial_budget,
+                   primary_metric, rejection_rule, benchmark, preregistered_at, preregistered_by,
+                   idempotency_key, strategy_version, code_commit, dataset_version, dataset_hash,
+                   holdout_version, metric_definition_version, environment_fingerprint, dependency_lock_hash,
+                   seed, period_start, period_end, preregistration_sha256
+            FROM trading.experiment_preregistrations
+            WHERE experiment_id = @experiment_id;
+            """, connection, transaction);
+        preregistrationCommand.Parameters.Add(Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value));
+        await using var preregistrationReader = await preregistrationCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await preregistrationReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
+        var preregistration = new ExperimentPreregistration(
+            experimentId,
+            preregistrationReader.GetString(0),
+            preregistrationReader.GetString(1),
+            preregistrationReader.GetString(2),
+            JsonSerializer.Deserialize<string[]>(preregistrationReader.GetString(3)) ?? throw new InvalidOperationException("Stored planned variants are invalid."),
+            preregistrationReader.GetInt32(4),
+            preregistrationReader.GetString(5),
+            preregistrationReader.GetString(6),
+            preregistrationReader.GetString(7),
+            Utc(preregistrationReader.GetFieldValue<DateTime>(8)),
+            preregistrationReader.GetString(9),
+            new IdempotencyKey(preregistrationReader.GetString(10)),
+            preregistrationReader.GetString(11),
+            preregistrationReader.GetString(12),
+            preregistrationReader.GetString(13),
+            preregistrationReader.GetString(14).Trim(),
+            preregistrationReader.GetString(15),
+            preregistrationReader.GetString(16),
+            preregistrationReader.GetString(17),
+            preregistrationReader.GetString(18).Trim(),
+            preregistrationReader.GetInt32(19),
+            Utc(preregistrationReader.GetFieldValue<DateTime>(20)),
+            Utc(preregistrationReader.GetFieldValue<DateTime>(21)));
+        if (!string.Equals(preregistration.PreregistrationSha256, preregistrationReader.GetString(22).Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Stored experiment preregistration hash is invalid.");
+        }
+        await preregistrationReader.CloseAsync().ConfigureAwait(false);
+
+        var trials = new List<ExperimentTrial>();
+        await using (var trialsCommand = new NpgsqlCommand(
+            """
+            SELECT trial_number, variant_id, parameters_canonical, result_artifact_hash, decision,
+                   recorded_at, recorded_by, idempotency_key, trial_sha256
+            FROM trading.experiment_trials
+            WHERE experiment_id = @experiment_id
+            ORDER BY trial_number;
+            """, connection, transaction))
+        {
+            trialsCommand.Parameters.Add(Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value));
+            await using var trialsReader = await trialsCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await trialsReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var trial = new ExperimentTrial(
+                    trialsReader.GetInt32(0), trialsReader.GetString(1), trialsReader.GetString(2),
+                    trialsReader.GetString(3).Trim(), Enum.Parse<ExperimentDecision>(trialsReader.GetString(4)),
+                    Utc(trialsReader.GetFieldValue<DateTime>(5)), trialsReader.GetString(6), new IdempotencyKey(trialsReader.GetString(7)));
+                if (!string.Equals(trial.TrialSha256, trialsReader.GetString(8).Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Stored experiment trial {trial.TrialNumber} has an invalid hash.");
+                }
+                trials.Add(trial);
+            }
+        }
+
+        var accessCount = await ExecuteScalarAsync(connection, transaction,
+            "SELECT count(*) FROM trading.holdout_access_audits WHERE experiment_id = @experiment_id;",
+            [Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value)], cancellationToken).ConfigureAwait(false);
+        string? replacement = null;
+        string? reason = null;
+        await using (var contaminationCommand = new NpgsqlCommand(
+            """
+            SELECT reason, replacement_holdout_version
+            FROM trading.holdout_contamination_events
+            WHERE experiment_id = @experiment_id
+            ORDER BY occurred_at DESC, event_id DESC
+            LIMIT 1;
+            """, connection, transaction))
+        {
+            contaminationCommand.Parameters.Add(Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value));
+            await using var contaminationReader = await contaminationCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await contaminationReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                reason = contaminationReader.GetString(0);
+                replacement = contaminationReader.GetString(1);
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new ExperimentGovernanceSnapshot(
+            preregistration,
+            trials,
+            Convert.ToInt32(accessCount, System.Globalization.CultureInfo.InvariantCulture),
+            replacement is not null,
+            replacement,
+            reason);
     }
 
     /// <summary>
@@ -1778,6 +1904,9 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         var value = await ExecuteScalarAsync(connection, transaction, sql, parameters, cancellationToken).ConfigureAwait(false);
         return value is null or DBNull ? null : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
     }
+
+    private static DateTimeOffset Utc(DateTime value) =>
+        new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 
     private static void EnsureHashEquivalent(string? existingHash, string candidateHash, string entity)
     {
