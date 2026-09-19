@@ -30,6 +30,15 @@ Para o teste de persistência, usar somente a senha efêmera do script:
 ./scripts/test-postgres-integration.sh
 ```
 
+Antes de qualquer probe autenticado, execute o preflight offline. Ele roda a
+ferramenta em um diretório temporário sem `.env`, remove credenciais do
+ambiente, exige `WORKER_NO_TRADE=true`/`PAPER` e comprova que o probe falha
+antes de criar um cliente de rede:
+
+```bash
+./scripts/test-binance-readonly-preflight.sh
+```
+
 O script inicia um PostgreSQL local, executa migrations, valida journal/ledger,
 lease, retry e idempotência, e encerra o container. Não colocar credenciais no
 shell history, em logs ou no repositório.
