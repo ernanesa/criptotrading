@@ -87,6 +87,7 @@ internal sealed class ReconciliationReportWriter : IDisposable
             System.IO.Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, $"reconciliation-{report.ObservedAtUtc:yyyyMMdd}.jsonl");
             using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read, 4_096, useAsync: true);
+            RestrictFilePermissions(path);
             using var writer = new StreamWriter(stream, leaveOpen: false);
             await writer.WriteLineAsync(JsonSerializer.Serialize(report, JsonOptions).AsMemory(), cancellationToken).ConfigureAwait(false);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -95,6 +96,14 @@ internal sealed class ReconciliationReportWriter : IDisposable
         finally
         {
             gate.Release();
+        }
+    }
+
+    private static void RestrictFilePermissions(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
     }
 

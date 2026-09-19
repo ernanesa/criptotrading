@@ -33,6 +33,12 @@ query/fragmento ou não estiver na allowlist. O timeout é limitado a 120
 segundos. Essa configuração apenas habilita o adaptador; a entrega real e o
 teste de on-call continuam exigindo um endpoint operacional aprovado.
 
+Os arquivos JSONL locais de alertas, Shadow e reconciliação são restringidos
+explicitamente a `0600` em sistemas Unix, independentemente do `umask` do
+processo. Isso reduz o risco de evidência operacional redigida ser exposta a
+outros usuários da máquina; o conteúdo continua sem credenciais ou payloads
+privados.
+
 Os instrumentos têm dimensões de baixa cardinalidade. IDs de ordens, chaves, secrets, tokens e payloads de exchange não devem ser adicionados como labels ou propriedades de log. A classe `SecretRedactor` fornece uma proteção explícita para valores sensíveis, mas a regra principal é não registrar credenciais.
 
 ## Validação
