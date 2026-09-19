@@ -69,6 +69,7 @@ public sealed class AccountStreamHostedServiceTests
             AccountStreamEnabled = true,
             PersistenceEnabled = true,
             ApplyMigrations = true,
+            ReconciliationEnabled = true,
             NoTrade = false,
             PostgresConnectionString = "Host=localhost"
         }.Validate());
@@ -78,6 +79,7 @@ public sealed class AccountStreamHostedServiceTests
             AccountStreamEnabled = true,
             PersistenceEnabled = true,
             ApplyMigrations = false,
+            ReconciliationEnabled = true,
             PostgresConnectionString = "Host=localhost"
         }.Validate());
     }
