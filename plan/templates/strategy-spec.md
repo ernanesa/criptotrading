@@ -2,6 +2,8 @@
 
 ## Hypothesis
 
+### Economic/behavioral rationale and falsifiable prediction
+
 ## Target market/regime
 
 ## Instruments/timeframes
@@ -18,7 +20,12 @@
 
 ## Required data/features
 
+- event/available timestamps and lineage:
+- raw/normalized feature parity:
+
 ## Expected holding period
+
+## State machine and order lifecycle assumptions
 
 ## Cost model
 
@@ -26,6 +33,8 @@
 - spread source:
 - slippage/impact/fill model:
 - latency/rejection assumptions:
+- fee asset/rebate/valuation:
+- rounding, balance and post-partial-fill notional:
 
 ## Failure modes
 
@@ -33,7 +42,14 @@
 
 ## Parameters and allowed search space
 
+- experiment family / trial budget:
+- parameters fixed before holdout:
+
 ## Benchmarks
+
+- `NO_TRADE/cash`:
+- buy-and-hold or economic alternative:
+- ablations:
 
 ## Validation plan
 - In-sample:
@@ -51,10 +67,16 @@
 - maximum drawdown/tail risk:
 - sensitivity region:
 - paper/shadow divergence:
+- confidence interval/lower bound:
+- metric definition/annualization/risk-free rate:
 
 ## Promotion gates
 
 ## Live monitoring / Strategy Health
+
+- degradation and re-enable rules:
+- fallback/NO_TRADE and rollback conditions:
+- training-serving/parity checks:
 
 ## Rejection criteria
 

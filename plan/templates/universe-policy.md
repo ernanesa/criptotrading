@@ -13,6 +13,9 @@
 - Symbol status/listing age:
 - Delisting/halt/CANCEL_ONLY policy:
 - Stablecoin/leveraged-token/exclusion policy:
+- Historical listing/delisting/symbol-migration source:
+- Quote-asset depeg and outage policy:
+- Treatment of assets no longer listed at evaluation time:
 
 ## Liquidity and capacity
 
@@ -37,3 +40,5 @@
 - universe ranking/snapshot:
 - tests and command:
 - EVIDENCE-UNIVERSE-<date>:
+- exchangeInfo snapshot cadence/retention:
+- correction/supersession policy:
