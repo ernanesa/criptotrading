@@ -1,4 +1,6 @@
 using CryptoTrading.Domain.Primitives;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace CryptoTrading.Domain.Risk;
 
@@ -115,7 +117,67 @@ public sealed record OperationalControlAuditEvent(
     string Reason,
     IdempotencyKey IdempotencyKey,
     DateTimeOffset OccurredAtUtc,
-    string? ApprovalId);
+    string? ApprovalId)
+{
+    /// <summary>Versioned financial-control audit contract; do not change without a migration.</summary>
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; } = CurrentSchemaVersion;
+
+    public string EventType { get; } = "OPERATIONAL_CONTROL_TRANSITION";
+
+    /// <summary>Canonical payload digest used to detect altered local evidence.</summary>
+    public string PayloadSha256 => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+        string.Join('|',
+            EventType,
+            SchemaVersion,
+            EventId.ToString("D"),
+            From,
+            To,
+            Actor,
+            Reason,
+            IdempotencyKey.ToString(),
+            OccurredAtUtc.ToUniversalTime().ToString("O"),
+            ApprovalId ?? string.Empty))));
+}
+
+/// <summary>Append-only boundary for critical operational-control audit events.</summary>
+public interface IOperationalControlAuditSink
+{
+    void Append(OperationalControlAuditEvent auditEvent);
+}
+
+/// <summary>Deterministic local sink used by Paper/NO_TRADE and contract tests.</summary>
+public sealed class InMemoryOperationalControlAuditSink : IOperationalControlAuditSink
+{
+    private readonly object gate = new();
+    private readonly List<OperationalControlAuditEvent> events = [];
+
+    public IReadOnlyList<OperationalControlAuditEvent> Events
+    {
+        get
+        {
+            lock (gate)
+            {
+                return events.ToArray();
+            }
+        }
+    }
+
+    public void Append(OperationalControlAuditEvent auditEvent)
+    {
+        ArgumentNullException.ThrowIfNull(auditEvent);
+        lock (gate)
+        {
+            if (events.Any(existing => existing.EventId == auditEvent.EventId))
+            {
+                return;
+            }
+
+            events.Add(auditEvent);
+        }
+    }
+}
 
 public sealed record OperationalControlResult(
     OperationalControlSnapshot Snapshot,
@@ -148,13 +210,17 @@ public sealed class InMemoryOperationalControl : IOperationalControl
 {
     private readonly object gate = new();
     private readonly IOperationalControlResetAuthorizer resetAuthorizer;
+    private readonly IOperationalControlAuditSink auditSink;
     private readonly Dictionary<IdempotencyKey, (OperationalControlCommand Command, OperationalControlResult Result)> commands = [];
     private OperationalControlSnapshot snapshot = OperationalControlSnapshot.Initial;
 
-    public InMemoryOperationalControl(IOperationalControlResetAuthorizer resetAuthorizer)
+    public InMemoryOperationalControl(
+        IOperationalControlResetAuthorizer resetAuthorizer,
+        IOperationalControlAuditSink? auditSink = null)
     {
         ArgumentNullException.ThrowIfNull(resetAuthorizer);
         this.resetAuthorizer = resetAuthorizer;
+        this.auditSink = auditSink ?? new InMemoryOperationalControlAuditSink();
     }
 
     public OperationalControlSnapshot Snapshot
@@ -222,8 +288,6 @@ public sealed class InMemoryOperationalControl : IOperationalControl
         var next = changed
             ? new OperationalControlSnapshot(effectiveMode, previous.Revision + 1, command.OccurredAtUtc, command.Actor, command.Reason)
             : previous;
-        snapshot = next;
-
         var audit = new OperationalControlAuditEvent(
             Guid.NewGuid(),
             previous.Mode,
@@ -233,6 +297,10 @@ public sealed class InMemoryOperationalControl : IOperationalControl
             command.IdempotencyKey,
             command.OccurredAtUtc,
             approvalId);
+        // Audit persistence is part of the state transition. If it fails, the
+        // control state remains unchanged and the caller stays fail-closed.
+        auditSink.Append(audit);
+        snapshot = next;
         var result = new OperationalControlResult(next, audit, changed);
         commands.Add(command.IdempotencyKey, (command, result));
         return result;
