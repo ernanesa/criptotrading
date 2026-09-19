@@ -49,7 +49,8 @@ export WORKER_PERSISTENCE_ENABLED=true WORKER_APPLY_MIGRATIONS=true
 export WORKER_EXECUTION_MODE=PAPER WORKER_NO_TRADE=true
 export WORKER_RECONCILIATION_ENABLED=false WORKER_ACCOUNT_STREAM_ENABLED=false
 export WORKER_RISK_POLICY_REQUIRED=false WORKER_SHADOW_ENABLED=false
-export BINANCE_API_KEY= BINANCE_API_SECRET=
+# No Binance variables are exported: account-stream/reconciliation are disabled
+# and the Worker therefore cannot construct an authenticated client.
 
 set +e
 timeout --signal=TERM --kill-after=5s 12s "$dotnet_command" run \
