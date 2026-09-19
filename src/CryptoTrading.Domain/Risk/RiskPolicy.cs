@@ -19,6 +19,8 @@ public static class RiskReasonCodes
     public const string DrawdownLimit = "DRAWDOWN_LIMIT";
     public const string MarketDataStale = "MARKET_DATA_STALE";
     public const string EmergencyStop = "EMERGENCY_STOP";
+    public const string SafeMode = "SAFE_MODE_NO_NEW_ENTRIES";
+    public const string KillSwitchActive = "KILL_SWITCH_NO_NEW_ENTRIES";
     public const string WithdrawalsDisabled = "WITHDRAWALS_DISABLED";
     public const string InvalidRequest = "INVALID_REQUEST";
 }
@@ -222,6 +224,30 @@ public static class RiskEvaluator
         }
 
         return Block(RiskDecisionStatus.Rejected, request.RequestedTargetNotional, policy, reason);
+    }
+
+    /// <summary>
+    /// Evaluates an intent against the independent operational control plane. SafeMode
+    /// and kill switch block new exposure but retain the normal reduction path.
+    /// </summary>
+    public static RiskDecision Evaluate(
+        RiskPolicy policy,
+        RiskEvaluationRequest request,
+        OperationalControlSnapshot operationalControl)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(operationalControl);
+
+        if (operationalControl.BlocksNewEntries)
+        {
+            var reason = operationalControl.Mode is OperationalMode.KillSwitch
+                ? RiskReasonCodes.KillSwitchActive
+                : RiskReasonCodes.SafeMode;
+            return BlockNewExposure(request, policy, reason);
+        }
+
+        return Evaluate(policy, request);
     }
 
     private static RiskDecision Block(

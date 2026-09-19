@@ -119,10 +119,43 @@ public static class OrderExecutionPipeline
 
     public static OrderExecutionResult Evaluate(OrderIntent intent, RiskPolicy policy)
     {
+        return EvaluateCore(intent, policy, operationalControl: null);
+    }
+
+    /// <summary>
+    /// Evaluates an intent using a point-in-time operational control snapshot.
+    /// The snapshot is captured once so a concurrent switch cannot produce a
+    /// partially mixed decision.
+    /// </summary>
+    public static OrderExecutionResult Evaluate(
+        OrderIntent intent,
+        RiskPolicy policy,
+        IOperationalControl operationalControl)
+    {
+        ArgumentNullException.ThrowIfNull(operationalControl);
+        return Evaluate(intent, policy, operationalControl.Snapshot);
+    }
+
+    public static OrderExecutionResult Evaluate(
+        OrderIntent intent,
+        RiskPolicy policy,
+        OperationalControlSnapshot operationalControl)
+    {
+        ArgumentNullException.ThrowIfNull(operationalControl);
+        return EvaluateCore(intent, policy, operationalControl);
+    }
+
+    private static OrderExecutionResult EvaluateCore(
+        OrderIntent intent,
+        RiskPolicy policy,
+        OperationalControlSnapshot? operationalControl)
+    {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(policy);
 
-        var decision = RiskEvaluator.Evaluate(policy, intent.RiskEvaluation);
+        var decision = operationalControl is null
+            ? RiskEvaluator.Evaluate(policy, intent.RiskEvaluation)
+            : RiskEvaluator.Evaluate(policy, intent.RiskEvaluation, operationalControl);
         if (!decision.AllowsNewExposure)
         {
             return new(decision, null, null);
