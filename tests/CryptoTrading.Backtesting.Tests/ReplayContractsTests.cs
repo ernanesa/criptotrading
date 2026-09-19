@@ -1,4 +1,3 @@
-using CryptoTrading.Backtesting;
 using System.Globalization;
 using Xunit;
 

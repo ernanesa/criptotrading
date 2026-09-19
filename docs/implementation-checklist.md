@@ -68,9 +68,9 @@ itens em andamento ou bloqueados.
 
 ## Fase 6 — Paper, replay e estratégia baseline
 
-- [ ] Implementar paper exchange determinística.
-- [ ] Versionar dataset, configuração, seed e timezone do replay.
-- [ ] Implementar backtest reproduzível.
+- [x] Implementar paper exchange determinística.
+- [x] Versionar metadata de dataset, configuração, seed e timezone do replay.
+- [x] Implementar contratos de replay/backtest reproduzível.
 - [ ] Especificar baseline Trend Following BTC/USDT.
 - [ ] Cobrir custos, spread, slippage, fees e latência.
 - [ ] Executar validação out-of-sample, walk-forward, sensibilidade e Monte Carlo.
@@ -110,6 +110,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | OMS | Máquina de estados, transições inválidas, histórico e idempotência; 35 testes totais aprovados | `src/CryptoTrading.Domain/Orders` | `c48de4f` | Codex |
 | 2026-09-19 | Risk | RiskPolicy versionada, limites, stale data e reason codes; 35 testes totais aprovados | `src/CryptoTrading.Domain/Risk` | `e6b0e75` | Codex |
 | 2026-09-19 | Arquitetura | Fronteiras Domain e redaction de credenciais cobertas por testes | `tests/CryptoTrading.Domain.Tests/ArchitectureBoundaryTests.cs` | `822a05d` | Codex |
+| 2026-09-19 | Execution pipeline | OrderIntent → RiskDecision → SubmitCommand/Outbox sem I/O; 43 testes de domínio aprovados | `src/CryptoTrading.Domain` | `ce2384f` | Codex |
+| 2026-09-19 | Paper exchange | Market/Limit, fills, fees, slippage, cancelamento e idempotência determinísticos; 5 testes aprovados | `src/CryptoTrading.Exchange.Paper` | `4adf3be` | Codex |
+| 2026-09-19 | Replay/backtest | Metadata, seed, timezone, fingerprint e ordenação determinística; 3 testes aprovados | `src/CryptoTrading.Backtesting` | `795379e` | Codex |
 
 ## Bloqueios e decisões
 
