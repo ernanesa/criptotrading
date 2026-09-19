@@ -76,13 +76,39 @@ após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
 - `GetBalanceAsync` consulta a projeção reconstruível; o journal permanece a
   fonte de verdade.
 
+## Ativação pelo Worker
+
+O Worker registra o `PostgresTradingStore` somente quando
+`WORKER_PERSISTENCE_ENABLED=true`. As migrations também exigem a flag explícita
+`WORKER_APPLY_MIGRATIONS=true`; portanto, iniciar o processo com defaults não
+abre conexão nem altera o banco. A connection string deve ser fornecida por
+`POSTGRES_CONNECTION_STRING` em ambiente local e nunca deve ser commitada.
+
+O dispatcher usa `FOR UPDATE SKIP LOCKED`, lease por mensagem e retry com
+backoff exponencial limitado. O executor registrado nesta etapa é PAPER; o
+default `WORKER_NO_TRADE=true` reconhece mensagens sem executar ordens. Não há
+adapter Binance privado conectado ao dispatcher.
+
+Exemplo de ativação local, depois de iniciar o Compose:
+
+```bash
+export POSTGRES_CONNECTION_STRING='Host=127.0.0.1;Port=5432;Database=cryptotrading;Username=cryptotrading;Password=<senha-local>'
+export WORKER_PERSISTENCE_ENABLED=true
+export WORKER_APPLY_MIGRATIONS=true
+export WORKER_EXECUTION_MODE=PAPER
+export WORKER_NO_TRADE=true
+dotnet run --project src/CryptoTrading.Worker/CryptoTrading.Worker.csproj
+```
+
+Nunca use credenciais da Binance para autenticar no PostgreSQL ou em testes
+locais; são segredos distintos.
+
 ## Limites desta etapa
 
 - `ledger_balances` é uma projeção reconstruível; o journal é a fonte de
   verdade.
-- O dispatcher que transforma o payload em chamada de exchange ainda será
-  implementado em uma etapa posterior; esta fatia garante a fronteira
-  durável e o lease.
+- O executor PAPER está conectado; ainda faltam recorder/replay operacional,
+  persistência de fills e reconciliação de estado após crash.
 - A migration 003 adiciona `lease_owner` para impedir que um worker finalize a
   mensagem de outro worker.
 - A senha do PostgreSQL continua sendo local e separada das credenciais da

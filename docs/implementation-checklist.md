@@ -33,6 +33,8 @@ itens em andamento ou bloqueados.
 - [x] Criar migrations SQL versionadas, rollback explícito e política de backup local.
 - [x] Implementar journal imutável e ledger de saldos, fees, posições e PnL (contrato in-memory e store PostgreSQL transacional).
 - [x] Implementar outbox/inbox com lease, retry e deduplicação.
+- [x] Registrar o store no Worker sob flag explícita e aplicar migrations sob flag explícita.
+- [x] Implementar dispatcher PAPER com lease, retry, logs sem payload e default `NO_TRADE`.
 - [ ] Implementar readiness real para banco e dependências.
 - [ ] Validar restart, crash recovery e reconstrução de estado.
 
@@ -116,6 +118,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Persistência runtime | Store Npgsql transacional, migrations, journal/ledger/outbox, leases e retry | `src/CryptoTrading.Persistence/PostgresTradingStore.cs` | `6947d6e` | Codex |
 | 2026-09-19 | Exchange rules | Filtros de preço/lote/notional, rate-limit retry e clock drift; 23 testes aprovados | `src/CryptoTrading.Exchange.Binance` | `a0dbe3c` | Codex |
 | 2026-09-19 | Strategy baseline | Trend Following BTC/USDT, EMA 20/50, custos, fingerprint e no-look-ahead; 12 testes aprovados | `src/CryptoTrading.Backtesting/Strategies`, `docs/trend-following-baseline.md` | `3248863` | Codex |
+| 2026-09-19 | Worker outbox | Store/migrations opt-in, dispatcher PAPER com lease/retry e `NO_TRADE` fail-closed; 3 testes aprovados | `src/CryptoTrading.Worker`, `tests/CryptoTrading.Worker.Tests` | pendente | Codex |
 
 ## Bloqueios e decisões
 
