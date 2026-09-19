@@ -11,12 +11,20 @@ work_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-full-recovery.XXXXXX")"
 umask 077
 mkdir -p -- "$report_dir"
 
+dotnet_command="dotnet"
+if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
+    dotnet_command="$repo_root/.tools/dotnet/dotnet"
+elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
+    dotnet_command="$DOTNET_ROOT/dotnet"
+fi
+
 cleanup() { rm -rf -- "$work_dir"; }
 trap cleanup EXIT
 
-declare -a names=(ledger-recovery postgres-integration postgres-backup-restore)
+declare -a names=(ledger-recovery full-state-manifest postgres-integration postgres-backup-restore)
 declare -a commands=(
     "scripts/test-ledger-recovery.sh"
+    "full-state-manifest"
     "scripts/test-postgres-integration.sh"
     "scripts/test-postgres-backup-restore.sh"
 )
@@ -27,7 +35,14 @@ for index in "${!names[@]}"; do
     started="$(date +%s%N)"
     output_file="$work_dir/${names[$index]}.log"
     status=0
-    if (cd "$repo_root" && "${repo_root}/${commands[$index]}" >"$output_file" 2>&1); then
+    if (( index == 1 )); then
+        if (cd "$repo_root" && "$dotnet_command" test tests/CryptoTrading.Persistence.Tests/CryptoTrading.Persistence.Tests.csproj \
+            --no-restore --configuration Release --filter FullyQualifiedName~FullStateReconstructionTests --verbosity minimal >"$output_file" 2>&1); then
+            status=0
+        else
+            status=$?
+        fi
+    elif (cd "$repo_root" && "${repo_root}/${commands[$index]}" >"$output_file" 2>&1); then
         status=0
     else
         status=$?
@@ -48,7 +63,7 @@ cat > "$report_file" <<EOF
 # Full local recovery drill — $run_stamp
 
 - Scope: deterministic local recovery components only; no Binance credentials or exchange calls.
-- Composite gate: ledger reconstruction, PostgreSQL integration/restart, and ephemeral backup/restore.
+- Composite gate: ledger reconstruction, full-state manifest, PostgreSQL integration/restart, and ephemeral backup/restore.
 - Reports and raw child output remain local; child stdout/stderr is not copied into this aggregate report.
 
 | Drill | Result | Duration (ms) |
@@ -72,7 +87,7 @@ fi
 cat >> "$report_file" <<'EOF'
 
 - Overall result: **PASS**.
-- Interpretation: local ledger, persistence restart/idempotency, and ephemeral backup/restore gates passed together.
+- Interpretation: local ledger, full-state manifest, persistence restart/idempotency, and ephemeral backup/restore gates passed together.
 - Limitation: this does not prove production RPO/RTO, authenticated exchange recovery, or reconstruction of data not present in the local fixtures.
 EOF
 chmod 600 "$report_file"

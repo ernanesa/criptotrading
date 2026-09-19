@@ -1,13 +1,13 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: c759844
+commit: 375d0a7
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
   - id: persistence-ledger-outbox
     capability: PostgreSQL migrations, journal, ledger, outbox lease/retry/idempotency
-    evidence: [scripts/test-postgres-integration.sh, f7b073a]
-    validation: ./scripts/test-postgres-integration.sh
+    evidence: [scripts/test-postgres-integration.sh, src/CryptoTrading.Persistence/FullStateReconstruction.cs, docs/full-state-reconstruction.md, f7b073a, 375d0a7]
+    validation: ./scripts/test-full-recovery-drill.sh
     status: pass-local
     pending: [production-rpo-rto, production-full-state-reconstruction]
   - id: market-data-recorder
