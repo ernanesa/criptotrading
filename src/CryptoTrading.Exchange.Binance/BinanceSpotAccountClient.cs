@@ -175,7 +175,14 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
 
     private static string NormalizeSymbol(string symbol)
     {
-        return BinanceAuthenticatedResponseValidator.NormalizeSymbol(symbol, nameof(symbol));
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        var normalized = symbol.Trim().ToUpperInvariant();
+        if (normalized.Length > 20 || normalized.Any(character => !char.IsAsciiLetterOrDigit(character)))
+        {
+            throw new ArgumentException("Symbol must contain only ASCII letters and digits and be at most 20 characters.", nameof(symbol));
+        }
+
+        return normalized;
     }
 }
 
