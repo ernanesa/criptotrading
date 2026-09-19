@@ -63,6 +63,13 @@ public interface IOutboxStore
         string failure,
         DateTimeOffset retryAtUtc,
         CancellationToken cancellationToken = default);
+
+    Task<bool> DeadLetterOutboxAsync(
+        Guid messageId,
+        string leaseOwner,
+        string failure,
+        DateTimeOffset deadLetteredAtUtc,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -263,6 +270,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
                 SELECT message_id
                 FROM trading.outbox_messages
                 WHERE processed_at IS NULL
+                  AND dead_lettered_at IS NULL
                   AND available_at <= @now
                   AND (locked_until IS NULL OR locked_until <= @now)
                 ORDER BY available_at, created_at, message_id
@@ -345,6 +353,30 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, messageId));
         command.Parameters.Add(Parameter("lease_owner", NpgsqlDbType.Varchar, leaseOwner));
         command.Parameters.Add(Parameter("available_at", NpgsqlDbType.TimestampTz, retryAtUtc.ToUniversalTime().UtcDateTime));
+        command.Parameters.Add(Parameter("last_error", NpgsqlDbType.Text, boundedError));
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
+
+    public async Task<bool> DeadLetterOutboxAsync(
+        Guid messageId,
+        string leaseOwner,
+        string failure,
+        DateTimeOffset deadLetteredAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(leaseOwner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(failure);
+        var boundedError = failure.Length <= 4000 ? failure : failure[..4000];
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE trading.outbox_messages
+            SET dead_lettered_at = @dead_lettered_at, locked_until = NULL, lease_owner = NULL, last_error = @last_error
+            WHERE message_id = @message_id AND lease_owner = @lease_owner AND processed_at IS NULL AND dead_lettered_at IS NULL;
+            """, connection);
+        command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, messageId));
+        command.Parameters.Add(Parameter("lease_owner", NpgsqlDbType.Varchar, leaseOwner));
+        command.Parameters.Add(Parameter("dead_lettered_at", NpgsqlDbType.TimestampTz, deadLetteredAtUtc.ToUniversalTime().UtcDateTime));
         command.Parameters.Add(Parameter("last_error", NpgsqlDbType.Text, boundedError));
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
     }

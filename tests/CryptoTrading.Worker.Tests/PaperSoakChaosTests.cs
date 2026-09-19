@@ -260,8 +260,27 @@ public sealed class PaperSoakChaosTests
             return Task.FromResult(true);
         }
 
+        public Task<bool> DeadLetterOutboxAsync(
+            Guid messageId,
+            string leaseOwner,
+            string failure,
+            DateTimeOffset deadLetteredAtUtc,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var entry = Find(messageId);
+            if (entry is null || entry.Processed || !string.Equals(entry.LeaseOwner, leaseOwner, StringComparison.Ordinal))
+            {
+                return Task.FromResult(false);
+            }
+
+            entry.DeadLettered = true;
+            entry.LockedUntil = null;
+            return Task.FromResult(true);
+        }
+
         public Task<int> CountClaimableAsync(DateTimeOffset nowUtc) =>
-            Task.FromResult(entries.Values.Count(entry => !entry.Processed
+            Task.FromResult(entries.Values.Count(entry => !entry.Processed && !entry.DeadLettered
                 && (entry.LockedUntil is null || entry.LockedUntil <= nowUtc)));
 
         private ChaosEntry? Find(Guid messageId) => entries.Values.FirstOrDefault(entry => entry.Record.MessageId == messageId);
@@ -271,6 +290,7 @@ public sealed class PaperSoakChaosTests
             public OutboxRecord Record { get; } = record;
             public int Attempts { get; set; }
             public bool Processed { get; set; }
+            public bool DeadLettered { get; set; }
             public string? LeaseOwner { get; set; }
             public DateTimeOffset? LockedUntil { get; set; }
         }

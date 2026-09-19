@@ -84,19 +84,38 @@ public sealed class BinanceSpotAccountClientTests
         using var handler = new RecordingHandler(("time", "{}"));
         using var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://test.invalid/api/")
+            BaseAddress = new Uri("https://testnet.binance.vision/api/")
         };
 
         Assert.Throws<ArgumentOutOfRangeException>(() => new BinanceSpotAccountClient(httpClient, options));
     }
 
+    [Fact]
+    public void AuthenticatedOptionsRejectNonTestnetEndpoint()
+    {
+        var options = new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://api.binance.com/api/"),
+            ApiKey = "key",
+            ApiSecret = "secret"
+        };
+
+        using var handler = new RecordingHandler(("time", "{}"));
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = options.RestBaseAddress
+        };
+
+        Assert.Throws<InvalidOperationException>(() => new BinanceSpotAccountClient(httpClient, options));
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test handler owns the HttpClient lifetime for the duration of each test.")]
     private static BinanceSpotAccountClient CreateClient(RecordingHandler handler)
     {
-        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
         var options = new BinanceAuthenticatedClientOptions
         {
-            RestBaseAddress = new Uri("https://test.invalid/api/"),
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
             ApiKey = "test-api-key",
             ApiSecret = "test-api-secret",
             ClockDriftTolerance = TimeSpan.FromSeconds(5)

@@ -25,6 +25,8 @@ public sealed class WorkerRuntimeOptions
 
     public int LeaseSeconds { get; set; } = 30;
 
+    public int MaxOutboxAttempts { get; set; } = 5;
+
     public void Validate()
     {
         if (!string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase))
@@ -49,6 +51,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_OUTBOX_LEASE_SECONDS must be between 1 and 3600."]);
+        }
+
+        if (MaxOutboxAttempts is < 1 or > 100)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_MAX_OUTBOX_ATTEMPTS must be between 1 and 100."]);
         }
 
         if (PersistenceEnabled && string.IsNullOrWhiteSpace(PostgresConnectionString))
