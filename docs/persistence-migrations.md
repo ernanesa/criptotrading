@@ -181,6 +181,11 @@ locais; são segredos distintos.
   destrutivo para evidências de aprovação e exige exportação prévia.
 - A migration 007 adiciona evidência durável de eventos do User Data Stream;
   seu rollback também exige exportação prévia.
+- A migration 011 adiciona o schema append-only de governança experimental:
+  preregistration, trials, auditoria de acesso ao holdout e eventos de
+  contaminação. Os quatro conjuntos são versionados por hash e protegidos por
+  triggers contra `UPDATE`/`DELETE`; a implementação do adapter transacional
+  deve preservar a idempotência dos contratos de `CryptoTrading.Domain.Research`.
 - O snapshot autenticado pagina trades por `fromId`, com limite configurável e
   falha fechada quando a paginação não termina; IDs repetidos entre páginas são
   deduplicados antes da reconciliação.
