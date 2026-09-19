@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `3c500f5`
+**Commit de código auditado:** `e54ba74`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -14,10 +14,10 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Gate | Comando | Resultado |
 |---|---|---|
 | Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 284 aprovados, 0 falhas, 0 skips |
-| Worker persistence startup | `./scripts/test-worker-persistence-startup.sh` | PASS — host real, migration 010 e sink PostgreSQL; `PAPER/NO_TRADE`, sem Binance |
+| Worker persistence startup | `./scripts/test-worker-persistence-startup.sh` | PASS — host real, migrations 010–011 e sink PostgreSQL; `PAPER/NO_TRADE`, sem Binance |
 | Experiment governance | `dotnet test tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj --configuration Release --no-restore` | PASS — 8 testes de preregistration, budget, idempotência e holdout; OOS real continua pendente |
 | Persistência operacional PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 8 aprovados; append idempotente, leitura/hash, colisão e trigger append-only |
-| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 8 testes, incluindo migrations 005–010, auditoria operacional append-only, persistência idempotente, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
+| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 9 testes, incluindo migration 011, governança experimental append-only, auditoria de holdout, idempotência, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
 | Reconstrução determinística do ledger | `./scripts/test-ledger-recovery.sh` | PASS — 3 testes de reconstrução journal → projeção; relatório redigido em `artifacts/recovery/` |
