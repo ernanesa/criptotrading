@@ -11,6 +11,10 @@ submeter ou cancelar ordens.
 ./scripts/test-shadow-soak.sh
 ```
 
+No Worker, o drill integrado é opt-in com `WORKER_SHADOW_ENABLED=true` e exige
+`WORKER_NO_TRADE=true`; ele executa uma única janela local no startup e não
+habilita o dispatcher de ordens.
+
 O teste deve ser executado com o SDK/restore da solução já preparado. O runner
 recusa a execução quando `BINANCE_API_KEY` ou `BINANCE_API_SECRET` estão
 presentes, e falha se o filtro não produzir um resumo de testes aprovado. Cada

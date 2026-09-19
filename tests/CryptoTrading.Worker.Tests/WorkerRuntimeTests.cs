@@ -32,6 +32,16 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void ShadowDrillRequiresNoTradeMode()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ShadowEnabled = true,
+            NoTrade = false,
+        }.Validate());
+    }
+
+    [Fact]
     public async Task NoTradeExecutorDoesNotParseOrExecutePayload()
     {
         var executor = new PaperOutboxMessageExecutor(

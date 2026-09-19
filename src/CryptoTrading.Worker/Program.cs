@@ -25,6 +25,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.PostgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"] ?? string.Empty;
         options.ExecutionMode = builder.Configuration["WORKER_EXECUTION_MODE"] ?? "PAPER";
         options.NoTrade = builder.Configuration.GetValue("WORKER_NO_TRADE", true);
+        options.ShadowEnabled = builder.Configuration.GetValue("WORKER_SHADOW_ENABLED", false);
         options.PollIntervalMilliseconds = builder.Configuration.GetValue("WORKER_POLL_INTERVAL_MS", 1_000);
         options.BatchSize = builder.Configuration.GetValue("WORKER_OUTBOX_BATCH_SIZE", 25);
         options.LeaseSeconds = builder.Configuration.GetValue("WORKER_OUTBOX_LEASE_SECONDS", 30);
@@ -56,6 +57,7 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
 builder.Services.AddHostedService<OutboxDispatcher>();
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();
+builder.Services.AddHostedService<ShadowDrillHostedService>();
 
 var host = builder.Build();
 host.Run();
