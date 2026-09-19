@@ -45,7 +45,7 @@ itens em andamento ou bloqueados.
 - [x] Implementar rate limits, retry, backoff e clock drift.
 - [x] Implementar `exchangeInfo`, filtros e precisão por símbolo.
 - [x] Implementar trades/candles via WebSocket e reconexão pública resiliente.
-- [ ] Implementar order book local, gap detection e resync.
+- [x] Implementar order book local, gap detection e resync.
 - [ ] Implementar recorder/replay de dados selecionados.
 
 ## Fase 4 — OMS, reconciliação e risco
@@ -64,7 +64,7 @@ itens em andamento ou bloqueados.
 - [ ] Revogar chaves expostas e gerar nova chave Spot Testnet.
 - [ ] Confirmar withdrawals, transferências, margem e Futures desativados.
 - [ ] Preencher credenciais somente no `.env` local ou secret store externo.
-- [ ] Implementar account, balances, orders e fills autenticados.
+- [x] Implementar adapter autenticado read-only para account, balances, open orders e trades (sem submit/cancel).
 - [ ] Executar primeiro teste de ordem com notional mínimo e Risk aprovado.
 - [ ] Registrar evidência redacted e confirmar reconciliação após restart.
 
@@ -118,7 +118,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Persistência runtime | Store Npgsql transacional, migrations, journal/ledger/outbox, leases e retry | `src/CryptoTrading.Persistence/PostgresTradingStore.cs` | `6947d6e` | Codex |
 | 2026-09-19 | Exchange rules | Filtros de preço/lote/notional, rate-limit retry e clock drift; 23 testes aprovados | `src/CryptoTrading.Exchange.Binance` | `a0dbe3c` | Codex |
 | 2026-09-19 | Strategy baseline | Trend Following BTC/USDT, EMA 20/50, custos, fingerprint e no-look-ahead; 12 testes aprovados | `src/CryptoTrading.Backtesting/Strategies`, `docs/trend-following-baseline.md` | `3248863` | Codex |
-| 2026-09-19 | Worker outbox | Store/migrations opt-in, dispatcher PAPER com lease/retry e `NO_TRADE` fail-closed; 3 testes aprovados | `src/CryptoTrading.Worker`, `tests/CryptoTrading.Worker.Tests` | pendente | Codex |
+| 2026-09-19 | Worker outbox | Store/migrations opt-in, dispatcher PAPER com lease/retry e `NO_TRADE` fail-closed; 3 testes aprovados | `src/CryptoTrading.Worker`, `tests/CryptoTrading.Worker.Tests` | `437cb44` | Codex |
+| 2026-09-19 | Order book | Snapshot/delta, sequência, gap, duplicata, quarantine e resync; 31 testes Binance aprovados | `src/CryptoTrading.Exchange.Binance/BinanceLocalOrderBook.cs` | `9217d4f` | Codex |
+| 2026-09-19 | Conta read-only | HMAC, account/balances/open orders/trades, clock drift e sem endpoints de ordem; 4 testes específicos | `src/CryptoTrading.Exchange.Binance/BinanceSpotAccountClient.cs` | `1d3f574` | Codex |
 
 ## Bloqueios e decisões
 
