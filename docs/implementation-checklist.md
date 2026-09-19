@@ -46,7 +46,7 @@ itens em andamento ou bloqueados.
 - [x] Implementar `exchangeInfo`, filtros e precisão por símbolo.
 - [x] Implementar trades/candles via WebSocket e reconexão pública resiliente.
 - [x] Implementar order book local, gap detection e resync.
-- [ ] Implementar recorder/replay de dados selecionados.
+- [x] Implementar recorder/replay de dados públicos selecionados com envelope versionado, checksum, retenção explícita e ordenação determinística.
 
 ## Fase 4 — OMS, reconciliação e risco
 
@@ -128,6 +128,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | PostgreSQL integration | Migrations, ledger, outbox lease/retry/idempotência via Compose com senha efêmera; teste reproduzível | `scripts/test-postgres-integration.sh`, `tests/CryptoTrading.Persistence.IntegrationTests` | `f7b073a` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
+| 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 4 testes aprovados | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | Em andamento | Codex |
 
 ## Bloqueios e decisões
 
