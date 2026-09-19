@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: 375d0a7
+commit: f5db9e9
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
