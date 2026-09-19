@@ -1,3 +1,5 @@
+using CryptoTrading.Observability;
+
 namespace CryptoTrading.Worker;
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The host creates this BackgroundService through dependency injection.")]
@@ -8,6 +10,7 @@ internal sealed partial class TradingWorker(ILogger<TradingWorker> logger) : Bac
         while (!stoppingToken.IsCancellationRequested)
         {
             WorkerLog.Heartbeat(logger, DateTimeOffset.UtcNow);
+            TradingTelemetry.RecordWorkerHeartbeat();
             await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken).ConfigureAwait(false);
         }
     }
