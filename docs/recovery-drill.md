@@ -37,6 +37,11 @@ Para validar o ciclo físico de backup sem tocar no volume da aplicação, execu
 
 O script usa um projeto, volume, banco de restauração e arquivo temporários
 gerados pelo próprio processo; ao finalizar, remove somente esses recursos.
+Além da verificação do marcador, ele mede duração de backup, restore (RTO do
+drill), verificação e tempo total. O relatório redigido é gravado em
+`artifacts/recovery/postgres-rpo-rto-<timestamp>-<pid>.md` com permissão `600`.
+O resultado de RPO é limitado ao marcador confirmado antes do dump: zero linhas
+perdidas neste cenário determinístico não constitui garantia de RPO de produção.
 
 Para executar o drill determinístico de soak/chaos somente em memória, execute:
 
@@ -72,5 +77,6 @@ Binance, não acessa rede ou PostgreSQL e grava o relatório em
 - logs contêm correlation id e não contêm segredos;
 - resultado associado ao commit, migration version e dataset hash.
 
-O drill físico de PostgreSQL/RPO/RTO permanece separado; a execução local
-determinística de reconstrução é evidenciada pelo relatório gerado acima.
+O drill físico local de PostgreSQL/RPO/RTO agora possui medição reproduzível; a
+definição de RPO/RTO de produção, retenção, restauração do volume real e
+reconstrução completa de estado continuam fora deste cenário.
