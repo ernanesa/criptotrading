@@ -34,6 +34,17 @@ O script inicia um PostgreSQL local, executa migrations, valida journal/ledger,
 lease, retry e idempotência, e encerra o container. Não colocar credenciais no
 shell history, em logs ou no repositório.
 
+Para executar o drill local dos controles independentes:
+
+```bash
+./scripts/test-operational-control.sh
+```
+
+O comando valida idempotência de `KillSwitch`, bloqueio de novas entradas em
+`SafeMode`, reduções permitidas e reset autorizado. Ele não acessa exchange,
+rede, credenciais ou endpoints de ordem; qualquer falha é fail-closed e gera
+relatório redigido em `artifacts/operations/`.
+
 ## Evidência mínima de incidente
 
 Registrar UTC, commit, versão do dataset, `correlationId`, reason code, estado
