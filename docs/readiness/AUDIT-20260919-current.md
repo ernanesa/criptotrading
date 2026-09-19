@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `70d5abf`
+**Commit de código auditado:** `463fee6`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -18,7 +18,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
 | Reconstrução determinística do ledger | `./scripts/test-ledger-recovery.sh` | PASS — 3 testes de reconstrução journal → projeção; relatório redigido em `artifacts/recovery/` |
-| Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
+| Backup/restore + RPO/RTO local | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; tempos de backup/restore/validação e RPO do marcador registrados em `artifacts/recovery/postgres-rpo-rto-*.md`; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
 | Compose | `POSTGRES_PASSWORD='validation-only-not-a-credential' docker compose config --quiet` | PASS |
 | Integridade documental | `git diff --check` | PASS |
@@ -82,7 +82,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   medidos em dados reais;
 - execução autenticada read-only contra uma nova chave Testnet, com relatório
   redigido de balances, open orders e trades e reconciliação do ledger;
-- alert delivery real, RPO/RTO medidos e reconstrução completa de estado;
+- alert delivery real, RPO/RTO de produção e reconstrução completa de estado;
 - RiskPolicy, PRM e CanaryPlan preenchidos com valores/unidades, validade e
   aprovação humana;
 - o snapshot corrente também falha fechado no `scripts/validate-readiness.sh`
