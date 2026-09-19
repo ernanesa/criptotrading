@@ -46,3 +46,18 @@ O acompanhamento das tarefas está em [`docs/implementation-checklist.md`](docs/
 O primeiro incremento é Binance Spot em BTC/USDT, com uma única baseline Trend Following, paper e Testnet real. Multi-strategy só começa após o R1.0. Não há arbitragem, Futures ou market making no produto comprometido. A expansão para até 20 ativos depende de uma `UniversePolicy` point-in-time, capacidade medida, churn budget e gate explícito.
 
 O RAG é uma ferramenta local do Research Plane, fora do hot path de capital. Ele deve confirmar fontes contra o código/commit atual e nunca autoriza risco, ordens, credenciais ou mudanças externas.
+
+## Adapter Binance Spot read-only
+
+O projeto `CryptoTrading.Exchange.Binance` contém o primeiro slice do adapter
+Spot, limitado a endpoints públicos: `ping`, `time` e `exchangeInfo`. Por
+definição, ele não lê credenciais e não possui endpoints de ordens, conta,
+saques ou transferências.
+
+O registro no host de composição usa `AddBinanceSpotMarketClient`, com
+`BinanceEnvironment.Testnet` como padrão. O endereço da Testnet é
+`https://testnet.binance.vision/api/`; Demo pode ser selecionado explicitamente.
+O cliente valida timeout, endereço absoluto HTTP(S), símbolo ASCII e respostas
+HTTP sem copiar o corpo de erro para exceções ou logs.
+
+Os testes usam `HttpMessageHandler` falso e não fazem chamadas à exchange.
