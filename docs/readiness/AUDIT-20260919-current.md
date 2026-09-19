@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `abdccf7`
+**Commit de código auditado:** `fe269ee`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 296 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 297 aprovados, 0 falhas, 0 skips |
 | Benchmark comparison | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — cash e buy-and-hold obrigatórios, fingerprint determinístico e timeline fail-closed |
 | Experiment evidence bundle | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — 3 testes de manifesto, hash, idempotência, redaction e holdout contaminado |
 | Worker persistence startup | `./scripts/test-worker-persistence-startup.sh` | PASS — host real, migrations 010–011 e sink PostgreSQL; `PAPER/NO_TRADE`, sem Binance |
@@ -42,6 +42,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Testnet public boundary | `./scripts/test-binance-testnet-public.sh` | PASS — ping, server time, exchangeInfo BTCUSDT e klines BTCUSDT/1d públicos, sem credenciais; cliente fake coberto por 56 testes Binance |
 | Public kline recorder | `dotnet run --project tools/CryptoTrading.PublicKlinesRecorder -c Release --no-build -- ...` | PASS — guard de credenciais exit 2 e coleta real limitada a 3 barras; Testnet retornou 2 barras fechadas e manifesto com fingerprint em diretório temporário |
 | Public kline quality adapter | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — journal `kline-rest` convertido em `ClosedBarEnvelope` e validado com hash/availability/símbolo; 49 testes Backtesting |
+| Public OOS runner | `dotnet run --project tools/CryptoTrading.PublicOosRunner -c Release --no-build -- ...` | PASS — 179 barras, 5 janelas OOS, fingerprint do manifesto igual ao replay reaberto, `promotion_authorized=false`; resultado não é decisão de promoção |
 | Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 56 testes |
 
 | OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
