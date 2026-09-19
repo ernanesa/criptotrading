@@ -64,6 +64,20 @@ balances, payloads e segredos não são gravados.
 Sem credenciais, a configuração deve permanecer desabilitada; o startup não
 faz chamadas autenticadas por padrão.
 
+Para validar somente a fronteira autenticada, depois de revogar as chaves
+expostas e criar uma chave Spot Testnet nova com permissões mínimas, use:
+
+```bash
+./scripts/test-binance-testnet-auth-readonly.sh
+```
+
+O script recusa ausência de credenciais, ambiente diferente de `TESTNET`, URL
+fora do endpoint HTTPS exato da Testnet e `BINANCE_WITHDRAWALS_ENABLED` diferente
+de `false`. Account, open orders e trades são os únicos recursos chamados. A
+execução grava apenas um relatório redigido em `artifacts/binance/`; stdout e
+stderr do processo não são copiados para o relatório. Ausência de um resultado
+privado bem-sucedido mantém o gate em `No-Go`.
+
 Para persistir alertas operacionais locais redigidos, defina
 `WORKER_ALERT_FILE_DIRECTORY=artifacts/alerts`. Cada alerta será acrescentado
 ao arquivo diário `alerts-YYYYMMDD.jsonl`; o valor vazio mantém o sink em
