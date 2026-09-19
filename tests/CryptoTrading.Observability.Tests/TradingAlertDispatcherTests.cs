@@ -1,9 +1,12 @@
 using Xunit;
+using System.Text.Json;
 
 namespace CryptoTrading.Observability.Tests;
 
 public sealed class TradingAlertDispatcherTests
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
     [Fact]
     public async Task DeliversRequiredOperationalContextAndDeduplicates()
     {
@@ -43,6 +46,30 @@ public sealed class TradingAlertDispatcherTests
 
         await Assert.ThrowsAsync<ArgumentException>(async () => await dispatcher.PublishAsync(alert).ConfigureAwait(true)).ConfigureAwait(true);
         Assert.Empty(sink.Alerts);
+    }
+
+    [Fact]
+    public async Task JsonlSinkPersistsRedactedAlertEnvelope()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-alerts-{Guid.NewGuid():N}");
+        try
+        {
+            using var sink = new JsonlTradingAlertSink(directory);
+            await sink.DeliverAsync(CreateAlert());
+
+            var file = Assert.Single(Directory.EnumerateFiles(directory, "alerts-*.jsonl"));
+            var line = await File.ReadAllTextAsync(file).ConfigureAwait(true);
+            var persisted = JsonSerializer.Deserialize<TradingAlert>(line, JsonOptions);
+            Assert.Equal("reconciliation:BTCUSDT", persisted?.DeduplicationKey);
+            Assert.DoesNotContain("secret", line, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     private static TradingAlert CreateAlert() => new(

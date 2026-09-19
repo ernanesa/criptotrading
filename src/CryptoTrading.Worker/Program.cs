@@ -41,6 +41,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
         options.ReconciliationReportDirectory = builder.Configuration["WORKER_RECONCILIATION_REPORT_DIRECTORY"] ?? "artifacts/reconciliation";
+        options.AlertFileDirectory = builder.Configuration["WORKER_ALERT_FILE_DIRECTORY"] ?? string.Empty;
     })
     .Validate(static options =>
     {
@@ -56,9 +57,13 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
     }, "Worker runtime configuration is invalid.")
     .ValidateOnStart();
 builder.Services.AddSingleton<IPaperExchange, PaperExchange>();
-builder.Services.AddSingleton<CryptoTrading.Observability.InMemoryTradingAlertSink>();
 builder.Services.AddSingleton<CryptoTrading.Observability.ITradingAlertSink>(serviceProvider =>
-    serviceProvider.GetRequiredService<CryptoTrading.Observability.InMemoryTradingAlertSink>());
+{
+    var options = serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value;
+    return string.IsNullOrWhiteSpace(options.AlertFileDirectory)
+        ? new CryptoTrading.Observability.InMemoryTradingAlertSink()
+        : new CryptoTrading.Observability.JsonlTradingAlertSink(options.AlertFileDirectory);
+});
 builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher>();
 builder.Services.AddSingleton<CryptoTrading.Shadow.ShadowReportWriter>(serviceProvider =>
     new CryptoTrading.Shadow.ShadowReportWriter(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ShadowReportDirectory));
