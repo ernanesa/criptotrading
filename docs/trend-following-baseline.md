@@ -81,3 +81,16 @@ resultado. `SensitivityPlan.Create` valida uma matriz de casos com identificador
 preservar os hashes de dados/configuração e manter o período OOS separado do
 período usado para escolher parâmetros. Nenhuma métrica OOS deve ser misturada
 com a amostra de ajuste.
+
+O slice local `SyntheticMarketDataset.CreateBtcUsdtV1` fornece 180 candles
+determinísticos, identificados por `synthetic-btcusdt-oos`/`1.0.0`, com hash
+SHA-256 e origem explicitamente sintética. Ele existe para validar o pipeline e
+os invariantes de reprodutibilidade; não representa o mercado e não deve ser
+usado para inferir retorno.
+
+`WalkForwardEvaluator` usa as barras de treino apenas para aquecer as EMAs e
+calcula as métricas exclusivamente nas barras OOS de cada janela. Ele não
+otimiza parâmetros, não escolhe o melhor caso, não acessa a Binance e nunca
+envia ordens. A evidência mínima esperada é reproduzir o mesmo hash do dataset,
+fingerprint da configuração e resultados por janela antes de qualquer estudo
+com dados reais versionados.
