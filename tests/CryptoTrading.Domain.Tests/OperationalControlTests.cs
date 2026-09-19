@@ -6,6 +6,7 @@ using Xunit;
 
 namespace CryptoTrading.Domain.Tests;
 
+[Trait("Category", "OperationalControl")]
 public sealed class OperationalControlTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 19, 12, 30, 0, TimeSpan.Zero);
