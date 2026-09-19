@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: e54ba74
+commit: 0479442
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -36,7 +36,7 @@ items:
     pending: [real-oos-walk-forward, shadow-soak, production-rpo-rto, alert-delivery, human-approval]
   - id: experiment-governance
     capability: preregistration, trial-budget accounting, immutable hashes and locked-holdout access audit
-    evidence: [src/CryptoTrading.Domain/Research/ExperimentRegistry.cs, src/CryptoTrading.Persistence/PostgresTradingStore.cs, src/CryptoTrading.Persistence/Migrations/011_experiment_governance.up.sql, tests/CryptoTrading.Domain.Tests/ExperimentRegistryTests.cs, tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs, docs/experiment-governance.md, e54ba74]
+    evidence: [src/CryptoTrading.Domain/Research/ExperimentRegistry.cs, src/CryptoTrading.Persistence/PostgresTradingStore.cs, src/CryptoTrading.Persistence/Migrations/011_experiment_governance.up.sql, tests/CryptoTrading.Domain.Tests/ExperimentRegistryTests.cs, tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs, docs/experiment-governance.md, e54ba74, 0479442]
     validation: dotnet test tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj --configuration Release --no-restore
     status: pass-code
     pending: [postgres-append-only-store, real-market-oos-dataset, human-approval]
