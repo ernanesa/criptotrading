@@ -6,6 +6,14 @@ public interface IBinanceSpotMarketClient
 
     Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
+        string symbol,
+        string interval,
+        DateTimeOffset? startTimeUtc = null,
+        DateTimeOffset? endTimeUtc = null,
+        int limit = 500,
+        CancellationToken cancellationToken = default);
+
     Task<BinanceExchangeInfo> GetExchangeInfoAsync(
         string? symbol = null,
         CancellationToken cancellationToken = default);

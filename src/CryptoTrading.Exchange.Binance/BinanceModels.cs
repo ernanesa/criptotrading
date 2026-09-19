@@ -5,6 +5,16 @@ namespace CryptoTrading.Exchange.Binance;
 public sealed record BinanceServerTime(
     [property: JsonPropertyName("serverTime")] long ServerTime);
 
+public sealed record BinanceSpotKline(
+    DateTimeOffset OpenTimeUtc,
+    DateTimeOffset CloseTimeUtc,
+    decimal Open,
+    decimal High,
+    decimal Low,
+    decimal Close,
+    decimal Volume,
+    string Interval);
+
 public sealed record BinanceExchangeInfo(
     [property: JsonPropertyName("timezone")] string Timezone,
     [property: JsonPropertyName("serverTime")] long ServerTime,
