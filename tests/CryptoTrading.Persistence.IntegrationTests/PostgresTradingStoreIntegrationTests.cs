@@ -5,6 +5,7 @@ using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
+using Npgsql;
 using Xunit;
 using Xunit.Sdk;
 
@@ -367,5 +368,49 @@ public sealed class PostgresTradingStoreIntegrationTests
         var replayedAfterRemoval = Assert.Single(await verificationProcess.ReadOpenOrdersAsync());
         Assert.Equal(updated, replayedAfterRemoval);
         await verificationProcess.RemoveOpenOrderAsync(clientOrderId);
+    }
+
+    [Fact]
+    public async Task PersistsOperationalControlAuditIdempotentlyAndRejectsIdentityCollision()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+        var occurredAtUtc = DateTimeOffset.UtcNow;
+        var auditEvent = new OperationalControlAuditEvent(
+            Guid.NewGuid(),
+            OperationalMode.Normal,
+            OperationalMode.SafeMode,
+            "integration-test",
+            "integration audit persistence",
+            IdempotencyKey.New(),
+            occurredAtUtc,
+            null);
+
+        Assert.True(await store.AppendOperationalControlAuditEventAsync(auditEvent));
+        Assert.False(await store.AppendOperationalControlAuditEventAsync(auditEvent));
+
+        var persisted = Assert.Single(
+            await store.ReadOperationalControlAuditEventsAsync(occurredAtUtc.AddSeconds(-1)));
+        Assert.Equal(auditEvent, persisted);
+        Assert.Equal(auditEvent.PayloadSha256, persisted.PayloadSha256);
+
+        var conflictingIdentity = auditEvent with { EventId = Guid.NewGuid() };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.AppendOperationalControlAuditEventAsync(conflictingIdentity));
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var delete = new NpgsqlCommand(
+            "DELETE FROM trading.operational_control_audit_events WHERE event_id = @event_id;",
+            connection);
+        delete.Parameters.AddWithValue("event_id", auditEvent.EventId);
+        await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
     }
 }

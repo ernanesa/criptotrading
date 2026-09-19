@@ -111,6 +111,17 @@ uma projeção atualizável, alimentada pelo futuro OMS, usada apenas para compa
 Qualquer ordem externa desconhecida, ausente localmente ou com status divergente
 entra em SafeMode.
 
+Migration `010_operational_control_audit` adiciona a tabela append-only de
+transições de `KillSwitch`/`SafeMode`. Cada linha preserva o schema versionado,
+os modos anterior e seguinte, ator, motivo, chave de idempotência, eventual
+aprovação e o SHA-256 do payload canônico. Repetições do mesmo evento ou chave
+de idempotência são no-op somente quando todos os campos coincidem; colisões de
+identidade falham fechado. Um trigger PostgreSQL impede `UPDATE` e `DELETE`.
+O contrato assíncrono é `IOperationalControlAuditStore`; o adapter
+`PostgresOperationalControlAuditSink` existe somente para a fronteira síncrona
+legada de `IOperationalControlAuditSink` e propaga qualquer falha de persistência
+antes de a mudança de estado ser considerada válida.
+
 O teste de integração `ReplaysOpenOrderProjectionAcrossStoreRestartAndRetainsRemovalState`
 valida o contrato operacional dessa projeção: upsert repetido é idempotente,
 uma nova instância do store lê apenas a identidade/status ativos mais recentes,
