@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `463fee6`
+**Commit de código auditado:** `ce06e4e`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 239 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 240 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 7 testes, incluindo migrations 005–009, persistência idempotente, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
