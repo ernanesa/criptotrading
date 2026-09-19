@@ -42,6 +42,13 @@ public sealed record LeasedOutboxMessage(
     DateTimeOffset LockedUntil,
     string LeaseOwner);
 
+public sealed record LocalOpenOrderRecord(
+    string Symbol,
+    long? OrderId,
+    string ClientOrderId,
+    string Status,
+    DateTimeOffset UpdatedAtUtc);
+
 /// <summary>Durable outbox operations required by a dispatcher.</summary>
 public interface IOutboxStore
 {
@@ -108,11 +115,20 @@ public interface IAccountStreamEventStore
         CancellationToken cancellationToken = default);
 }
 
+public interface ILocalOpenOrderStore
+{
+    Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default);
+
+    Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default);
+
+    Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -559,6 +575,70 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         }
 
         return ids;
+    }
+
+    public async Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT symbol, order_id, client_order_id, status, updated_at FROM trading.reconciliation_open_orders WHERE active = TRUE ORDER BY client_order_id;",
+            connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<LocalOpenOrderRecord>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(new(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                new DateTimeOffset(reader.GetDateTime(4), TimeSpan.Zero)));
+        }
+
+        return result;
+    }
+
+    public async Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default)
+    {
+        ValidateOpenOrder(order);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO trading.reconciliation_open_orders (symbol, order_id, client_order_id, status, updated_at, active)
+            VALUES (@symbol, @order_id, @client_order_id, @status, @updated_at, TRUE)
+            ON CONFLICT (client_order_id) DO UPDATE SET
+                symbol = EXCLUDED.symbol, order_id = EXCLUDED.order_id, status = EXCLUDED.status,
+                updated_at = EXCLUDED.updated_at, active = TRUE;
+            """, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, order.Symbol.Trim().ToUpperInvariant()));
+        command.Parameters.Add(Parameter("order_id", NpgsqlDbType.Bigint, order.OrderId.HasValue ? order.OrderId.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+        command.Parameters.Add(Parameter("status", NpgsqlDbType.Varchar, order.Status.Trim().ToUpperInvariant()));
+        command.Parameters.Add(Parameter("updated_at", NpgsqlDbType.TimestampTz, order.UpdatedAtUtc.UtcDateTime));
+        _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "UPDATE trading.reconciliation_open_orders SET active = FALSE, updated_at = transaction_timestamp() WHERE client_order_id = @client_order_id;",
+            connection);
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
+        _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ValidateOpenOrder(LocalOpenOrderRecord order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        ArgumentException.ThrowIfNullOrWhiteSpace(order.Symbol);
+        ArgumentException.ThrowIfNullOrWhiteSpace(order.ClientOrderId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(order.Status);
+        if (order.OrderId is < 0 || order.UpdatedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Open order identity and timestamp are invalid.", nameof(order));
+        }
     }
 
     private static void ValidateTradeReference(long tradeId, string symbol)
