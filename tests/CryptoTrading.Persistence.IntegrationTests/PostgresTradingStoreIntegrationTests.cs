@@ -5,6 +5,7 @@ using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
+using CryptoTrading.Domain.Research;
 using Npgsql;
 using Xunit;
 using Xunit.Sdk;
@@ -413,4 +414,62 @@ public sealed class PostgresTradingStoreIntegrationTests
         delete.Parameters.AddWithValue("event_id", auditEvent.EventId);
         await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
     }
+
+    [Fact]
+    public async Task PersistsExperimentGovernanceIdempotentlyAndKeepsHoldoutEvidenceAppendOnly()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+        var registration = NewExperimentRegistration();
+        Assert.True(await store.AppendExperimentPreregistrationAsync(registration));
+        Assert.False(await store.AppendExperimentPreregistrationAsync(registration));
+
+        var trial = new ExperimentTrial(
+            1, "baseline", "{\"ema_fast\":20}", Hash("trial-result"),
+            ExperimentDecision.Rejected, registration.PreregisteredAtUtc, "integration", new IdempotencyKey("trial-1"));
+        Assert.True(await store.AppendExperimentTrialAsync(registration.ExperimentId, trial));
+        Assert.False(await store.AppendExperimentTrialAsync(registration.ExperimentId, trial));
+
+        var registry = new InMemoryExperimentRegistry();
+        registry.Register(registration);
+        var access = registry.AccessHoldout(registration.ExperimentId,
+            new HoldoutAccessRequest("reviewer", "locked evaluation", registration.PreregisteredAtUtc,
+                new IdempotencyKey("holdout-1"), true, "approval-integration"));
+        Assert.True(await store.AppendHoldoutAccessAuditAsync(access.Audit));
+        Assert.False(await store.AppendHoldoutAccessAuditAsync(access.Audit));
+
+        Assert.True(await store.AppendHoldoutContaminationAsync(
+            registration.ExperimentId, "reviewer", "manual contamination drill", "holdout-v2",
+            registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1")));
+        Assert.False(await store.AppendHoldoutContaminationAsync(
+            registration.ExperimentId, "reviewer", "manual contamination drill", "holdout-v2",
+            registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1")));
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var delete = new NpgsqlCommand(
+            "DELETE FROM trading.experiment_trials WHERE experiment_id = @experiment_id;", connection);
+        delete.Parameters.AddWithValue("experiment_id", registration.ExperimentId.Value);
+        await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
+    }
+
+    private static ExperimentPreregistration NewExperimentRegistration() =>
+        new(
+            ExperimentId.New(), "integration-family", "trend persists after confirmation", "{\"ema_fast\":[20,30]}",
+            ["baseline", "faster"], 2, "net_return", "reject if lower bound <= 0", "NO_TRADE/cash",
+            new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero), "integration",
+            IdempotencyKey.New(), "trend-v1", "commit-integration", "dataset-v1", Hash("dataset"),
+            "holdout-v1", "metrics-v1", "environment-v1", Hash("dependencies"), 42,
+            new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero),
+            new DateTimeOffset(2026, 9, 19, 0, 0, 0, TimeSpan.Zero));
+
+    private static string Hash(string value) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
 }

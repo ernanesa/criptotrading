@@ -19,7 +19,8 @@ execução limpa.
 ## Limite desta fatia
 
 O registry atual em `CryptoTrading.Domain.Research` é process-local e deliberadamente não lê rede, credenciais ou
-dados de mercado. A próxima fatia deve adicionar o store PostgreSQL append-only
-e um manifesto de evidência redigido, preservando os mesmos hashes e invariantes
-do contrato. A governança não autoriza promoção: RiskPolicy, dataset real,
+dados de mercado. A migration 011 e `IExperimentGovernanceStore` já fornecem o
+store PostgreSQL append-only para preregistration, trials e auditorias; o
+manifesto de evidência redigido e a leitura/reconstrução completa continuam
+como próxima fatia. A governança não autoriza promoção: RiskPolicy, dataset real,
 aprovação humana e decisão Go/No-Go continuam pendentes.

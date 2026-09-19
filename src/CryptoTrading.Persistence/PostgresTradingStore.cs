@@ -5,11 +5,14 @@
 #pragma warning disable IDE0058 // Npgsql parameter registration intentionally ignores the returned parameter.
 
 using System.Data;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
+using CryptoTrading.Domain.Research;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -137,11 +140,37 @@ public interface IOperationalControlAuditStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable append-only store for preregistered research evidence.</summary>
+public interface IExperimentGovernanceStore
+{
+    Task<bool> AppendExperimentPreregistrationAsync(
+        ExperimentPreregistration preregistration,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> AppendExperimentTrialAsync(
+        ExperimentId experimentId,
+        ExperimentTrial trial,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> AppendHoldoutAccessAuditAsync(
+        HoldoutAccessAudit audit,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> AppendHoldoutContaminationAsync(
+        ExperimentId experimentId,
+        string actor,
+        string reason,
+        string replacementHoldoutVersion,
+        DateTimeOffset occurredAtUtc,
+        IdempotencyKey idempotencyKey,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IOperationalControlAuditStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -517,6 +546,219 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         }
 
         return result;
+    }
+
+    public async Task<bool> AppendExperimentPreregistrationAsync(
+        ExperimentPreregistration preregistration,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(preregistration);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.experiment_preregistrations
+                (experiment_id, experiment_family_id, hypothesis, search_space, planned_variants, trial_budget,
+                 primary_metric, rejection_rule, benchmark, preregistered_at, preregistered_by, idempotency_key,
+                 strategy_version, code_commit, dataset_version, dataset_hash, holdout_version,
+                 metric_definition_version, environment_fingerprint, dependency_lock_hash, seed,
+                 period_start, period_end, preregistration_sha256)
+            VALUES
+                (@experiment_id, @experiment_family_id, @hypothesis, @search_space, @planned_variants, @trial_budget,
+                 @primary_metric, @rejection_rule, @benchmark, @preregistered_at, @preregistered_by, @idempotency_key,
+                 @strategy_version, @code_commit, @dataset_version, @dataset_hash, @holdout_version,
+                 @metric_definition_version, @environment_fingerprint, @dependency_lock_hash, @seed,
+                 @period_start, @period_end, @preregistration_sha256)
+            ON CONFLICT DO NOTHING
+            RETURNING experiment_id;
+            """,
+            [
+                Parameter("experiment_id", NpgsqlDbType.Uuid, preregistration.ExperimentId.Value),
+                Parameter("experiment_family_id", NpgsqlDbType.Varchar, preregistration.ExperimentFamilyId),
+                Parameter("hypothesis", NpgsqlDbType.Varchar, preregistration.Hypothesis),
+                Parameter("search_space", NpgsqlDbType.Varchar, preregistration.SearchSpace),
+                Parameter("planned_variants", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(preregistration.PlannedVariants)),
+                Parameter("trial_budget", NpgsqlDbType.Integer, preregistration.TrialBudget),
+                Parameter("primary_metric", NpgsqlDbType.Varchar, preregistration.PrimaryMetric),
+                Parameter("rejection_rule", NpgsqlDbType.Varchar, preregistration.RejectionRule),
+                Parameter("benchmark", NpgsqlDbType.Varchar, preregistration.Benchmark),
+                Parameter("preregistered_at", NpgsqlDbType.TimestampTz, preregistration.PreregisteredAtUtc.UtcDateTime),
+                Parameter("preregistered_by", NpgsqlDbType.Varchar, preregistration.PreregisteredBy),
+                Parameter("idempotency_key", NpgsqlDbType.Varchar, preregistration.IdempotencyKey.Value),
+                Parameter("strategy_version", NpgsqlDbType.Varchar, preregistration.StrategyVersion),
+                Parameter("code_commit", NpgsqlDbType.Varchar, preregistration.CodeCommit),
+                Parameter("dataset_version", NpgsqlDbType.Varchar, preregistration.DatasetVersion),
+                Parameter("dataset_hash", NpgsqlDbType.Char, preregistration.DatasetHash),
+                Parameter("holdout_version", NpgsqlDbType.Varchar, preregistration.HoldoutVersion),
+                Parameter("metric_definition_version", NpgsqlDbType.Varchar, preregistration.MetricDefinitionVersion),
+                Parameter("environment_fingerprint", NpgsqlDbType.Varchar, preregistration.EnvironmentFingerprint),
+                Parameter("dependency_lock_hash", NpgsqlDbType.Char, preregistration.DependencyLockHash),
+                Parameter("seed", NpgsqlDbType.Integer, preregistration.Seed),
+                Parameter("period_start", NpgsqlDbType.TimestampTz, preregistration.PeriodStartUtc.UtcDateTime),
+                Parameter("period_end", NpgsqlDbType.TimestampTz, preregistration.PeriodEndUtc.UtcDateTime),
+                Parameter("preregistration_sha256", NpgsqlDbType.Char, preregistration.PreregistrationSha256),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existingHash = await ReadStringAsync(connection, transaction,
+                "SELECT preregistration_sha256 FROM trading.experiment_preregistrations WHERE experiment_id = @experiment_id OR idempotency_key = @idempotency_key;",
+                [Parameter("experiment_id", NpgsqlDbType.Uuid, preregistration.ExperimentId.Value), Parameter("idempotency_key", NpgsqlDbType.Varchar, preregistration.IdempotencyKey.Value)],
+                cancellationToken).ConfigureAwait(false);
+            EnsureHashEquivalent(existingHash, preregistration.PreregistrationSha256, "Experiment preregistration");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> AppendExperimentTrialAsync(
+        ExperimentId experimentId,
+        ExperimentTrial trial,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(trial);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.experiment_trials
+                (experiment_id, trial_number, variant_id, parameters_canonical, result_artifact_hash, decision,
+                 recorded_at, recorded_by, idempotency_key, trial_sha256)
+            VALUES (@experiment_id, @trial_number, @variant_id, @parameters_canonical, @result_artifact_hash, @decision,
+                    @recorded_at, @recorded_by, @idempotency_key, @trial_sha256)
+            ON CONFLICT DO NOTHING
+            RETURNING trial_number;
+            """,
+            [
+                Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value),
+                Parameter("trial_number", NpgsqlDbType.Integer, trial.TrialNumber),
+                Parameter("variant_id", NpgsqlDbType.Varchar, trial.VariantId),
+                Parameter("parameters_canonical", NpgsqlDbType.Varchar, trial.ParametersCanonical),
+                Parameter("result_artifact_hash", NpgsqlDbType.Char, trial.ResultArtifactHash),
+                Parameter("decision", NpgsqlDbType.Varchar, trial.Decision.ToString()),
+                Parameter("recorded_at", NpgsqlDbType.TimestampTz, trial.RecordedAtUtc.UtcDateTime),
+                Parameter("recorded_by", NpgsqlDbType.Varchar, trial.RecordedBy),
+                Parameter("idempotency_key", NpgsqlDbType.Varchar, trial.IdempotencyKey.Value),
+                Parameter("trial_sha256", NpgsqlDbType.Char, trial.TrialSha256),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existingHash = await ReadStringAsync(connection, transaction,
+                "SELECT trial_sha256 FROM trading.experiment_trials WHERE (experiment_id = @experiment_id AND trial_number = @trial_number) OR idempotency_key = @idempotency_key;",
+                [Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value), Parameter("trial_number", NpgsqlDbType.Integer, trial.TrialNumber), Parameter("idempotency_key", NpgsqlDbType.Varchar, trial.IdempotencyKey.Value)],
+                cancellationToken).ConfigureAwait(false);
+            EnsureHashEquivalent(existingHash, trial.TrialSha256, "Experiment trial");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> AppendHoldoutAccessAuditAsync(
+        HoldoutAccessAudit audit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(audit);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.holdout_access_audits
+                (event_id, experiment_id, holdout_version, actor, purpose, occurred_at, idempotency_key,
+                 approved_by_policy, approval_reference, outcome, contamination_reason, payload_sha256)
+            VALUES (@event_id, @experiment_id, @holdout_version, @actor, @purpose, @occurred_at, @idempotency_key,
+                    @approved_by_policy, @approval_reference, @outcome, @contamination_reason, @payload_sha256)
+            ON CONFLICT DO NOTHING
+            RETURNING event_id;
+            """,
+            [
+                Parameter("event_id", NpgsqlDbType.Uuid, audit.EventId),
+                Parameter("experiment_id", NpgsqlDbType.Uuid, audit.ExperimentId.Value),
+                Parameter("holdout_version", NpgsqlDbType.Varchar, audit.HoldoutVersion),
+                Parameter("actor", NpgsqlDbType.Varchar, audit.Actor),
+                Parameter("purpose", NpgsqlDbType.Varchar, audit.Purpose),
+                Parameter("occurred_at", NpgsqlDbType.TimestampTz, audit.OccurredAtUtc.UtcDateTime),
+                Parameter("idempotency_key", NpgsqlDbType.Varchar, audit.IdempotencyKey.Value),
+                Parameter("approved_by_policy", NpgsqlDbType.Boolean, audit.ApprovedByPolicy),
+                Parameter("approval_reference", NpgsqlDbType.Varchar, audit.ApprovalReference),
+                Parameter("outcome", NpgsqlDbType.Varchar, audit.Outcome.ToString()),
+                Parameter("contamination_reason", NpgsqlDbType.Varchar, audit.ContaminationReason),
+                Parameter("payload_sha256", NpgsqlDbType.Char, audit.PayloadSha256),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existingHash = await ReadStringAsync(connection, transaction,
+                "SELECT payload_sha256 FROM trading.holdout_access_audits WHERE event_id = @event_id OR idempotency_key = @idempotency_key;",
+                [Parameter("event_id", NpgsqlDbType.Uuid, audit.EventId), Parameter("idempotency_key", NpgsqlDbType.Varchar, audit.IdempotencyKey.Value)],
+                cancellationToken).ConfigureAwait(false);
+            EnsureHashEquivalent(existingHash, audit.PayloadSha256, "Holdout access audit");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<bool> AppendHoldoutContaminationAsync(
+        ExperimentId experimentId,
+        string actor,
+        string reason,
+        string replacementHoldoutVersion,
+        DateTimeOffset occurredAtUtc,
+        IdempotencyKey idempotencyKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (occurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Contamination timestamp must be UTC.", nameof(occurredAtUtc));
+        }
+
+        var canonical = string.Join('|', "holdout-contamination-v1", experimentId.Value, actor, reason,
+            replacementHoldoutVersion, occurredAtUtc.ToString("O"), idempotencyKey.Value);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+        var eventId = Guid.NewGuid();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.holdout_contamination_events
+                (event_id, experiment_id, actor, reason, replacement_holdout_version, occurred_at, idempotency_key, payload_sha256)
+            VALUES (@event_id, @experiment_id, @actor, @reason, @replacement_holdout_version, @occurred_at, @idempotency_key, @payload_sha256)
+            ON CONFLICT DO NOTHING
+            RETURNING event_id;
+            """,
+            [
+                Parameter("event_id", NpgsqlDbType.Uuid, eventId),
+                Parameter("experiment_id", NpgsqlDbType.Uuid, experimentId.Value),
+                Parameter("actor", NpgsqlDbType.Varchar, actor),
+                Parameter("reason", NpgsqlDbType.Varchar, reason),
+                Parameter("replacement_holdout_version", NpgsqlDbType.Varchar, replacementHoldoutVersion),
+                Parameter("occurred_at", NpgsqlDbType.TimestampTz, occurredAtUtc.UtcDateTime),
+                Parameter("idempotency_key", NpgsqlDbType.Varchar, idempotencyKey.Value),
+                Parameter("payload_sha256", NpgsqlDbType.Char, payloadHash),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existingHash = await ReadStringAsync(connection, transaction,
+                "SELECT payload_sha256 FROM trading.holdout_contamination_events WHERE idempotency_key = @idempotency_key;",
+                [Parameter("idempotency_key", NpgsqlDbType.Varchar, idempotencyKey.Value)],
+                cancellationToken).ConfigureAwait(false);
+            EnsureHashEquivalent(existingHash, payloadHash, "Holdout contamination event");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     /// <summary>
@@ -1525,6 +1767,25 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
 
     private static NpgsqlParameter Parameter(string name, NpgsqlDbType type, object? value) =>
         new(name, type) { Value = value ?? DBNull.Value };
+
+    private static async Task<string?> ReadStringAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sql,
+        IReadOnlyList<NpgsqlParameter> parameters,
+        CancellationToken cancellationToken)
+    {
+        var value = await ExecuteScalarAsync(connection, transaction, sql, parameters, cancellationToken).ConfigureAwait(false);
+        return value is null or DBNull ? null : Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void EnsureHashEquivalent(string? existingHash, string candidateHash, string entity)
+    {
+        if (existingHash is null || !string.Equals(existingHash.Trim(), candidateHash, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"{entity} identity is already associated with different data.");
+        }
+    }
 
     private static async Task ExecuteAsync(
         NpgsqlConnection connection,
