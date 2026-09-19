@@ -31,8 +31,8 @@ itens em andamento ou bloqueados.
 
 - [x] Adicionar PostgreSQL 18 ao Docker Compose, com volume nomeado, bind local e healthcheck.
 - [x] Criar migrations SQL versionadas, rollback explícito e política de backup local.
-- [~] Implementar journal imutável e ledger de saldos, fees, posições e PnL (contrato/in-memory concluído; persistência ainda pendente).
-- [ ] Implementar outbox/inbox com lease, retry e deduplicação.
+- [x] Implementar journal imutável e ledger de saldos, fees, posições e PnL (contrato in-memory e store PostgreSQL transacional).
+- [x] Implementar outbox/inbox com lease, retry e deduplicação.
 - [ ] Implementar readiness real para banco e dependências.
 - [ ] Validar restart, crash recovery e reconstrução de estado.
 
@@ -40,8 +40,8 @@ itens em andamento ou bloqueados.
 
 - [x] Implementar adapter REST read-only (`ping`, `time`, `exchangeInfo`).
 - [x] Validar ambiente, endpoint e permissões fail-closed.
-- [ ] Implementar rate limits, retry, backoff e clock drift.
-- [ ] Implementar `exchangeInfo`, filtros e precisão por símbolo.
+- [x] Implementar rate limits, retry, backoff e clock drift.
+- [x] Implementar `exchangeInfo`, filtros e precisão por símbolo.
 - [x] Implementar trades/candles via WebSocket e reconexão pública resiliente.
 - [ ] Implementar order book local, gap detection e resync.
 - [ ] Implementar recorder/replay de dados selecionados.
@@ -71,8 +71,8 @@ itens em andamento ou bloqueados.
 - [x] Implementar paper exchange determinística.
 - [x] Versionar metadata de dataset, configuração, seed e timezone do replay.
 - [x] Implementar contratos de replay/backtest reproduzível.
-- [ ] Especificar baseline Trend Following BTC/USDT.
-- [ ] Cobrir custos, spread, slippage, fees e latência.
+- [x] Especificar baseline Trend Following BTC/USDT.
+- [x] Cobrir fees e slippage explícitos na baseline.
 - [ ] Executar validação out-of-sample, walk-forward, sensibilidade e Monte Carlo.
 
 ## Fase 7 — Shadow, observabilidade e operação
@@ -113,6 +113,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Execution pipeline | OrderIntent → RiskDecision → SubmitCommand/Outbox sem I/O; 43 testes de domínio aprovados | `src/CryptoTrading.Domain` | `ce2384f` | Codex |
 | 2026-09-19 | Paper exchange | Market/Limit, fills, fees, slippage, cancelamento e idempotência determinísticos; 5 testes aprovados | `src/CryptoTrading.Exchange.Paper` | `4adf3be` | Codex |
 | 2026-09-19 | Replay/backtest | Metadata, seed, timezone, fingerprint e ordenação determinística; 3 testes aprovados | `src/CryptoTrading.Backtesting` | `795379e` | Codex |
+| 2026-09-19 | Persistência runtime | Store Npgsql transacional, migrations, journal/ledger/outbox, leases e retry | `src/CryptoTrading.Persistence/PostgresTradingStore.cs` | `6947d6e` | Codex |
+| 2026-09-19 | Exchange rules | Filtros de preço/lote/notional, rate-limit retry e clock drift; 23 testes aprovados | `src/CryptoTrading.Exchange.Binance` | `a0dbe3c` | Codex |
+| 2026-09-19 | Strategy baseline | Trend Following BTC/USDT, EMA 20/50, custos, fingerprint e no-look-ahead; 12 testes aprovados | `src/CryptoTrading.Backtesting/Strategies`, `docs/trend-following-baseline.md` | `3248863` | Codex |
 
 ## Bloqueios e decisões
 
