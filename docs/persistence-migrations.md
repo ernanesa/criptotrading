@@ -75,6 +75,10 @@ após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
   retry em `available_at`.
 - `GetBalanceAsync` consulta a projeção reconstruível; o journal permanece a
   fonte de verdade.
+- `RecordKnownTradeAsync` registra de forma idempotente o `trade_id` externo
+  somente após o evento correspondente estar no journal; a tabela
+  `reconciliation_known_trades` é append-only e serve ao reader da
+  reconciliação. IDs ausentes continuam sendo divergência fail-closed.
 
 ## Ativação pelo Worker
 
@@ -111,5 +115,8 @@ locais; são segredos distintos.
   persistência de fills e reconciliação de estado após crash.
 - A migration 003 adiciona `lease_owner` para impedir que um worker finalize a
   mensagem de outro worker.
+- A migration 005 adiciona a evidência append-only de trade IDs conhecidos para
+  reconciliação; ela não autoriza submit/cancel e não deve ser preenchida sem
+  vínculo durável ao journal.
 - A senha do PostgreSQL continua sendo local e separada das credenciais da
   Binance.

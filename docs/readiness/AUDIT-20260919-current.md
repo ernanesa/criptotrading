@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `e10f5de`
+**Commit de código auditado:** `ceaef88`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -14,6 +14,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Gate | Comando | Resultado |
 |---|---|---|
 | Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 198 aprovados, 0 falhas, 0 skips |
+| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 3 testes, incluindo migration 005, persistência idempotente e rejeição de símbolo conflitante |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
@@ -42,6 +43,9 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   condicionada a PostgreSQL local e `NO_TRADE`; sem credenciais novas ela falha
   antes de qualquer chamada. A execução contra a conta Testnet ainda não foi
   realizada.
+- A migration 005 persiste IDs externos conhecidos de forma append-only e o
+  Worker os lê do PostgreSQL para a reconciliação; conflitos de símbolo para o
+  mesmo ID falham de forma explícita.
 
 ## Gates que continuam pendentes
 
