@@ -1,6 +1,5 @@
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
-using CryptoTrading.Exchange.Paper;
 using Xunit;
 
 namespace CryptoTrading.Exchange.Paper.Tests;
