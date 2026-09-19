@@ -11,4 +11,6 @@ curl --fail-with-body --silent --show-error --max-time 10 "$base_url/v3/ping" >/
 curl --fail-with-body --silent --show-error --max-time 10 "$base_url/v3/time" >/dev/null
 curl --fail-with-body --silent --show-error --max-time 10 \
   "$base_url/v3/exchangeInfo?symbol=BTCUSDT" >/dev/null
-echo 'Binance Spot Testnet public boundary: OK (ping, time, exchangeInfo BTCUSDT).'
+curl --fail-with-body --silent --show-error --max-time 10 \
+  "$base_url/v3/klines?symbol=BTCUSDT&interval=1d&limit=1" >/dev/null
+echo 'Binance Spot Testnet public boundary: OK (ping, time, exchangeInfo BTCUSDT, klines BTCUSDT 1d).'
