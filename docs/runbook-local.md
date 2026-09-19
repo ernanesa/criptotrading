@@ -45,6 +45,22 @@ O comando valida idempotência de `KillSwitch`, bloqueio de novas entradas em
 rede, credenciais ou endpoints de ordem; qualquer falha é fail-closed e gera
 relatório redigido em `artifacts/operations/`.
 
+Para habilitar uma reconciliação autenticada somente de leitura no startup,
+configure as credenciais novas fora do Git e ative todas as guardas:
+
+```bash
+WORKER_RECONCILIATION_ENABLED=true \
+WORKER_PERSISTENCE_ENABLED=true \
+WORKER_NO_TRADE=true \
+dotnet run --project src/CryptoTrading.Worker
+```
+
+O fluxo exige PostgreSQL local, consulta apenas account/balances/trades da
+Testnet e não envia nem cancela ordens. Como o vínculo de trades externos ao
+journal ainda é conservador, qualquer trade desconhecido ativa `SafeMode`.
+Sem credenciais, a configuração deve permanecer desabilitada; o startup não
+faz chamadas autenticadas por padrão.
+
 ## Evidência mínima de incidente
 
 Registrar UTC, commit, versão do dataset, `correlationId`, reason code, estado
