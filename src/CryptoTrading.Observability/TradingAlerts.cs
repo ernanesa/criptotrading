@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace CryptoTrading.Observability;
 
@@ -70,6 +71,66 @@ public sealed class InMemoryTradingAlertSink : ITradingAlertSink
     {
         cancellationToken.ThrowIfCancellationRequested();
         alerts.Enqueue(alert);
+        return ValueTask.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Local append-only JSONL alert sink. The envelope contains no exchange
+/// payloads or credentials and is suitable for offline operational evidence.
+/// </summary>
+public sealed class JsonlTradingAlertSink : ITradingAlertSink, IDisposable, IAsyncDisposable
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly string directoryPath;
+    private readonly SemaphoreSlim gate = new(1, 1);
+
+    public JsonlTradingAlertSink(string directoryPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
+        var fullPath = Path.GetFullPath(directoryPath.Trim());
+        if (Path.GetPathRoot(fullPath) == fullPath)
+        {
+            throw new ArgumentException("Alert directory cannot be a filesystem root.", nameof(directoryPath));
+        }
+
+        Directory.CreateDirectory(fullPath);
+        this.directoryPath = fullPath;
+    }
+
+    public async ValueTask DeliverAsync(TradingAlert alert, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(alert);
+        alert.Validate();
+        cancellationToken.ThrowIfCancellationRequested();
+        var filePath = Path.Combine(directoryPath, $"alerts-{alert.OccurredAtUtc:yyyyMMdd}.jsonl");
+        var line = JsonSerializer.Serialize(alert, JsonOptions) + Environment.NewLine;
+
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using var stream = new FileStream(
+                filePath,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize: 4096,
+                options: FileOptions.Asynchronous | FileOptions.WriteThrough);
+            using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            await writer.WriteAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
+            await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public void Dispose() => gate.Dispose();
+
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
         return ValueTask.CompletedTask;
     }
 }

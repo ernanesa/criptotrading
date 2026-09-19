@@ -43,6 +43,9 @@ public sealed class WorkerRuntimeOptions
 
     public string ReconciliationReportDirectory { get; set; } = "artifacts/reconciliation";
 
+    /// <summary>Optional local JSONL alert directory; blank keeps the in-memory sink.</summary>
+    public string AlertFileDirectory { get; set; } = string.Empty;
+
     public void Validate()
     {
         if (!string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase))
