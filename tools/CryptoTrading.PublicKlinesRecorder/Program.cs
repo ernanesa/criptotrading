@@ -13,7 +13,12 @@ if (Environment.GetEnvironmentVariable("BINANCE_API_KEY") is { Length: > 0 } ||
 
 using var httpClient = new HttpClient
 {
-    BaseAddress = new Uri("https://testnet.binance.vision/api/", UriKind.Absolute),
+    BaseAddress = arguments.Source switch
+    {
+        "TESTNET" => new Uri("https://testnet.binance.vision/api/", UriKind.Absolute),
+        "PRODUCTION-DATA" => new Uri("https://data-api.binance.vision/api/", UriKind.Absolute),
+        _ => throw new InvalidOperationException("Unsupported public data source.")
+    },
     Timeout = TimeSpan.FromSeconds(15)
 };
 httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading.PublicKlinesRecorder/1.0");
@@ -24,7 +29,7 @@ if (Directory.Exists(arguments.OutputDirectory) && Directory.EnumerateFileSystem
     return 2;
 }
 
-using var recorder = new MarketDataRecorder(arguments.OutputDirectory);
+var recorder = new MarketDataRecorder(arguments.OutputDirectory);
 
 var nowUtc = DateTimeOffset.UtcNow;
 var nextStart = arguments.StartUtc;
@@ -76,12 +81,17 @@ while (recorded < arguments.MaxBars)
     nextStart = newestOpen;
 }
 
-var replay = await recorder.ReadReplayAsync(arguments.StartUtc, arguments.EndUtc).ConfigureAwait(false);
+recorder.Dispose();
+using var verifier = new MarketDataRecorder(arguments.OutputDirectory);
+var replay = await verifier.ReadReplayAsync(arguments.StartUtc, arguments.EndUtc).ConfigureAwait(false);
 var manifestPath = Path.Combine(arguments.OutputDirectory, "dataset-manifest.json");
 var manifest = new
 {
     schema_version = "public-klines-dataset/v1",
-    source = "Binance Spot Testnet public REST /api/v3/klines",
+    source = arguments.Source == "TESTNET"
+        ? "Binance Spot Testnet public REST /api/v3/klines"
+        : "Binance Spot public market-data REST /api/v3/klines",
+    source_id = arguments.Source,
     symbol = arguments.Symbol,
     interval = arguments.Interval,
     requested_start_utc = arguments.StartUtc,
@@ -100,6 +110,7 @@ internal sealed record Arguments(
     string Symbol,
     string Interval,
     string OutputDirectory,
+    string Source,
     DateTimeOffset? StartUtc,
     DateTimeOffset? EndUtc,
     int MaxBars)
@@ -120,6 +131,13 @@ internal sealed record Arguments(
         var symbol = Required(values, "symbol").ToUpperInvariant();
         var interval = Required(values, "interval");
         var output = Path.GetFullPath(Required(values, "output"));
+        var source = values.TryGetValue("source", out var sourceValue) && !string.IsNullOrWhiteSpace(sourceValue)
+            ? sourceValue.Trim().ToUpperInvariant()
+            : "TESTNET";
+        if (source is not ("TESTNET" or "PRODUCTION-DATA"))
+        {
+            throw new ArgumentException("--source must be 'testnet' or 'production-data'.", nameof(args));
+        }
         var start = ParseUtc(values, "start");
         var end = ParseUtc(values, "end");
         if (start is { } from && end is { } through && from > through)
@@ -135,7 +153,7 @@ internal sealed record Arguments(
             throw new ArgumentException("--max-bars must be between 1 and 100000.", nameof(args));
         }
 
-        return new(symbol, interval, output, start, end, maxBars);
+        return new(symbol, interval, output, source, start, end, maxBars);
     }
 
     private static string Required(Dictionary<string, string> values, string name) =>

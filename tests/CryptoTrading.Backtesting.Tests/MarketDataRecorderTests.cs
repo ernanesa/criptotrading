@@ -65,6 +65,29 @@ public sealed class MarketDataRecorderTests
     }
 
     [Fact]
+    public async Task ReplayFingerprintRemainsStableAcrossRestart()
+    {
+        var directory = CreateDirectory();
+        try
+        {
+            var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00", CultureInfo.InvariantCulture);
+            using (var first = new MarketDataRecorder(directory))
+            {
+                await first.AppendAsync(timestamp, timestamp.AddMinutes(1), "kline-rest", "rest:klines:1d", "BTCUSDT",
+                    new { closeTimeUtc = timestamp, close = 100m });
+                var written = await first.ReadReplayAsync();
+                using var second = new MarketDataRecorder(directory);
+                var restarted = await second.ReadReplayAsync();
+                Assert.Equal(written.DatasetChecksum, restarted.DatasetChecksum);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task TamperingWithPayloadFailsClosed()
     {
         var directory = CreateDirectory();
