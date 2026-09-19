@@ -22,7 +22,7 @@ itens em andamento ou bloqueados.
 - [x] Criar IDs de domínio, correlation ID e idempotency key.
 - [x] Criar tipos de dinheiro, preço, quantidade e percentual com `decimal`.
 - [x] Modelar estados de ordem, fill e transições explícitas do ciclo de vida.
-- [ ] Definir contratos Strategy → Portfolio → Risk → Execution → OMS → Exchange.
+- [x] Definir contratos Strategy → Portfolio → Risk → Execution → OMS → Exchange.
 - [x] Criar testes unitários básicos para primitives e relógio.
 - [x] Adicionar testes de arquitetura para fronteiras do domínio.
 - [ ] Adicionar property-based tests financeiros.
@@ -87,7 +87,7 @@ itens em andamento ou bloqueados.
 - [x] Instrumentar logs JSON, correlação, métricas e `ActivitySource` local.
 - [x] Criar alertas, redaction, dashboards e runbooks (baseline local; alertas remotos ainda pendentes).
 - [x] Criar threat model local.
-- [ ] Executar backup/restore, chaos e soak test em shadow.
+- [~] Executar backup/restore, chaos e soak test em shadow; backup/restore local já validado, chaos/soak em shadow pendentes.
 
 ## Fase 8 — Readiness e canary
 
@@ -131,6 +131,8 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Validação OOS | Dataset sintético BTCUSDT v1.0.0 com SHA-256 e métricas exclusivamente OOS; 24 testes Backtesting | `src/CryptoTrading.Backtesting/OutOfSampleEvaluation.cs`, `docs/trend-following-baseline.md` | `946bc87` | Codex |
 | 2026-09-19 | Market risk | Slippage/volatilidade/liquidez locais, limites fail-closed e 8 testes adicionais | `src/CryptoTrading.Domain/Risk/MarketRiskCalculator.cs`, `docs/readiness/` | `05bcc57` | Codex |
 | 2026-09-19 | Readiness snapshots | PRM, canary draft, reconciliação, release evidence e traceability; decisão No-Go preservada | `docs/readiness/` | `e9c6581` | Codex |
+| 2026-09-19 | Contratos de camadas | Interfaces explícitas para Strategy, Portfolio, Risk, Execution, OMS e Exchange sem dependências de adapter | `src/CryptoTrading.Domain/Architecture/TradingLayerContracts.cs` | `ead5138` | Codex |
+| 2026-09-19 | Backup/restore | Dump custom PostgreSQL restaurado em banco efêmero e verificado; recursos temporários removidos | `scripts/test-postgres-backup-restore.sh`, `docs/recovery-drill.md` | Validação local aprovada | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
