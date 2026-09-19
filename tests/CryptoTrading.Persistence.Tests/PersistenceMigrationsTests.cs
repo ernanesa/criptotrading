@@ -16,11 +16,12 @@ public sealed class PersistenceMigrationsTests
                 "003_outbox_lease_owner.down.sql", "003_outbox_lease_owner.up.sql",
                 "004_outbox_dead_letter.down.sql", "004_outbox_dead_letter.up.sql",
                 "005_reconciliation_known_trades.down.sql", "005_reconciliation_known_trades.up.sql",
+                "006_risk_policy_registry.down.sql", "006_risk_policy_registry.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -41,5 +42,8 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("dead_lettered_at", upMigrations[3].Sql, StringComparison.Ordinal);
         Assert.Contains("reconciliation_known_trades", upMigrations[4].Sql, StringComparison.Ordinal);
         Assert.Contains("append_only", upMigrations[4].Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("risk_policies", upMigrations[5].Sql, StringComparison.Ordinal);
+        Assert.Contains("risk_policy_events", upMigrations[5].Sql, StringComparison.Ordinal);
+        Assert.Contains("append_only", upMigrations[5].Sql, StringComparison.OrdinalIgnoreCase);
     }
 }

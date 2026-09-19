@@ -55,6 +55,7 @@ itens em andamento ou bloqueados.
 - [x] Garantir persist-before-submit e tratamento de timeout ambíguo.
 - [x] Implementar reconciliação read-only de saldos/fills com entrada em SafeMode em caso de drift.
 - [x] Implementar `RiskPolicy` versionada.
+- [x] Persistir `RiskPolicy` com hash canônico, validade, aprovação segregada e lifecycle append-only; gate de startup permanece opt-in.
 - [x] Implementar limites de exposição, notional, daily loss e drawdown.
 - [x] Implementar controles de stale data e bloqueio de withdrawals.
 - [x] Implementar slippage, volatilidade e liquidez com dados de mercado locais, com limites fail-closed.
@@ -137,6 +138,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Readiness snapshots | PRM, canary draft, reconciliação, release evidence e traceability; decisão No-Go preservada | `docs/readiness/` | `e9c6581` | Codex |
 | 2026-09-19 | Readiness validator | Validador fail-closed para PRM, CanaryPlan e RiskPolicy, exigindo aprovação, validade, thresholds/unidades/janelas e hash; contrato incluído no CI | `scripts/validate-readiness.sh`, `scripts/test-readiness-validator.sh`, `docs/readiness/README.md` | `7b58772` | Codex |
 | 2026-09-19 | API operational status | Endpoint somente leitura com estado process-local, revisão, razão e flag explícita de que endpoints mutáveis estão desabilitados | `src/CryptoTrading.Api/Program.cs`, `docs/operational-status-api.md` | validação local | Codex |
+| 2026-09-19 | RiskPolicy registry | Documento canônico SHA-256, validade UTC, aprovação segregada, lifecycle append-only, supersession transacional e gate opcional do Worker; 5 testes PostgreSQL | `src/CryptoTrading.Domain/Risk/RiskPolicyDocument.cs`, `src/CryptoTrading.Persistence/Migrations/006_risk_policy_registry.up.sql`, `src/CryptoTrading.Persistence/PostgresTradingStore.cs`, `src/CryptoTrading.Worker/RiskPolicyStartupHostedService.cs` | validação local | Codex |
 | 2026-09-19 | Contratos de camadas | Interfaces explícitas para Strategy, Portfolio, Risk, Execution, OMS e Exchange sem dependências de adapter | `src/CryptoTrading.Domain/Architecture/TradingLayerContracts.cs` | `ead5138` | Codex |
 | 2026-09-19 | Backup/restore | Dump custom PostgreSQL restaurado em banco efêmero e verificado; recursos temporários removidos | `scripts/test-postgres-backup-restore.sh`, `docs/recovery-drill.md` | Validação local aprovada | Codex |
 | 2026-09-19 | Property tests | Gerador xorshift determinístico cobrindo balanceamento, idempotência, atomicidade e saldos | `tests/CryptoTrading.Domain.Tests/AccountingPropertyTests.cs` | `5f7d465` | Codex |

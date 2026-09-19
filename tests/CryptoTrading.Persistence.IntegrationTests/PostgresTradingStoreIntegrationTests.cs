@@ -4,6 +4,7 @@ using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
+using CryptoTrading.Domain.Risk;
 using Xunit;
 using Xunit.Sdk;
 
@@ -232,5 +233,49 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal(7m, (await store.GetBalanceAsync(new AccountId("atomic-cash"), new Asset("USDT"))).Amount);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "ETHUSDT"));
+    }
+
+    [Fact]
+    public async Task PersistsApprovalGatedRiskPolicyRegistryAndSupersedesPreviousActiveVersion()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+        var now = DateTimeOffset.UtcNow.AddSeconds(-2);
+        var expires = now.AddHours(2);
+        var first = RiskPolicyDocument.CreateDraft(
+            new RiskPolicy("registry-v1-" + Guid.NewGuid().ToString("N"), 100m, 250m, 25m, 50m, TimeSpan.FromSeconds(5)),
+            now, expires, "policy-author");
+
+        await store.SaveRiskPolicyAsync(first);
+        await store.SaveRiskPolicyAsync(first);
+        var conflicting = RiskPolicyDocument.CreateDraft(
+            new RiskPolicy(first.Policy.Version, 101m, 250m, 25m, 50m, TimeSpan.FromSeconds(5)),
+            now, expires, "policy-author");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveRiskPolicyAsync(conflicting));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.ApproveRiskPolicyAsync(
+            first.Policy.Version, "approval-self", "policy-author", now.AddMinutes(1)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.ActivateRiskPolicyAsync(first.Policy.Version, now.AddMinutes(1)));
+
+        var approvedFirst = await store.ApproveRiskPolicyAsync(
+            first.Policy.Version, "approval-v1", "policy-reviewer", now.AddMinutes(1));
+        Assert.Equal(RiskPolicyLifecycle.Approved, approvedFirst.Lifecycle);
+        var activeFirst = await store.ActivateRiskPolicyAsync(first.Policy.Version, now.AddMinutes(2));
+        Assert.Equal(RiskPolicyLifecycle.Active, activeFirst.Lifecycle);
+        Assert.Equal(first.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(3)))?.Policy.Version);
+
+        var second = RiskPolicyDocument.CreateDraft(
+            new RiskPolicy("registry-v2-" + Guid.NewGuid().ToString("N"), 90m, 200m, 20m, 40m, TimeSpan.FromSeconds(5)),
+            now, expires, "policy-author");
+        await store.SaveRiskPolicyAsync(second);
+        await store.ApproveRiskPolicyAsync(second.Policy.Version, "approval-v2", "policy-reviewer", now.AddMinutes(4));
+        await store.ActivateRiskPolicyAsync(second.Policy.Version, now.AddMinutes(5));
+        Assert.Equal(second.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(6)))?.Policy.Version);
     }
 }

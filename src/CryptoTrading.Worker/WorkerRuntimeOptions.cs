@@ -35,6 +35,9 @@ public sealed class WorkerRuntimeOptions
     /// <summary>Runs one authenticated, read-only account reconciliation at startup.</summary>
     public bool ReconciliationEnabled { get; set; }
 
+    /// <summary>Requires an approved, active RiskPolicy in PostgreSQL before startup.</summary>
+    public bool RiskPolicyRequired { get; set; }
+
     public string ReconciliationAccount { get; set; } = "exchange-wallet";
 
     public string ReconciliationSymbols { get; set; } = "BTCUSDT";
@@ -88,6 +91,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RECONCILIATION_ENABLED requires WORKER_PERSISTENCE_ENABLED=true."]);
+        }
+
+        if (RiskPolicyRequired && !PersistenceEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RISK_POLICY_REQUIRED requires WORKER_PERSISTENCE_ENABLED=true."]);
         }
 
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationAccount))

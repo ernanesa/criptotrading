@@ -37,6 +37,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.LeaseSeconds = builder.Configuration.GetValue("WORKER_OUTBOX_LEASE_SECONDS", 30);
         options.MaxOutboxAttempts = builder.Configuration.GetValue("WORKER_MAX_OUTBOX_ATTEMPTS", 5);
         options.ReconciliationEnabled = builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false);
+        options.RiskPolicyRequired = builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
@@ -73,6 +74,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
     _ = builder.Services.AddPostgresTradingStore(
         builder.Configuration["POSTGRES_CONNECTION_STRING"]
         ?? throw new InvalidOperationException("POSTGRES_CONNECTION_STRING is required when persistence is enabled."));
+    _ = builder.Services.AddSingleton<IRiskPolicyStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
 }
@@ -113,6 +116,10 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
     builder.Services.AddHostedService<ReconciliationStartupHostedService>();
 }
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
+if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
+{
+    builder.Services.AddHostedService<RiskPolicyStartupHostedService>();
+}
 builder.Services.AddHostedService<OutboxDispatcher>();
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();
 builder.Services.AddHostedService<ShadowDrillHostedService>();

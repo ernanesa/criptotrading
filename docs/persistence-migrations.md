@@ -82,6 +82,14 @@ após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
 - `AppendJournalEntryWithKnownTradeAsync` deve ser usado quando o fill externo
   e o lançamento contábil forem confirmados juntos: journal, postings, projeção
   de saldo e `trade_id` são gravados na mesma transação serializável.
+- `IRiskPolicyStore` registra documentos imutáveis na migration 006 e grava
+  transições (`Draft`, `Approved`, `Active`, `Superseded`, `Revoked`) como
+  eventos append-only. O hash SHA-256 cobre os valores canônicos da policy e
+  sua janela de validade; aprovação exige ator diferente do criador.
+- `GetActiveRiskPolicyAsync` retorna somente uma policy aprovada, ativa e dentro
+  da janela UTC solicitada. Ausência de policy ativa retorna `null`; o Worker
+  pode transformar isso em bloqueio de startup com
+  `WORKER_RISK_POLICY_REQUIRED=true`.
 
 ## Ativação pelo Worker
 
@@ -121,6 +129,8 @@ locais; são segredos distintos.
 - A migration 005 adiciona a evidência append-only de trade IDs conhecidos para
   reconciliação; ela não autoriza submit/cancel e o método atômico deve ser
   preferido para criar o vínculo durável ao journal.
+- A migration 006 adiciona o registry de `RiskPolicy`; seu `.down.sql` é
+  destrutivo para evidências de aprovação e exige exportação prévia.
 - O snapshot autenticado pagina trades por `fromId`, com limite configurável e
   falha fechada quando a paginação não termina; IDs repetidos entre páginas são
   deduplicados antes da reconciliação.

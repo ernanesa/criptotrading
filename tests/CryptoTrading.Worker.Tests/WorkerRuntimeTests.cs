@@ -24,6 +24,7 @@ public sealed class WorkerRuntimeTests
         Assert.True(options.NoTrade);
         Assert.False(options.PersistenceEnabled);
         Assert.False(options.ReconciliationEnabled);
+        Assert.False(options.RiskPolicyRequired);
     }
 
     [Fact]
@@ -58,6 +59,16 @@ public sealed class WorkerRuntimeTests
         {
             ReconciliationEnabled = true,
             NoTrade = true,
+            PersistenceEnabled = false,
+        }.Validate());
+    }
+
+    [Fact]
+    public void RiskPolicyGateRequiresPersistence()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            RiskPolicyRequired = true,
             PersistenceEnabled = false,
         }.Validate());
     }
