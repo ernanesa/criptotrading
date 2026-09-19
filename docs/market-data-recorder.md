@@ -46,6 +46,20 @@ O recorder deve ter um único escritor por diretório. Leitores podem executar
 em paralelo, inclusive enquanto o arquivo está sendo anexado. O diretório
 deve ficar fora do Git e pode conter dados que exigem controle de acesso local.
 
+## Quality gate para dataset externo
+
+Antes de converter um replay fornecido por outro processo em barras para
+backtest ou Shadow, use `MarketDataQualityGate.ValidateClosedBars`. O contrato
+`ClosedBarEnvelope` exige sequência estritamente crescente, símbolo único,
+timestamps UTC, identidade/hash do dataset e um `AvailableAtUtc` que não seja
+anterior ao fechamento da barra. Assim, uma barra que depende de informação
+futura falha fechado antes de chegar à estratégia.
+
+O gate produz um fingerprint redigido do replay e não escolhe parâmetros, não
+faz seleção de casos e não acessa rede. Ele valida a fronteira de ingestão; não
+transforma dataset externo em evidência de rentabilidade nem substitui OOS,
+walk-forward, sensibilidade ou revisão independente.
+
 ## Retenção
 
 Retenção não é aplicada implicitamente. O operador precisa fornecer uma
