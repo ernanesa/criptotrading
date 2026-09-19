@@ -9,6 +9,7 @@ using System.Text.Json;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Primitives;
+using CryptoTrading.Domain.Risk;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -72,11 +73,33 @@ public interface IOutboxStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable, approval-gated registry for immutable risk-policy documents.</summary>
+public interface IRiskPolicyStore
+{
+    Task SaveRiskPolicyAsync(RiskPolicyDocument document, CancellationToken cancellationToken = default);
+
+    Task<RiskPolicyDocument> ApproveRiskPolicyAsync(
+        string policyVersion,
+        string approvalId,
+        string approver,
+        DateTimeOffset approvedAtUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<RiskPolicyDocument> ActivateRiskPolicyAsync(
+        string policyVersion,
+        DateTimeOffset activatedAtUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<RiskPolicyDocument?> GetActiveRiskPolicyAsync(
+        DateTimeOffset atUtc,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -120,6 +143,149 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand("SELECT 1;", connection);
         _ = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SaveRiskPolicyAsync(
+        RiskPolicyDocument document,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (document.Lifecycle != RiskPolicyLifecycle.Draft)
+        {
+            throw new InvalidOperationException("Only draft risk policies can be initially registered.");
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.risk_policies
+                (policy_version, max_order_notional, max_exposure_notional, max_daily_loss,
+                 max_drawdown, max_market_data_age_ticks, withdrawals_enabled,
+                 max_slippage_bps, max_volatility_bps, min_liquidity_notional,
+                 effective_from, expires_at, document_hash, created_by)
+            VALUES
+                (@version, @max_order, @max_exposure, @max_daily_loss, @max_drawdown,
+                 @max_age_ticks, @withdrawals, @max_slippage, @max_volatility,
+                 @min_liquidity, @effective_from, @expires_at, @document_hash, @created_by)
+            ON CONFLICT (policy_version) DO NOTHING
+            RETURNING policy_version;
+            """,
+            RiskPolicyParameters(document), cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existing = await ReadRiskPolicyRowAsync(connection, transaction, document.Policy.Version, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Risk-policy uniqueness reported a conflict, but no document was found.");
+            EnsureEquivalent(existing, document);
+        }
+        else
+        {
+            await InsertRiskPolicyEventAsync(connection, transaction, document.Policy.Version,
+                RiskPolicyLifecycle.Draft, document.CreatedBy, null, document.EffectiveFromUtc, cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RiskPolicyDocument> ApproveRiskPolicyAsync(
+        string policyVersion,
+        string approvalId,
+        string approver,
+        DateTimeOffset approvedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(policyVersion);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var row = await ReadRiskPolicyRowAsync(connection, transaction, policyVersion.Trim(), cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Risk policy '{policyVersion}' is not registered.");
+        var latest = await ReadLatestRiskPolicyEventAsync(connection, transaction, row.PolicyVersion, cancellationToken).ConfigureAwait(false);
+        if (latest?.Lifecycle == RiskPolicyLifecycle.Approved)
+        {
+            if (string.Equals(latest.ApprovalId, approvalId, StringComparison.Ordinal) &&
+                string.Equals(latest.Actor, approver, StringComparison.Ordinal))
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return BuildRiskPolicyDocument(row, latest, RiskPolicyLifecycle.Approved);
+            }
+
+            throw new InvalidOperationException($"Risk policy '{row.PolicyVersion}' is already approved.");
+        }
+
+        if (latest?.Lifecycle != RiskPolicyLifecycle.Draft)
+        {
+            throw new InvalidOperationException($"Risk policy '{row.PolicyVersion}' is not in Draft lifecycle.");
+        }
+
+        var draft = BuildRiskPolicyDocument(row, latest, RiskPolicyLifecycle.Draft);
+        var approved = draft.Approve(approver, approvalId, approvedAtUtc);
+        await InsertRiskPolicyEventAsync(connection, transaction, row.PolicyVersion,
+            RiskPolicyLifecycle.Approved, approved.ApprovedBy!, approved.ApprovalId!, approved.ApprovedAtUtc!.Value, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return approved;
+    }
+
+    public async Task<RiskPolicyDocument> ActivateRiskPolicyAsync(
+        string policyVersion,
+        DateTimeOffset activatedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(policyVersion);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var row = await ReadRiskPolicyRowAsync(connection, transaction, policyVersion.Trim(), cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Risk policy '{policyVersion}' is not registered.");
+        var latest = await ReadLatestRiskPolicyEventAsync(connection, transaction, row.PolicyVersion, cancellationToken).ConfigureAwait(false);
+        if (latest?.Lifecycle == RiskPolicyLifecycle.Active)
+        {
+            var approval = await ReadLatestApprovalEventAsync(connection, transaction, row.PolicyVersion, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Active risk policy is missing approval evidence.");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return BuildRiskPolicyDocument(row, approval, RiskPolicyLifecycle.Active);
+        }
+
+        if (latest?.Lifecycle != RiskPolicyLifecycle.Approved)
+        {
+            throw new InvalidOperationException($"Risk policy '{row.PolicyVersion}' must be approved before activation.");
+        }
+
+        var approvedEvent = await ReadLatestApprovalEventAsync(connection, transaction, row.PolicyVersion, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Approved risk policy is missing approval evidence.");
+        var approved = BuildRiskPolicyDocument(row, approvedEvent, RiskPolicyLifecycle.Approved);
+        var active = approved.Activate(activatedAtUtc);
+
+        var previousActive = await ReadActivePolicyVersionAsync(connection, transaction, activatedAtUtc, cancellationToken).ConfigureAwait(false);
+        if (previousActive is not null && !string.Equals(previousActive, row.PolicyVersion, StringComparison.Ordinal))
+        {
+            await InsertRiskPolicyEventAsync(connection, transaction, previousActive,
+                RiskPolicyLifecycle.Superseded, "system", null, activatedAtUtc, cancellationToken).ConfigureAwait(false);
+        }
+
+        await InsertRiskPolicyEventAsync(connection, transaction, row.PolicyVersion,
+            RiskPolicyLifecycle.Active, active.ApprovedBy!, active.ApprovalId!, activatedAtUtc, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return active;
+    }
+
+    public async Task<RiskPolicyDocument?> GetActiveRiskPolicyAsync(
+        DateTimeOffset atUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (atUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Risk-policy lookup timestamps must be UTC.", nameof(atUtc));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var row = await ReadActiveRiskPolicyRowAsync(connection, null, atUtc, cancellationToken).ConfigureAwait(false);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var approval = await ReadLatestApprovalEventAsync(connection, null, row.PolicyVersion, cancellationToken).ConfigureAwait(false);
+        return approval is null ? null : BuildRiskPolicyDocument(row, approval, RiskPolicyLifecycle.Active);
     }
 
     /// <summary>
@@ -647,6 +813,264 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             || !existing.Postings.SequenceEqual(candidate.Postings))
         {
             throw new InvalidOperationException("The journal identity is already associated with different data.");
+        }
+    }
+
+    private sealed record RiskPolicyRow(
+        string PolicyVersion,
+        decimal MaxOrderNotional,
+        decimal MaxExposureNotional,
+        decimal MaxDailyLoss,
+        decimal MaxDrawdown,
+        long MaxMarketDataAgeTicks,
+        bool WithdrawalsEnabled,
+        decimal? MaxSlippageBps,
+        decimal? MaxVolatilityBps,
+        decimal? MinLiquidityNotional,
+        DateTimeOffset EffectiveFromUtc,
+        DateTimeOffset ExpiresAtUtc,
+        string DocumentHash,
+        string CreatedBy);
+
+    private sealed record RiskPolicyEventRow(
+        Guid EventId,
+        string PolicyVersion,
+        RiskPolicyLifecycle Lifecycle,
+        string Actor,
+        string? ApprovalId,
+        DateTimeOffset OccurredAtUtc);
+
+    private static IReadOnlyList<NpgsqlParameter> RiskPolicyParameters(RiskPolicyDocument document) =>
+    [
+        Parameter("version", NpgsqlDbType.Varchar, document.Policy.Version),
+        Parameter("max_order", NpgsqlDbType.Numeric, document.Policy.MaxOrderNotional),
+        Parameter("max_exposure", NpgsqlDbType.Numeric, document.Policy.MaxExposureNotional),
+        Parameter("max_daily_loss", NpgsqlDbType.Numeric, document.Policy.MaxDailyLoss),
+        Parameter("max_drawdown", NpgsqlDbType.Numeric, document.Policy.MaxDrawdown),
+        Parameter("max_age_ticks", NpgsqlDbType.Bigint, document.Policy.MaxMarketDataAge.Ticks),
+        Parameter("withdrawals", NpgsqlDbType.Boolean, document.Policy.WithdrawalsEnabled),
+        Parameter("max_slippage", NpgsqlDbType.Numeric, document.Policy.MaxSlippageBps),
+        Parameter("max_volatility", NpgsqlDbType.Numeric, document.Policy.MaxVolatilityBps),
+        Parameter("min_liquidity", NpgsqlDbType.Numeric, document.Policy.MinLiquidityNotional),
+        Parameter("effective_from", NpgsqlDbType.TimestampTz, document.EffectiveFromUtc.UtcDateTime),
+        Parameter("expires_at", NpgsqlDbType.TimestampTz, document.ExpiresAtUtc.UtcDateTime),
+        Parameter("document_hash", NpgsqlDbType.Char, document.DocumentHash),
+        Parameter("created_by", NpgsqlDbType.Varchar, document.CreatedBy),
+    ];
+
+    private static async Task InsertRiskPolicyEventAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string policyVersion,
+        RiskPolicyLifecycle lifecycle,
+        string actor,
+        string? approvalId,
+        DateTimeOffset occurredAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.risk_policy_events
+                (event_id, policy_version, lifecycle, actor, approval_id, occurred_at)
+            VALUES (@event_id, @policy_version, @lifecycle, @actor, @approval_id, @occurred_at);
+            """,
+            [
+                Parameter("event_id", NpgsqlDbType.Uuid, Guid.NewGuid()),
+                Parameter("policy_version", NpgsqlDbType.Varchar, policyVersion),
+                Parameter("lifecycle", NpgsqlDbType.Varchar, lifecycle.ToString()),
+                Parameter("actor", NpgsqlDbType.Varchar, actor),
+                Parameter("approval_id", NpgsqlDbType.Varchar, approvalId),
+                Parameter("occurred_at", NpgsqlDbType.TimestampTz, occurredAtUtc.UtcDateTime),
+            ], cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<RiskPolicyRow?> ReadRiskPolicyRowAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT policy_version, max_order_notional, max_exposure_notional, max_daily_loss,
+                   max_drawdown, max_market_data_age_ticks, withdrawals_enabled,
+                   max_slippage_bps, max_volatility_bps, min_liquidity_notional,
+                   effective_from, expires_at, document_hash, created_by
+            FROM trading.risk_policies
+            WHERE policy_version = @version;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("version", NpgsqlDbType.Varchar, version));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRiskPolicyRow(reader) : null;
+    }
+
+    private static async Task<RiskPolicyEventRow?> ReadLatestRiskPolicyEventAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, policy_version, lifecycle, actor, approval_id, occurred_at
+            FROM trading.risk_policy_events
+            WHERE policy_version = @version
+            ORDER BY occurred_at DESC, event_id DESC
+            LIMIT 1;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("version", NpgsqlDbType.Varchar, version));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRiskPolicyEvent(reader) : null;
+    }
+
+    private static async Task<RiskPolicyEventRow?> ReadLatestApprovalEventAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string version,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, policy_version, lifecycle, actor, approval_id, occurred_at
+            FROM trading.risk_policy_events
+            WHERE policy_version = @version AND lifecycle = 'Approved'
+            ORDER BY occurred_at DESC, event_id DESC
+            LIMIT 1;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("version", NpgsqlDbType.Varchar, version));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRiskPolicyEvent(reader) : null;
+    }
+
+    private static async Task<RiskPolicyRow?> ReadActiveRiskPolicyRowAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        DateTimeOffset atUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            WITH latest AS
+            (
+                SELECT DISTINCT ON (policy_version) policy_version, lifecycle
+                FROM trading.risk_policy_events
+                ORDER BY policy_version, occurred_at DESC, event_id DESC
+            )
+            SELECT p.policy_version, p.max_order_notional, p.max_exposure_notional, p.max_daily_loss,
+                   p.max_drawdown, p.max_market_data_age_ticks, p.withdrawals_enabled,
+                   p.max_slippage_bps, p.max_volatility_bps, p.min_liquidity_notional,
+                   p.effective_from, p.expires_at, p.document_hash, p.created_by
+            FROM trading.risk_policies p
+            INNER JOIN latest ON latest.policy_version = p.policy_version
+            WHERE latest.lifecycle = 'Active'
+              AND p.effective_from <= @at_utc
+              AND p.expires_at > @at_utc
+            ORDER BY p.effective_from DESC, p.policy_version
+            LIMIT 1;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("at_utc", NpgsqlDbType.TimestampTz, atUtc.UtcDateTime));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRiskPolicyRow(reader) : null;
+    }
+
+    private static async Task<string?> ReadActivePolicyVersionAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        DateTimeOffset atUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            WITH latest AS
+            (
+                SELECT DISTINCT ON (policy_version) policy_version, lifecycle
+                FROM trading.risk_policy_events
+                ORDER BY policy_version, occurred_at DESC, event_id DESC
+            )
+            SELECT p.policy_version
+            FROM trading.risk_policies p
+            INNER JOIN latest ON latest.policy_version = p.policy_version
+            WHERE latest.lifecycle = 'Active'
+              AND p.effective_from <= @at_utc
+              AND p.expires_at > @at_utc
+            ORDER BY p.effective_from DESC, p.policy_version
+            LIMIT 1;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("at_utc", NpgsqlDbType.TimestampTz, atUtc.UtcDateTime));
+        return (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static RiskPolicyDocument BuildRiskPolicyDocument(
+        RiskPolicyRow row,
+        RiskPolicyEventRow eventRow,
+        RiskPolicyLifecycle lifecycle)
+    {
+        var policy = new RiskPolicy(
+            row.PolicyVersion,
+            row.MaxOrderNotional,
+            row.MaxExposureNotional,
+            row.MaxDailyLoss,
+            row.MaxDrawdown,
+            TimeSpan.FromTicks(row.MaxMarketDataAgeTicks),
+            row.WithdrawalsEnabled,
+            row.MaxSlippageBps,
+            row.MaxVolatilityBps,
+            row.MinLiquidityNotional);
+        var approval = lifecycle is RiskPolicyLifecycle.Approved or RiskPolicyLifecycle.Active ? eventRow : null;
+        return new RiskPolicyDocument(
+            policy,
+            row.EffectiveFromUtc,
+            row.ExpiresAtUtc,
+            row.CreatedBy,
+            row.DocumentHash,
+            lifecycle,
+            approval?.Actor,
+            approval?.ApprovalId,
+            approval?.OccurredAtUtc);
+    }
+
+    private static RiskPolicyRow ReadRiskPolicyRow(NpgsqlDataReader reader) => new(
+        reader.GetString(0),
+        reader.GetFieldValue<decimal>(1),
+        reader.GetFieldValue<decimal>(2),
+        reader.GetFieldValue<decimal>(3),
+        reader.GetFieldValue<decimal>(4),
+        reader.GetInt64(5),
+        reader.GetBoolean(6),
+        reader.IsDBNull(7) ? null : reader.GetFieldValue<decimal>(7),
+        reader.IsDBNull(8) ? null : reader.GetFieldValue<decimal>(8),
+        reader.IsDBNull(9) ? null : reader.GetFieldValue<decimal>(9),
+        new DateTimeOffset(reader.GetDateTime(10), TimeSpan.Zero),
+        new DateTimeOffset(reader.GetDateTime(11), TimeSpan.Zero),
+        reader.GetString(12).Trim(),
+        reader.GetString(13));
+
+    private static RiskPolicyEventRow ReadRiskPolicyEvent(NpgsqlDataReader reader) => new(
+        reader.GetGuid(0),
+        reader.GetString(1),
+        Enum.Parse<RiskPolicyLifecycle>(reader.GetString(2), ignoreCase: false),
+        reader.GetString(3),
+        reader.IsDBNull(4) ? null : reader.GetString(4),
+        new DateTimeOffset(reader.GetDateTime(5), TimeSpan.Zero));
+
+    private static void EnsureEquivalent(RiskPolicyRow existing, RiskPolicyDocument candidate)
+    {
+        var policy = candidate.Policy;
+        if (!string.Equals(existing.DocumentHash, candidate.DocumentHash, StringComparison.OrdinalIgnoreCase) ||
+            existing.MaxOrderNotional != policy.MaxOrderNotional ||
+            existing.MaxExposureNotional != policy.MaxExposureNotional ||
+            existing.MaxDailyLoss != policy.MaxDailyLoss ||
+            existing.MaxDrawdown != policy.MaxDrawdown ||
+            existing.MaxMarketDataAgeTicks != policy.MaxMarketDataAge.Ticks ||
+            existing.WithdrawalsEnabled != policy.WithdrawalsEnabled ||
+            existing.MaxSlippageBps != policy.MaxSlippageBps ||
+            existing.MaxVolatilityBps != policy.MaxVolatilityBps ||
+            existing.MinLiquidityNotional != policy.MinLiquidityNotional ||
+            existing.EffectiveFromUtc.UtcTicks / 10 != candidate.EffectiveFromUtc.UtcTicks / 10 ||
+            existing.ExpiresAtUtc.UtcTicks / 10 != candidate.ExpiresAtUtc.UtcTicks / 10 ||
+            !string.Equals(existing.CreatedBy, candidate.CreatedBy, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The risk-policy version is already associated with different immutable content.");
         }
     }
 

@@ -22,6 +22,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Integridade documental | `git diff --check` | PASS |
 | Contrato do readiness validator | `./scripts/test-readiness-validator.sh` | PASS — fixture aprovada aceita; checkbox pendente rejeitado; snapshot corrente continua bloqueado |
 | API operational status | `dotnet run --configuration Release --no-build --no-launch-profile` + `GET /operational/status` | PASS — estado process-local read-only; `mutatingEndpointsEnabled=false`; nenhuma chamada à Binance |
+| RiskPolicy registry | `./scripts/test-postgres-integration.sh` | PASS — migration 006, hash/replay idempotente, aprovação segregada, ativação e supersession; 5 testes PostgreSQL |
 
 ## O que estes gates comprovam
 
@@ -76,6 +77,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   aprovação humana;
 - o snapshot corrente também falha fechado no `scripts/validate-readiness.sh`
   enquanto RiskPolicy e aprovações humanas não estiverem preenchidas;
+- o registry de RiskPolicy agora garante a trilha técnica de hash, validade,
+  aprovação e ativação, mas não substitui a aprovação humana dos thresholds;
 - qualquer submissão de ordem, mesmo em Testnet, continua proibida até decisão
   explícita e independente.
 
