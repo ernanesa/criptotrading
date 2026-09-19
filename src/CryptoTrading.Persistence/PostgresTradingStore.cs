@@ -131,6 +131,30 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(entry);
+        return await AppendJournalEntryCoreAsync(entry, null, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Atomically appends a journal entry, updates its ledger projection and
+    /// records the corresponding external trade ID for reconciliation.
+    /// </summary>
+    public async Task<LedgerEntry> AppendJournalEntryWithKnownTradeAsync(
+        LedgerEntry entry,
+        long tradeId,
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        ValidateTradeReference(tradeId, symbol);
+        return await AppendJournalEntryCoreAsync(entry, tradeId, symbol, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<LedgerEntry> AppendJournalEntryCoreAsync(
+        LedgerEntry entry,
+        long? knownTradeId,
+        string? knownTradeSymbol,
+        CancellationToken cancellationToken)
+    {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
 
@@ -140,6 +164,11 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             var existing = await ReadExistingJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The journal uniqueness constraint reported a conflict, but no entry was found.");
             EnsureEquivalent(existing, entry);
+            if (knownTradeId is { } existingTradeId)
+            {
+                await InsertKnownTradeAsync(connection, transaction, existingTradeId, knownTradeSymbol!, cancellationToken).ConfigureAwait(false);
+            }
+
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return existing;
         }
@@ -174,6 +203,11 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
                     Parameter("asset", NpgsqlDbType.Varchar, posting.Amount.Asset.Value),
                     Parameter("balance", NpgsqlDbType.Numeric, posting.Amount.Amount),
                 ], cancellationToken).ConfigureAwait(false);
+        }
+
+        if (knownTradeId is { } tradeId)
+        {
+            await InsertKnownTradeAsync(connection, transaction, tradeId, knownTradeSymbol!, cancellationToken).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -273,6 +307,35 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         if (normalized.Length > 20 || normalized.Any(static character => !char.IsAsciiLetterOrDigit(character)))
         {
             throw new ArgumentException("Trade symbols must contain only ASCII letters and digits and be at most 20 characters.", nameof(symbol));
+        }
+    }
+
+    private static async Task InsertKnownTradeAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        long tradeId,
+        string symbol,
+        CancellationToken cancellationToken)
+    {
+        var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.reconciliation_known_trades (trade_id, symbol)
+            VALUES (@trade_id, @symbol)
+            ON CONFLICT (trade_id) DO NOTHING;
+            """,
+            [
+                Parameter("trade_id", NpgsqlDbType.Bigint, tradeId),
+                Parameter("symbol", NpgsqlDbType.Varchar, normalizedSymbol),
+            ], cancellationToken).ConfigureAwait(false);
+
+        var existingSymbol = await ExecuteScalarAsync(connection, transaction,
+            "SELECT symbol FROM trading.reconciliation_known_trades WHERE trade_id = @trade_id;",
+            [Parameter("trade_id", NpgsqlDbType.Bigint, tradeId)], cancellationToken).ConfigureAwait(false) as string;
+        if (!string.Equals(existingSymbol, normalizedSymbol, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Trade ID {tradeId} is already associated with symbol '{existingSymbol}', not '{normalizedSymbol}'.");
         }
     }
 

@@ -200,4 +200,37 @@ public sealed class PostgresTradingStoreIntegrationTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordKnownTradeAsync(9_000_001, "ETHUSDT"));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => store.RecordKnownTradeAsync(-1, "BTCUSDT"));
     }
+
+    [Fact]
+    public async Task AtomicallyPersistsJournalLedgerAndKnownTradeEvidence()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+        var now = DateTimeOffset.UtcNow;
+        var entry = new LedgerEntry(
+            LedgerEntryId.New(),
+            CorrelationId.New(),
+            now,
+            "atomic-trade-reconciliation",
+            [
+                new LedgerPosting(new AccountId("atomic-cash"), new Asset("USDT"), 7m),
+                new LedgerPosting(new AccountId("atomic-clearing"), new Asset("USDT"), -7m),
+            ],
+            IdempotencyKey.New());
+
+        await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT");
+        await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT");
+
+        Assert.Contains(9_000_002, await store.GetKnownTradeIdsAsync());
+        Assert.Equal(7m, (await store.GetBalanceAsync(new AccountId("atomic-cash"), new Asset("USDT"))).Amount);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "ETHUSDT"));
+    }
 }
