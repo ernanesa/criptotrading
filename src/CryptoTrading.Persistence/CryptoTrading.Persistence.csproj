@@ -7,4 +7,10 @@
   <ItemGroup>
     <EmbeddedResource Include="Migrations/**/*.sql" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Npgsql" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\CryptoTrading.Domain\CryptoTrading.Domain.csproj" />
+  </ItemGroup>
 </Project>

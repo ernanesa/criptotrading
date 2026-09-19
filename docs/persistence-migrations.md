@@ -2,15 +2,27 @@
 
 O projeto `CryptoTrading.Persistence` entrega o contrato SQL versionado para a
 primeira fatia durável: journal append-only, postings do ledger, projeção de
-saldos e inbox/outbox idempotentes. Os scripts são embarcados no assembly para
-que um runner futuro possa executá-los; nenhum acesso ao banco é feito em
-runtime nesta etapa.
+saldos e inbox/outbox idempotentes. Os scripts são embarcados no assembly e
+executados pelo adapter `PostgresTradingStore`, que usa Npgsql, locks
+consultivos do PostgreSQL e comandos parametrizados.
 
 ## Aplicação
 
-Use uma conexão PostgreSQL local e aplique somente os arquivos `.up.sql`, em
-ordem lexicográfica, dentro de uma transação por migration. A senha deve vir
-do ambiente local e nunca deve ser colocada no comando, no Git ou em tickets:
+O caminho recomendado em runtime é criar `PostgresTradingStore` com uma
+connection string fornecida pela configuração local e chamar
+`ApplyMigrationsAsync`. Cada migration é executada em sua própria transação,
+com `pg_advisory_xact_lock`, e a tabela `trading.schema_migrations` impede
+reaplicação. A senha deve vir do ambiente local e nunca deve ser colocada no
+comando, no Git ou em tickets:
+
+```csharp
+await using var store = new PostgresTradingStore(
+    new PostgresPersistenceOptions(connectionString));
+await store.ApplyMigrationsAsync(cancellationToken);
+```
+
+Para uma inspeção manual, os scripts `.up.sql` também podem ser aplicados em
+ordem lexicográfica, dentro de uma transação por migration:
 
 ```bash
 find src/CryptoTrading.Persistence/Migrations -name '*up.sql' -print | sort
@@ -50,12 +62,28 @@ pg_dump "$DATABASE_URL" --format=custom --file=backups/cryptotrading-$(date +%Y%
 O runner definitivo deve adquirir um advisory lock, registrar a versão apenas
 após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
 
+## Operações duráveis
+
+- `AppendJournalEntryAsync` grava o journal, postings e a projeção de saldo na
+  mesma transação serializável. Repetições do mesmo ID ou idempotency key só
+  são aceitas quando o conteúdo é idêntico.
+- `EnqueueAsync` persiste o comando antes de qualquer I/O de exchange e aplica
+  a mesma regra de idempotência.
+- `ClaimOutboxAsync` usa `FOR UPDATE SKIP LOCKED`, incrementa tentativas e
+  atribui um `lease_owner` com expiração. `MarkOutboxProcessedAsync` e
+  `FailOutboxAsync` exigem o dono do lease; falhas liberam a mensagem para
+  retry em `available_at`.
+- `GetBalanceAsync` consulta a projeção reconstruível; o journal permanece a
+  fonte de verdade.
+
 ## Limites desta etapa
 
-- Não há `Npgsql`, repository ou conexão de produção ainda.
 - `ledger_balances` é uma projeção reconstruível; o journal é a fonte de
   verdade.
-- O outbox/inbox tem o contrato de lease, retry e deduplicação, mas o dispatcher
-  será implementado em uma etapa posterior.
+- O dispatcher que transforma o payload em chamada de exchange ainda será
+  implementado em uma etapa posterior; esta fatia garante a fronteira
+  durável e o lease.
+- A migration 003 adiciona `lease_owner` para impedir que um worker finalize a
+  mensagem de outro worker.
 - A senha do PostgreSQL continua sendo local e separada das credenciais da
   Binance.
