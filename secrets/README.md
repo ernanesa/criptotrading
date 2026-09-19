@@ -4,7 +4,20 @@ This directory is intentionally ignored by Git. Do not place credentials in
 the repository, ClickUp exports, logs, shell history, Dockerfiles, images,
 fixtures, screenshots or CI variables.
 
-## Recommended storage
+## Selected local `.env` contract
+
+For the initial local Testnet setup, use the ignored repository file `.env`:
+
+```text
+BINANCE_API_KEY=<new-testnet-key>
+BINANCE_API_SECRET=<new-testnet-secret>
+```
+
+Create it from the tracked template with `cp .env.example .env`, fill the two
+values locally, and keep its permissions at `600`. Never commit or send the
+populated file. The repository `.gitignore` ignores `.env` and `.env.*`.
+
+## Stronger alternative: external secret files
 
 Use an external directory owned by the local user, for example:
 
