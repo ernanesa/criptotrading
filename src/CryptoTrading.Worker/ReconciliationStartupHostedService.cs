@@ -15,6 +15,7 @@ namespace CryptoTrading.Worker;
 internal sealed class ReconciliationStartupHostedService(
     IOptions<WorkerRuntimeOptions> options,
     AccountReconciliationService reconciliation,
+    ReconciliationReportWriter reportWriter,
     ILogger<ReconciliationStartupHostedService> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -25,13 +26,20 @@ internal sealed class ReconciliationStartupHostedService(
         }
 
         var result = await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+        var reportPath = await reportWriter.AppendAsync(new ReconciliationRunReport(
+            Guid.NewGuid().ToString("N"),
+            result.ObservedAtUtc,
+            result.IsHealthy,
+            result.Events.Count,
+            result.Events.OfType<ReconciliationMismatch>().Count(),
+            result.UnknownTradeIds.Count), cancellationToken).ConfigureAwait(false);
         if (result.IsHealthy)
         {
-            ReconciliationStartupLog.Healthy(logger, result.CorrelationId.ToString(), result.Events.Count);
+            ReconciliationStartupLog.Healthy(logger, result.CorrelationId.ToString(), result.Events.Count, reportPath);
             return;
         }
 
-        ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTradeIds.Count);
+        ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTradeIds.Count, reportPath);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -53,9 +61,9 @@ internal sealed class DenyOperationalControlResetAuthorizer : IOperationalContro
 
 internal static partial class ReconciliationStartupLog
 {
-    [LoggerMessage(LogLevel.Information, "Read-only account reconciliation healthy. CorrelationId={CorrelationId} Events={EventCount}")]
-    public static partial void Healthy(ILogger logger, string correlationId, int eventCount);
+    [LoggerMessage(LogLevel.Information, "Read-only account reconciliation healthy. CorrelationId={CorrelationId} Events={EventCount} ReportPath={ReportPath}")]
+    public static partial void Healthy(ILogger logger, string correlationId, int eventCount, string reportPath);
 
-    [LoggerMessage(LogLevel.Error, "Read-only account reconciliation blocked new entries. CorrelationId={CorrelationId} Events={EventCount} UnknownTrades={UnknownTradeCount}")]
-    public static partial void Blocked(ILogger logger, string correlationId, int eventCount, int unknownTradeCount);
+    [LoggerMessage(LogLevel.Error, "Read-only account reconciliation blocked new entries. CorrelationId={CorrelationId} Events={EventCount} UnknownTrades={UnknownTradeCount} ReportPath={ReportPath}")]
+    public static partial void Blocked(ILogger logger, string correlationId, int eventCount, int unknownTradeCount, string reportPath);
 }
