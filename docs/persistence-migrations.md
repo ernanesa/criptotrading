@@ -169,8 +169,9 @@ locais; são segredos distintos.
 
 - `ledger_balances` é uma projeção reconstruível; o journal é a fonte de
   verdade.
-- O executor PAPER está conectado; ainda faltam recorder/replay operacional,
-  persistência de fills e reconciliação de estado após crash.
+- O executor PAPER e o recorder/replay determinístico estão conectados em suas
+  respectivas camadas; a persistência durável de fills de exchange e a
+  reconciliação completa de estado financeiro após crash continuam pendentes.
 - A migration 003 adiciona `lease_owner` para impedir que um worker finalize a
   mensagem de outro worker.
 - A migration 005 adiciona a evidência append-only de trade IDs conhecidos para

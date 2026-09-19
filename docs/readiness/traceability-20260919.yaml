@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: 677f15b
+commit: 3c500f5
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -34,3 +34,9 @@ items:
     validation: ./scripts/scan-secrets.sh
     status: no-go
     pending: [real-oos-walk-forward, shadow-soak, production-rpo-rto, alert-delivery, human-approval]
+  - id: experiment-governance
+    capability: preregistration, trial-budget accounting, immutable hashes and locked-holdout access audit
+    evidence: [src/CryptoTrading.Domain/Research/ExperimentRegistry.cs, tests/CryptoTrading.Domain.Tests/ExperimentRegistryTests.cs, docs/experiment-governance.md, 3c500f5]
+    validation: dotnet test tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj --configuration Release --no-restore
+    status: pass-code
+    pending: [postgres-append-only-store, real-market-oos-dataset, human-approval]
