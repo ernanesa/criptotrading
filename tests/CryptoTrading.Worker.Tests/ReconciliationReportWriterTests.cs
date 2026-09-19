@@ -25,6 +25,7 @@ public sealed class ReconciliationReportWriterTests
         Assert.Contains("openOrderCount", lines[0], StringComparison.Ordinal);
         Assert.DoesNotContain("balance", lines[0], StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("secret", lines[0], StringComparison.OrdinalIgnoreCase);
+        AssertUserOnlyFileMode(path);
     }
 
     [Fact]
@@ -86,5 +87,13 @@ public sealed class ReconciliationReportWriterTests
             0,
             0,
             0)).AsTask());
+    }
+
+    private static void AssertUserOnlyFileMode(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        }
     }
 }

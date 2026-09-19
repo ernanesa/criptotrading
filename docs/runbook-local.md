@@ -72,6 +72,9 @@ execução acrescenta somente um resumo JSONL redigido em
 balances, payloads e segredos não são gravados.
 Sem credenciais, a configuração deve permanecer desabilitada; o startup não
 faz chamadas autenticadas por padrão.
+Os arquivos de evidência JSONL são gravados com modo Unix `0600`, além da
+proteção do `.gitignore`; não altere essa permissão para compartilhar relatórios
+sem uma cópia redigida e aprovada.
 
 Para validar somente a fronteira autenticada, depois de revogar as chaves
 expostas e criar uma chave Spot Testnet nova com permissões mínimas, use:
@@ -90,7 +93,8 @@ privado bem-sucedido mantém o gate em `No-Go`.
 Para persistir alertas operacionais locais redigidos, defina
 `WORKER_ALERT_FILE_DIRECTORY=artifacts/alerts`. Cada alerta será acrescentado
 ao arquivo diário `alerts-YYYYMMDD.jsonl`; o valor vazio mantém o sink em
-memória. Esse canal não substitui webhook/on-call externo.
+memória. O arquivo é criado com modo Unix `0600`. Esse canal não substitui
+webhook/on-call externo.
 
 ## Evidência mínima de incidente
 

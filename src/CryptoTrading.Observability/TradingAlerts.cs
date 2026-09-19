@@ -116,6 +116,7 @@ public sealed class JsonlTradingAlertSink : ITradingAlertSink, IDisposable, IAsy
                 FileShare.Read,
                 bufferSize: 4096,
                 options: FileOptions.Asynchronous | FileOptions.WriteThrough);
+            RestrictFilePermissions(filePath);
             using var writer = new StreamWriter(stream, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             await writer.WriteAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
             await writer.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -123,6 +124,14 @@ public sealed class JsonlTradingAlertSink : ITradingAlertSink, IDisposable, IAsy
         finally
         {
             gate.Release();
+        }
+    }
+
+    private static void RestrictFilePermissions(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
     }
 

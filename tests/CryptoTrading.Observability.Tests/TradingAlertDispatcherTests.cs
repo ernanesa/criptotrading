@@ -62,6 +62,7 @@ public sealed class TradingAlertDispatcherTests
             var persisted = JsonSerializer.Deserialize<TradingAlert>(line, JsonOptions);
             Assert.Equal("reconciliation:BTCUSDT", persisted?.DeduplicationKey);
             Assert.DoesNotContain("secret", line, StringComparison.OrdinalIgnoreCase);
+            AssertUserOnlyFileMode(file);
         }
         finally
         {
@@ -69,6 +70,14 @@ public sealed class TradingAlertDispatcherTests
             {
                 Directory.Delete(directory, recursive: true);
             }
+        }
+    }
+
+    private static void AssertUserOnlyFileMode(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
         }
     }
 

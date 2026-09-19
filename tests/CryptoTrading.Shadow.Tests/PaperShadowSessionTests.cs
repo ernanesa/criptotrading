@@ -82,5 +82,14 @@ public sealed class PaperShadowSessionTests
         Assert.Single(lines);
         Assert.Contains("PAPER_SHADOW", lines[0], StringComparison.Ordinal);
         Assert.DoesNotContain("secret", lines[0], StringComparison.OrdinalIgnoreCase);
+        AssertUserOnlyFileMode(path);
+    }
+
+    private static void AssertUserOnlyFileMode(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        }
     }
 }
