@@ -53,6 +53,33 @@ public sealed class ExperimentEvidenceWriterTests
             temporary.Path, CreateInput(), DateTimeOffset.UtcNow.ToOffset(TimeSpan.FromHours(-3))));
     }
 
+    [Fact]
+    public void BuildsEvidenceInputFromWalkForwardBenchmarkSummary()
+    {
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var evaluation = WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            dataset.Bars,
+            CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline,
+            CryptoTrading.Backtesting.BacktestEvaluationOptions.DailyCrypto(),
+            WalkForwardPlan.Create(dataset.Bars.Count, 60, 20, 20));
+
+        var input = ExperimentEvidenceWriter.FromWalkForward(
+            "experiment-oos-001",
+            PreregistrationHash,
+            1,
+            1,
+            0,
+            false,
+            "Rejected",
+            evaluation,
+            new Dictionary<string, string> { ["dataset"] = dataset.Metadata.ContentHash },
+            ["AC-RESEARCH-OOS-01"]);
+
+        Assert.Contains("strategy/walk-forward", input.BenchmarkNetReturns.Keys);
+        Assert.Equal(64, input.BenchmarkComparisonFingerprint.Length);
+    }
+
     private static ExperimentEvidenceInput CreateInput() => new()
     {
         ExperimentId = "experiment-001",

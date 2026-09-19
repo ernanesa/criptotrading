@@ -41,6 +41,41 @@ public static class ExperimentEvidenceWriter
     private static readonly Encoding Utf8 = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.General) { WriteIndented = false };
 
+    public static ExperimentEvidenceInput FromWalkForward(
+        string experimentId,
+        string preregistrationSha256,
+        int trialCount,
+        int trialBudget,
+        int holdoutAccessCount,
+        bool holdoutContaminated,
+        string decision,
+        WalkForwardEvaluationResult evaluation,
+        IReadOnlyDictionary<string, string> sourceVersions,
+        IReadOnlyCollection<string> traceabilityReferences)
+    {
+        ArgumentNullException.ThrowIfNull(evaluation);
+        var summary = evaluation.GetBenchmarkSummary();
+        return new ExperimentEvidenceInput
+        {
+            ExperimentId = experimentId,
+            PreregistrationSha256 = preregistrationSha256,
+            TrialCount = trialCount,
+            TrialBudget = trialBudget,
+            HoldoutAccessCount = holdoutAccessCount,
+            HoldoutContaminated = holdoutContaminated,
+            Decision = decision,
+            BenchmarkNetReturns = new Dictionary<string, decimal>
+            {
+                ["NO_TRADE/cash"] = summary.NoTradeCashNetReturn,
+                ["buy-and-hold"] = summary.BuyAndHoldNetReturn,
+                ["strategy/walk-forward"] = summary.StrategyNetReturn,
+            },
+            BenchmarkComparisonFingerprint = summary.Fingerprint,
+            SourceVersions = sourceVersions,
+            TraceabilityReferences = traceabilityReferences,
+        };
+    }
+
     public static ExperimentEvidenceBundle Write(
         string directory,
         ExperimentEvidenceInput input,
