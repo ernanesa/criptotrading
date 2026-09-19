@@ -56,6 +56,7 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [29 - Research Plane: RAG híbrido e GraphRAG](29-research-rag.md)
 - [30 - Rastreabilidade e entrega assistida por agentes](30-traceability-and-agent-delivery.md)
 - [Manifesto inicial de rastreabilidade](traceability.yaml)
+- [Pacote de publicação ClickUp](clickup/README.md)
 
 ## Templates
 

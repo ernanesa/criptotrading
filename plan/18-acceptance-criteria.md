@@ -5,53 +5,56 @@
 Todo PBI deve atender DoD e seus critérios específicos. Para código live, acceptance inclui comportamento de falha.
 
 ## AC-MARKET-01 Market stream
-**Given** conexão saudável, **when** mensagens chegam, **then** são ordenadas/processadas e `market_data_age` permanece dentro do threshold.  
+**Given** conexão saudável, **when** mensagens chegam, **then** são ordenadas/processadas e `market_data_age` permanece dentro do threshold.
 **Given** gap/sequence inválida, **when** detectada, **then** feed fica inválido e estratégias dependentes não podem abrir posição até resync.
 
 ## AC-BOOK-01 Local order book
-Após snapshot+diff, best bid/ask e níveis devem corresponder ao algoritmo oficial; um update perdido deve causar resync, nunca correção silenciosa.
+**Given** snapshot e sequência contínua de diffs, **when** o livro é materializado, **then** best bid/ask e níveis correspondem ao algoritmo oficial.
+**Given** update perdido, duplicado ou fora de ordem, **when** a sequência é validada, **then** o livro fica inválido, consumidores são bloqueados e ocorre resync completo, nunca correção silenciosa.
 
 ## AC-OMS-01 Idempotência
 **Given** timeout após submit, **when** o resultado é desconhecido, **then** o OMS consulta por clientOrderId antes de qualquer novo submit.
 
 ## AC-OMS-02 Partial fill
-Fills parciais atualizam filled quantity e exposição exatamente uma vez; cancelamento preserva fills já ocorridos.
+**Given** fill parcial duplicado ou fora de ordem, **when** o OMS o processa, **then** filled quantity, exposição e ledger são atualizados exatamente uma vez.
+**Given** cancelamento posterior, **when** a ordem chega a estado terminal, **then** fills já ocorridos permanecem preservados e reconciliáveis.
 
 ## AC-RECON-01
-No startup live, novas entradas permanecem bloqueadas até conta/ordens/estado local serem reconciliados.
+**Given** startup, reconnect, timeout ambíguo ou restore, **when** o estado autoritativo ainda não foi reconciliado, **then** novas entradas permanecem bloqueadas.
+**Given** divergência explicada e tratada, **when** os invariantes financeiros voltam a ser confiáveis, **then** a liberação segue a policy e gera audit event.
 
 ## AC-RISK-01
-Target acima de limite retorna Adjusted/Rejected com razão estruturada e não gera ordem acima do autorizado.
+**Given** target acima de qualquer limite aplicável, **when** o Risk Engine avalia a intenção, **then** retorna `Adjusted` ou `Rejected` com razão estruturada e nenhuma ordem excede o autorizado.
 
 ## AC-RISK-02
-Data stale, clock drift crítico ou mismatch não explicado bloqueiam novas entradas.
+**Given** data stale, clock drift crítico ou mismatch não explicado, **when** uma nova exposição é solicitada, **then** a entrada é bloqueada e a condição gera estado operacional, métrica e alerta acionáveis.
 
 ## AC-KILL-01
-Kill switch bloqueia novas exposições independentemente do status das strategies, gera audit event e executa política de cancelamento configurada.
+**Given** qualquer estado de Strategy, **when** o kill switch é ativado, **then** novas exposições são bloqueadas, um audit event é persistido e a política configurada para ordens abertas/em voo é executada e reconciliada.
 
 ## AC-BACKTEST-01
-Mesma strategy version + dataset hash + config + seed produz o mesmo resultado dentro da tolerância definida.
+**Given** mesma strategy version, dataset hash, config e seed, **when** o backtest é repetido no ambiente suportado, **then** produz o mesmo resultado dentro da tolerância numérica versionada ou falha com divergência diagnosticável.
 
 ## AC-COST-01
-Todo relatório exibe PnL bruto, fees, spread/slippage estimado e PnL líquido separadamente.
+**Given** backtest, paper, shadow, canary ou live report, **when** o resultado é calculado, **then** PnL bruto, fees, spread, slippage, demais custos e PnL líquido aparecem separadamente, com moeda, unidade, período e fonte.
 
 ## AC-VALIDATION-01
-Nenhuma estratégia muda para status `CanaryEligible` sem evidências OOS, walk-forward/sensitivity e stress exigidas pela Strategy Spec.
+**Given** uma estratégia candidata, **when** a transição para `CanaryEligible` é solicitada, **then** ela é recusada sem evidências OOS, walk-forward, sensitivity e stress exigidas pela Strategy Spec e pela PromotionReadinessMatrix.
 
 ## AC-STRATEGY-01
-Strategy package compila sem dependência do ExchangeTrading adapter e só publica AlphaSignal/Intent.
+**Given** um Strategy package, **when** build e architecture tests executam, **then** ele não depende de ExchangeTrading, credenciais ou gateway de ordens e publica somente AlphaSignal/Intent conforme contrato.
 
 ## AC-REGIME-01
-Mudança de regime possui timestamp, confidence/features e é reproduzível no replay para mesmo dataset/model version.
+**Given** mesmo dataset, feature pipeline, model version e config, **when** o detector é reproduzido, **then** a mudança de regime mantém timestamp, confidence/features e resultado dentro da tolerância versionada.
 
 ## AC-UI-01
-A UI mostra persistentemente `DEV/PAPER/SHADOW/CANARY/LIVE`; CANARY/LIVE não podem ser confundidos visualmente com simulação.
+**Given** qualquer rota operacional, **when** a UI é exibida, **then** mostra persistentemente `DEV/PAPER/SHADOW/CANARY/LIVE` e CANARY/LIVE não podem ser confundidos visualmente ou por tecnologia assistiva com simulação.
 
 ## AC-SEC-01
-Nenhum secret aparece no repo, image history, logs de teste ou telemetry; chave Binance live não possui withdrawal permission.
+**Given** repo, image history, logs, traces, backups e evidence artifacts, **when** os scanners e testes de redaction executam, **then** nenhum secret é encontrado; qualquer chave Binance live verificada não possui permissão de saque.
 
 ## AC-PORT-01
-A release do Worker/API possui imagens `linux/amd64` e `linux/arm64`; o target nativo da máquina local passa por smoke test e o target alternativo passa por runner/emulação antes de qualquer migração futura que o exija.
+**Given** uma release do Worker/API, **when** o pipeline de containers executa, **then** produz imagens `linux/amd64` e `linux/arm64`, o target nativo passa por smoke test e o alternativo passa por runner/emulação antes de qualquer migração que o exija.
 
 ## AC-LOCAL-01 Bootstrap local reproduzível
 
@@ -62,7 +65,28 @@ A release do Worker/API possui imagens `linux/amd64` e `linux/arm64`; o target n
 **Given** trading runtime e workload de research/telemetria na mesma máquina, **when** budgets de CPU, memória, disco, I/O ou retenção são atingidos, **then** profiles/limits impedem degradação silenciosa do hot path, a condição fica observável e workloads não críticos podem ser pausados sem comprometer ledger, OMS ou reconciliação.
 
 ## AC-OPS-01
-Alert de reconciliação/disconnect crítico contém ambiente, exchange, symbol/account scope, timestamp, correlation ID e ação sugerida.
+**Given** reconciliação, disconnect ou falha crítica, **when** um alerta é emitido, **then** contém ambiente, exchange, symbol/account scope, timestamp, correlation ID, severidade, owner e ação/runbook sugeridos; o teste de entrega comprova o recebimento no canal definido.
+
+## AC-USERDATA-01 User Data Stream
+
+**Given** subscription autenticada, **when** eventos duplicados, atrasados, desconhecidos ou fora de ordem chegam, **then** o adapter preserva o payload/version, aplica idempotência/ordering e aciona reconciliação quando a continuidade não puder ser provada.
+**Given** encerramento ou reconnect, **when** o stream volta, **then** nenhuma nova entrada é liberada antes da reconciliação.
+
+## AC-ANALYTICS-01 Definições de métricas
+
+**Given** uma métrica usada em análise ou gate, **when** calculada e reportada, **then** fórmula, frequência, annualization, risk-free rate, moeda, unidade, versão e tratamento de dados ausentes estão registrados e cobertos por exemplos determinísticos.
+
+## AC-RELEASE-REPORT-01 Relatório pós-release
+
+**Given** uma janela de canary/live encerrada, **when** o relatório pós-release é emitido, **then** agrega confiabilidade, risco, execução, estratégia, incidentes, intervenções e divergências usando fontes/versionamentos declarados e registra decisão, aprovador e follow-ups.
+
+## AC-AUTONOMY-01 Operação baseline autônoma
+
+**Given** a baseline Trend em shadow/canary dentro do envelope aprovado, **when** completa o período, volume e regimes definidos na PromotionReadinessMatrix, **then** intervention rate, recovery, `NO_TRADE`, SafeMode, violações de risco e divergências permanecem dentro dos limites explícitos; qualquer violação impede promoção.
+
+## AC-RAG-02 Recuperação do índice
+
+**Given** embeddings indisponíveis ou índice RAG ausente/corrompido, **when** uma consulta é executada, **then** o sistema degrada para busca lexical ou falha explicitamente, não retorna contexto não verificável e permite rebuild determinístico a partir das fontes registradas.
 
 ## AC-ENV-01 Ambiente separado
 

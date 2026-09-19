@@ -19,15 +19,29 @@ O caminho crítico do MVP é: governance/CI → runtime local reproduzível → 
 | `TASK-US-014-01` | US-014 | outbox/inbox e política de perda por classe de evento |
 | `TASK-US-015-01` | US-015 | manifesto e validator de rastreabilidade |
 | `TASK-US-020-01` | US-020 | exchangeInfo/filtros/limites snapshotados |
+| `TASK-US-024-01` | US-024 | modelo temporal, universo point-in-time e lineage |
 | `TASK-US-030-01` | US-030 | user-data WS moderno + lifecycle/reconnect |
 | `TASK-US-032-01` | US-032 | persist-before-submit + dedupe/query-before-retry |
 | `TASK-US-033-01` | US-033 | startup/reconnect/timeout reconciliation |
 | `TASK-US-040-01` | US-040 | RiskPolicy versionada e auditável |
+| `TASK-US-041-01` | US-041 | sizing decimal determinístico e filters |
+| `TASK-US-042-01` | US-042 | protections e circuit breakers hierárquicos |
 | `TASK-US-043-01` | US-043 | kill switch independente e teste de bloqueio |
+| `TASK-US-044-01` | US-044 | schemas, aprovação e expiração dos gates de risco |
 | `TASK-US-050-01` | US-050 | dataset/universe point-in-time com hash |
 | `TASK-US-051-01` | US-051 | simulador/backtest com custos e fills |
+| `TASK-US-052-01` | US-052 | analytics e fórmulas versionadas |
+| `TASK-US-053-01` | US-053 | OOS/walk-forward/sensitivity/stress framework |
+| `TASK-US-054-01` | US-054 | preregistration, trial budget e locked holdout |
+| `TASK-US-055-01` | US-055 | RAG local com citações, frescor e confirmação no commit |
+| `TASK-US-060-01` | US-060 | contrato Strategy sem dependência de exchange |
 | `TASK-US-061-01` | US-061 | baseline BTC/USDT com Strategy Spec completa |
-| `TASK-US-090-01` | US-090 | paper/shadow/Testnet evidence sem mock em integração |
+| `TASK-US-073-01` | US-073 | Strategy Health da baseline e transições seguras |
+| `TASK-US-090-01` | US-090 | paper exchange determinístico com market data real |
+| `TASK-US-094-01` | US-094 | integração Binance Spot Testnet real e evidence sem mock |
+| `TASK-US-180-01` | US-180 | SafeMode, trust gate e bloqueio de novas entradas |
+| `TASK-US-181-01` | US-181 | restart/reconnect supervisionados e recovery evidence |
+| `TASK-US-182-01` | US-182 | backup/restore drill com RPO/RTO medidos |
 | `TASK-US-124-01` | US-124 | ambiente local completo, reproduzível e sem dependência cloud |
 | `TASK-US-130-01` | US-130 | readiness matrix, restore drill e aprovação explícita |
 | `TASK-US-134-01` | US-134 | canary plan, abort/rollback e release evidence |
@@ -128,6 +142,9 @@ Tasks: temporal split; walk-forward; sensitivity; Monte Carlo; PBO/DSR research.
 ### US-054 Quero governança contra seleção e múltiplos testes.
 Tasks: preregistration; experiment family/trial budget; locked holdout; contamination policy; confidence intervals; ablations.
 
+### US-055 Quero consultar conhecimento do projeto por RAG local verificável.
+Tasks: source registry; ingestão incremental; FTS/embeddings locais; citações path/linha/hash; authority/freshness/conflict policy; confirmação contra commit; testes de isolamento do hot path.
+
 ## EPIC E-06 - Strategy SDK & Baseline
 
 ### US-060 Quero contrato de Strategy sem acesso à exchange.
@@ -135,6 +152,11 @@ Tasks: AlphaSignal; context; lifecycle; strategy registry.
 
 ### US-061 Quero Trend Following baseline.
 Tasks: spec; implementation; tests; backtest.
+
+### US-073 Quero Strategy Health automático para a baseline R1.0.
+Tasks: rolling metrics; HEALTHY/DEGRADED/SUSPICIOUS/DISABLED; thresholds versionados; quarantine/re-enable policy; NO_TRADE e redução de risco.
+
+**Escopo R1.0:** avaliar exclusivamente a baseline Trend ativa. Comparação e alocação entre múltiplas estratégias pertencem à `US-077` pós-R1.0.
 
 As histórias US-062, US-063 e US-064 são pós-R1.0 e só entram após US-061 atravessar o pipeline completo.
 
@@ -158,8 +180,8 @@ Tasks: intent aggregation; conflict rules; target builder.
 ### US-072 Quero risk budgets por estratégia.
 Tasks: allocation model; caps; strategy health integration.
 
-### US-073 Quero Strategy Health automático.
-Tasks: rolling metrics; state transitions; quarantine/re-enable policy.
+### US-077 Quero Strategy Health comparativo para múltiplas estratégias.
+Tasks: health normalization; comparação por regime; portfolio eligibility; interações de quarantine/re-enable entre estratégias.
 
 ### US-074 Quero Autonomy Orchestrator.
 Tasks: MarketContext; candidate eligibility; orchestration API; decision trace; NO_TRADE policy.
@@ -196,7 +218,10 @@ Tasks: full decision pipeline; no exchange send; comparison report.
 Tasks: tiny capital policy; reduced symbols; stricter limits; rollback.
 
 ### US-093 Quero operação autônoma prolongada em shadow.
-Tasks: unattended soak test; forced failure scenarios; regime transitions; automatic strategy switching; recovery metrics.
+Tasks: unattended soak test da baseline; forced failure scenarios; transições de health; NO_TRADE/safe fallback; recovery metrics. Seleção ou troca automática multi-strategy não pertence ao R1.0.
+
+### US-094 Quero validar a integração real na Binance Spot Testnet.
+Tasks: credencial/endpoints segregados; submit/query/cancel; user-data lifecycle; filters/rate limits; timeout ambíguo; reconciliation; evidence sem mock/fake.
 
 ## EPIC E-10 - Web Dashboard
 
