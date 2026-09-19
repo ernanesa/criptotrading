@@ -105,6 +105,72 @@ public sealed class OrderTests
     }
 
     [Fact]
+    public void FillIsAppliedExactlyOnceAndUpdatesRemainingQuantity()
+    {
+        var order = NewOrder();
+        MoveTo(order, OrderStatus.Acknowledged);
+        var fill = NewFill("trade-1", 0.4m, Now.AddSeconds(10), "fill-1");
+
+        var first = order.ApplyFill(fill);
+        var replay = order.ApplyFill(fill);
+
+        Assert.False(first.IsDuplicate);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(OrderStatus.PartiallyFilled, order.Status);
+        Assert.Equal(0.4m, order.FilledQuantity.Value);
+        Assert.Equal(0.6m, order.RemainingQuantity.Value);
+        Assert.Single(order.Fills);
+        Assert.Equal(first.Transition, replay.Transition);
+    }
+
+    [Fact]
+    public void OutOfOrderFillTimestampDoesNotRegressAggregateClock()
+    {
+        var order = NewOrder();
+        MoveTo(order, OrderStatus.Acknowledged);
+        order.ApplyFill(NewFill("trade-1", 0.4m, Now.AddSeconds(10), "fill-1"));
+        order.ApplyFill(NewFill("trade-2", 0.6m, Now.AddSeconds(5), "fill-2"));
+
+        Assert.Equal(OrderStatus.Filled, order.Status);
+        Assert.Equal(1m, order.FilledQuantity.Value);
+        Assert.Equal(Now.AddSeconds(10), order.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void ConflictingDuplicateOrOverfillFailsClosedWithoutMutation()
+    {
+        var order = NewOrder();
+        MoveTo(order, OrderStatus.Acknowledged);
+        var original = NewFill("trade-1", 0.4m, Now.AddSeconds(10), "fill-1");
+        order.ApplyFill(original);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            order.ApplyFill(NewFill("trade-1", 0.5m, Now.AddSeconds(11), "fill-1-retry")));
+        Assert.Throws<InvalidOperationException>(() =>
+            order.ApplyFill(NewFill("trade-2", 0.7m, Now.AddSeconds(12), "fill-2")));
+
+        Assert.Equal(0.4m, order.FilledQuantity.Value);
+        Assert.Single(order.Fills);
+        Assert.Equal(OrderStatus.PartiallyFilled, order.Status);
+    }
+
+    [Fact]
+    public void CancellationAfterPartialFillPreservesAcceptedExecutions()
+    {
+        var order = NewOrder();
+        MoveTo(order, OrderStatus.Acknowledged);
+        var fill = NewFill("trade-1", 0.4m, Now.AddSeconds(10), "fill-1");
+        order.ApplyFill(fill);
+
+        order.TransitionTo(OrderStatus.Cancelled, Key("cancel-after-partial"), Now.AddSeconds(11));
+
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+        Assert.Equal(0.4m, order.FilledQuantity.Value);
+        Assert.Equal(0.6m, order.RemainingQuantity.Value);
+        Assert.Equal(fill, Assert.Single(order.Fills));
+    }
+
+    [Fact]
     public void OrderShapeIsValidatedAtCreation()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => Order.Create(
@@ -123,6 +189,9 @@ public sealed class OrderTests
     private static Order NewOrder() => Order.Create(
         OrderId.New(), new ClientOrderId("ct-test-order"), new Symbol("BTCUSDT"),
         OrderSide.Buy, OrderType.Market, new Quantity(1m), null, Key("create"), Now);
+
+    private static OrderFill NewFill(string executionId, decimal quantity, DateTimeOffset occurredAtUtc, string key) =>
+        new(executionId, new Quantity(quantity), new Price(100m), occurredAtUtc, Key(key));
 
     private static IdempotencyKey Key(string suffix) => new($"test-{suffix}");
 
