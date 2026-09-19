@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `34705af`
+**Commit de código auditado:** `7b58772`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -20,6 +20,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
 | Compose | `POSTGRES_PASSWORD='validation-only-not-a-credential' docker compose config --quiet` | PASS |
 | Integridade documental | `git diff --check` | PASS |
+| Contrato do readiness validator | `./scripts/test-readiness-validator.sh` | PASS — fixture aprovada aceita; checkbox pendente rejeitado; snapshot corrente continua bloqueado |
 
 ## O que estes gates comprovam
 
@@ -72,6 +73,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - alert delivery real, RPO/RTO medidos e reconstrução completa de estado;
 - RiskPolicy, PRM e CanaryPlan preenchidos com valores/unidades, validade e
   aprovação humana;
+- o snapshot corrente também falha fechado no `scripts/validate-readiness.sh`
+  enquanto RiskPolicy e aprovações humanas não estiverem preenchidas;
 - qualquer submissão de ordem, mesmo em Testnet, continua proibida até decisão
   explícita e independente.
 
