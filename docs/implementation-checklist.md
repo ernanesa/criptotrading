@@ -87,7 +87,7 @@ itens em andamento ou bloqueados.
 - [x] Instrumentar logs JSON, correlação, métricas e `ActivitySource` local.
 - [x] Criar alertas, redaction, dashboards e runbooks (baseline local; alertas remotos ainda pendentes).
 - [x] Criar threat model local.
-- [~] Executar backup/restore, chaos e soak test em shadow; backup/restore local já validado, chaos/soak em shadow pendentes.
+- [~] Executar backup/restore, chaos e soak test em shadow; backup/restore e Paper chaos locais validados, shadow ainda pendente.
 
 ## Fase 8 — Readiness e canary
 
@@ -136,6 +136,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Property tests | Gerador xorshift determinístico cobrindo balanceamento, idempotência, atomicidade e saldos | `tests/CryptoTrading.Domain.Tests/AccountingPropertyTests.cs` | `5f7d465` | Codex |
 | 2026-09-19 | Simulador Paper/Replay | Spread, latência, partial fills, rejeições e limites determinísticos; 8 testes Paper | `src/CryptoTrading.Exchange.Paper`, `docs/paper-replay-simulator.md` | `955fe1b` | Codex |
 | 2026-09-19 | Monte Carlo/stress | Bootstrap determinístico por seed, shocks adversos, quantis P05/P50/P95, drawdown e probabilidade de ruína; 29 testes Backtesting | `src/CryptoTrading.Backtesting/MonteCarloStress.cs` | `8d27838` | Codex |
+| 2026-09-19 | Paper chaos/soak | 64 ordens, duplicação de produtor, falhas transitórias, crash pós-aceite e leases recuperados sem side effects duplicados | `tests/CryptoTrading.Worker.Tests/PaperSoakChaosTests.cs`, `scripts/test-paper-soak-chaos.sh` | `fba5f92` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
