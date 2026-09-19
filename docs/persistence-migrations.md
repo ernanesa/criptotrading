@@ -104,6 +104,13 @@ duplicação, reconnect e encerramento remoto durante a reconciliação. Linhas
 anteriores à migration permanecem legíveis com identidade nula e não são
 preenchidas retroativamente.
 
+Migration `009_reconciliation_open_orders` adiciona a projeção local mínima de
+ordens abertas (`reconciliation_open_orders`). Ela não substitui o journal: é
+uma projeção atualizável, alimentada pelo futuro OMS, usada apenas para comparar
+`clientOrderId`, símbolo, `orderId` e status com o snapshot read-only da Binance.
+Qualquer ordem externa desconhecida, ausente localmente ou com status divergente
+entra em SafeMode.
+
 ## Ativação pelo Worker
 
 O Worker registra o `PostgresTradingStore` somente quando

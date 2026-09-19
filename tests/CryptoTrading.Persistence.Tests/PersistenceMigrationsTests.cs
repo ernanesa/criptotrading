@@ -19,11 +19,12 @@ public sealed class PersistenceMigrationsTests
                 "006_risk_policy_registry.down.sql", "006_risk_policy_registry.up.sql",
                 "007_account_stream_events.down.sql", "007_account_stream_events.up.sql",
                 "008_account_stream_session_identity.down.sql", "008_account_stream_session_identity.up.sql",
+                "009_reconciliation_open_orders.down.sql", "009_reconciliation_open_orders.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -52,5 +53,6 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("session_id", upMigrations[7].Sql, StringComparison.Ordinal);
         Assert.Contains("session_generation", upMigrations[7].Sql, StringComparison.Ordinal);
         Assert.Contains("subscription_id", upMigrations[7].Sql, StringComparison.Ordinal);
+        Assert.Contains("reconciliation_open_orders", upMigrations[8].Sql, StringComparison.Ordinal);
     }
 }

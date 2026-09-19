@@ -61,6 +61,17 @@ internal sealed class PostgresKnownTradeReader(PostgresTradingStore store) : IKn
         store.GetKnownTradeIdsAsync(cancellationToken);
 }
 
+internal sealed class PostgresLocalOpenOrderReader(PostgresTradingStore store) : ILocalOpenOrderReader
+{
+    public async Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default)
+    {
+        var records = await store.ReadOpenOrdersAsync(cancellationToken).ConfigureAwait(false);
+        return records
+            .Select(static order => new ReconciliationOpenOrder(order.Symbol, order.OrderId ?? 0, order.ClientOrderId, order.Status))
+            .ToArray();
+    }
+}
+
 internal sealed class DenyOperationalControlResetAuthorizer : IOperationalControlResetAuthorizer
 {
     public bool IsAuthorized(

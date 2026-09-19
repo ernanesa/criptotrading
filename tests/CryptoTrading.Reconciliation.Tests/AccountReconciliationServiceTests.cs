@@ -95,6 +95,30 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
+    public async Task UnknownExchangeOpenOrderEntersSafeMode()
+    {
+        var control = CreateControl();
+        var sink = new InMemoryReconciliationEventSink();
+        var service = CreateService(
+            new ReconciliationSnapshot(
+                Now,
+                [new ReconciliationBalance("USDT", 100m, 0m)],
+                [],
+                [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "NEW")]),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            sink,
+            [new ReconciliationOpenOrder("BTCUSDT", 0, "other-order", "NEW")]);
+
+        var result = await service.ReconcileAsync();
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
+            && mismatch.ReasonCode == "EXCHANGE_OPEN_ORDER_UNKNOWN_LOCALLY");
+        Assert.True(control.Snapshot.BlocksNewEntries);
+    }
+
+    [Fact]
     public async Task LocalOnlyAssetIsReconciledAgainstZeroExchangeBalance()
     {
         var control = CreateControl();
@@ -184,14 +208,16 @@ public sealed class AccountReconciliationServiceTests
         ReconciliationSnapshot snapshot,
         IReadOnlyDictionary<string, decimal> balances,
         IOperationalControl control,
-        IReconciliationEventSink sink) => new(
+        IReconciliationEventSink sink,
+        IReadOnlyList<ReconciliationOpenOrder>? localOpenOrders = null) => new(
         new FakeSnapshotProvider(snapshot),
         new FakeBalanceReader(balances),
         new FakeKnownTradeReader(new HashSet<long>()),
         sink,
         control,
         new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
-        new FixedTimeProvider(Now));
+        new FixedTimeProvider(Now),
+        new FakeLocalOpenOrderReader(localOpenOrders ?? []));
 
     private static InMemoryOperationalControl CreateControl() => new(new AllowResetAuthorizer());
 
@@ -213,6 +239,11 @@ public sealed class AccountReconciliationServiceTests
     private sealed class FakeKnownTradeReader(IReadOnlySet<long> ids) : IKnownTradeReader
     {
         public Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default) => Task.FromResult(ids);
+    }
+
+    private sealed class FakeLocalOpenOrderReader(IReadOnlyList<ReconciliationOpenOrder> orders) : ILocalOpenOrderReader
+    {
+        public Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default) => Task.FromResult(orders);
     }
 
     private sealed class AllowResetAuthorizer : IOperationalControlResetAuthorizer

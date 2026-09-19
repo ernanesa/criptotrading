@@ -192,6 +192,11 @@ public interface IKnownTradeReader
     Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default);
 }
 
+public interface ILocalOpenOrderReader
+{
+    Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default);
+}
+
 public interface IReconciliationEventSink
 {
     Task PublishAsync(ReconciliationEvent reconciliationEvent, CancellationToken cancellationToken = default);
@@ -226,6 +231,19 @@ public sealed record ReconciliationMismatch(
     string ReasonCode = "BALANCE_DRIFT")
     : ReconciliationEvent(EventId, CorrelationId, OccurredAtUtc);
 
+public sealed record OpenOrderReconciliationMismatch(
+    Guid EventId,
+    CorrelationId CorrelationId,
+    DateTimeOffset OccurredAtUtc,
+    string Symbol,
+    string ClientOrderId,
+    long? LocalOrderId,
+    long? ExchangeOrderId,
+    string? LocalStatus,
+    string? ExchangeStatus,
+    string ReasonCode)
+    : ReconciliationEvent(EventId, CorrelationId, OccurredAtUtc);
+
 public sealed record ReconciliationRunResult(
     CorrelationId CorrelationId,
     DateTimeOffset ObservedAtUtc,
@@ -244,6 +262,7 @@ public sealed class AccountReconciliationService
     private readonly IReadOnlyAccountSnapshotProvider snapshotProvider;
     private readonly ILocalBalanceReader balanceReader;
     private readonly IKnownTradeReader knownTradeReader;
+    private readonly ILocalOpenOrderReader localOpenOrderReader;
     private readonly IReconciliationEventSink eventSink;
     private readonly IOperationalControl operationalControl;
     private readonly ReconciliationOptions options;
@@ -256,7 +275,8 @@ public sealed class AccountReconciliationService
         IReconciliationEventSink eventSink,
         IOperationalControl operationalControl,
         ReconciliationOptions options,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILocalOpenOrderReader? localOpenOrderReader = null)
     {
         this.snapshotProvider = snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
         this.balanceReader = balanceReader ?? throw new ArgumentNullException(nameof(balanceReader));
@@ -265,12 +285,14 @@ public sealed class AccountReconciliationService
         this.operationalControl = operationalControl ?? throw new ArgumentNullException(nameof(operationalControl));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.localOpenOrderReader = localOpenOrderReader ?? new NoLocalOpenOrdersReader();
     }
 
     public async Task<ReconciliationRunResult> ReconcileAsync(CancellationToken cancellationToken = default)
     {
         var snapshot = await snapshotProvider.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
         var knownTradeIds = await knownTradeReader.GetKnownTradeIdsAsync(cancellationToken).ConfigureAwait(false);
+        var localOpenOrders = await localOpenOrderReader.GetOpenOrdersAsync(cancellationToken).ConfigureAwait(false);
         var correlationId = CorrelationId.New();
         var now = timeProvider.GetUtcNow();
         var snapshotIsFresh = snapshot.ObservedAtUtc <= now
@@ -283,6 +305,35 @@ public sealed class AccountReconciliationService
             .Order()
             .ToArray();
         var events = new List<ReconciliationEvent>();
+
+        var externalOpenOrders = snapshot.OpenOrders.ToDictionary(static order => order.ClientOrderId, StringComparer.Ordinal);
+        var localOpenOrdersByClientId = localOpenOrders.ToDictionary(static order => order.ClientOrderId, StringComparer.Ordinal);
+        foreach (var clientOrderId in externalOpenOrders.Keys.Union(localOpenOrdersByClientId.Keys, StringComparer.Ordinal).Order(StringComparer.Ordinal))
+        {
+            externalOpenOrders.TryGetValue(clientOrderId, out var exchangeOrder);
+            localOpenOrdersByClientId.TryGetValue(clientOrderId, out var localOrder);
+            var reason = exchangeOrder is null
+                ? "LOCAL_OPEN_ORDER_MISSING_ON_EXCHANGE"
+                : localOrder is null
+                    ? "EXCHANGE_OPEN_ORDER_UNKNOWN_LOCALLY"
+                    : !string.Equals(exchangeOrder.Symbol, localOrder.Symbol, StringComparison.Ordinal)
+                        ? "OPEN_ORDER_SYMBOL_DRIFT"
+                        : !string.Equals(exchangeOrder.Status, localOrder.Status, StringComparison.OrdinalIgnoreCase)
+                            ? "OPEN_ORDER_STATUS_DRIFT"
+                            : null;
+            if (reason is null)
+            {
+                continue;
+            }
+
+            var mismatch = new OpenOrderReconciliationMismatch(
+                Guid.NewGuid(), correlationId, timeProvider.GetUtcNow(),
+                exchangeOrder?.Symbol ?? localOrder!.Symbol, clientOrderId,
+                localOrder?.OrderId, exchangeOrder?.OrderId,
+                localOrder?.Status, exchangeOrder?.Status, reason);
+            events.Add(mismatch);
+            await eventSink.PublishAsync(mismatch, cancellationToken).ConfigureAwait(false);
+        }
 
         var exchangeBalances = snapshot.Balances.ToDictionary(static balance => balance.Asset, StringComparer.Ordinal);
         var localAssets = await balanceReader.GetAssetsAsync(options.LedgerAccount, cancellationToken).ConfigureAwait(false);
@@ -330,7 +381,9 @@ public sealed class AccountReconciliationService
             await eventSink.PublishAsync(reconciliationEvent, cancellationToken).ConfigureAwait(false);
         }
 
-        var healthy = events.All(static item => item is BalanceReconciled) && unknownTradeIds.Length == 0;
+        var healthy = events.All(static item => item is BalanceReconciled)
+            && unknownTradeIds.Length == 0
+            && !events.Any(static item => item is OpenOrderReconciliationMismatch);
         if (!healthy)
         {
             var command = new OperationalControlCommand(
@@ -444,6 +497,15 @@ public sealed class NoKnownTradesReader : IKnownTradeReader
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<IReadOnlySet<long>>(new HashSet<long>());
+    }
+}
+
+public sealed class NoLocalOpenOrdersReader : ILocalOpenOrderReader
+{
+    public Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<IReadOnlyList<ReconciliationOpenOrder>>([]);
     }
 }
 
