@@ -17,6 +17,17 @@ O projeto será desenvolvido de forma incremental, com prioridade para seguranç
 
 Toda a documentação de produto, arquitetura, Scrum, requisitos, estratégias, riscos, releases e critérios de qualidade está em [`plan/`](plan/README.md).
 
+## Secrets e primeiro bootstrap
+
+O repositório não contém credenciais. O contrato local para a Binance Spot
+Testnet está em [`secrets/README.md`](secrets/README.md), o exemplo sem valores
+está em [`.env.example`](.env.example) e o helper de entrada mascarada está em
+[`scripts/init-testnet-secrets.sh`](scripts/init-testnet-secrets.sh). Execute o
+helper somente depois de revogar qualquer chave que tenha sido exposta e gerar
+uma nova chave Testnet. A integração pública pode ser verificada com
+[`scripts/test-binance-testnet-public.sh`](scripts/test-binance-testnet-public.sh);
+nenhum teste autenticado deve ocorrer com segredo enviado pelo chat.
+
 ## Princípios
 
 1. Strategy propõe; Portfolio dimensiona; Risk autoriza; Execution executa.
