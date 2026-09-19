@@ -42,6 +42,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
+        options.ReconciliationIntervalMinutes = builder.Configuration.GetValue("WORKER_RECONCILIATION_INTERVAL_MINUTES", 15);
         options.ReconciliationReportDirectory = builder.Configuration["WORKER_RECONCILIATION_REPORT_DIRECTORY"] ?? "artifacts/reconciliation";
         options.AlertFileDirectory = builder.Configuration["WORKER_ALERT_FILE_DIRECTORY"] ?? string.Empty;
     })
@@ -120,6 +121,7 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
             reconciliationOptions);
     });
     builder.Services.AddHostedService<ReconciliationStartupHostedService>();
+    builder.Services.AddHostedService<PeriodicReconciliationHostedService>();
 }
 if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
 {
