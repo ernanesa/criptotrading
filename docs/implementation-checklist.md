@@ -15,6 +15,7 @@ itens em andamento ou bloqueados.
 - [x] `.env` local criado, ignorado pelo Git e com permissão `600`.
 - [x] Teste público da Binance Testnet executado.
 - [x] CI executa restore, build, testes, análise, formatação e secret scan sem imprimir correspondências.
+- [x] Validator executável de rastreabilidade valida schema/IDs/referências e está conectado à quality gate.
 
 ## Fase 1 — Domínio e contratos
 
@@ -105,6 +106,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Bootstrap | Build .NET 11: 0 warnings/0 errors | `dotnet build --no-restore` | `7be8714` | Codex |
 | 2026-09-19 | Binance pública | `ping`, `time`, `exchangeInfo` aprovados | `scripts/test-binance-testnet-public.sh` | `828a449` | Codex |
 | 2026-09-19 | CI/gates | Restore, build Release, 9 testes, format e secret scan aprovados; Compose requer `POSTGRES_PASSWORD` explícita | `.github/workflows/quality.yml`, `scripts/scan-secrets.sh` | `64b333c` | Codex |
+| 2026-09-19 | Traceability validator | Manifesto v2 validado com 115 IDs explícitos; fixture duplicada falha fechado; references AC/RF/RNF e tasks são verificadas contra fontes canônicas | `scripts/validate-traceability.sh`, `plan/traceability.yaml`, `.github/workflows/quality.yml` | validação local | Codex |
 | 2026-09-19 | Domínio | Primitives e relógio determinístico; build sem warnings e 9 testes aprovados | `src/CryptoTrading.Domain/Primitives`, `tests/CryptoTrading.Domain.Tests` | `319b4fc` | Codex |
 | 2026-09-19 | PostgreSQL local | Compose validado com senha temporária, bind em loopback e healthcheck | `compose.yaml`, `docs/postgres-local.md` | `66e982d` | Codex |
 | 2026-09-19 | Contabilidade | Journal/ledger in-memory com idempotência, balanceamento e atomicidade; 15 testes aprovados | `src/CryptoTrading.Domain/Accounting`, testes de domínio | `50cba3b` | Codex |
