@@ -177,4 +177,26 @@ public sealed class PostgresTradingStoreIntegrationTests
             TimeSpan.FromSeconds(5),
             1));
     }
+
+    [Fact]
+    public async Task PersistsImmutableKnownTradeIdsForReconciliation()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+
+        await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT");
+        await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT");
+
+        var ids = await store.GetKnownTradeIdsAsync();
+        Assert.Contains(9_000_001, ids);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordKnownTradeAsync(9_000_001, "ETHUSDT"));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => store.RecordKnownTradeAsync(-1, "BTCUSDT"));
+    }
 }

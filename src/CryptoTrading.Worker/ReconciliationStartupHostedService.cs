@@ -51,6 +51,12 @@ internal sealed class PostgresLocalBalanceReader(PostgresTradingStore store) : I
         (await store.GetBalanceAsync(account, new Asset(asset), cancellationToken).ConfigureAwait(false)).Amount;
 }
 
+internal sealed class PostgresKnownTradeReader(PostgresTradingStore store) : IKnownTradeReader
+{
+    public Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default) =>
+        store.GetKnownTradeIdsAsync(cancellationToken);
+}
+
 internal sealed class DenyOperationalControlResetAuthorizer : IOperationalControlResetAuthorizer
 {
     public bool IsAuthorized(
