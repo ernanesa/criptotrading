@@ -1,0 +1,214 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Options;
+
+namespace CryptoTrading.Exchange.Binance;
+
+/// <summary>
+/// Binance Spot signed client restricted to account-state reads.
+/// The request builder only emits GET requests and the public surface has no mutation endpoint.
+/// </summary>
+public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly HttpClient httpClient;
+    private readonly BinanceAuthenticatedClientOptions options;
+    private readonly IBinanceClockDriftEstimator clock;
+    private readonly TimeProvider timeProvider;
+
+    public BinanceSpotAccountClient(
+        HttpClient httpClient,
+        BinanceAuthenticatedClientOptions options,
+        IBinanceClockDriftEstimator? clock = null,
+        TimeProvider? timeProvider = null)
+    {
+        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.options.Validate();
+        this.clock = clock ?? new BinanceClockDriftEstimator(timeProvider);
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    public BinanceSpotAccountClient(
+        HttpClient httpClient,
+        IOptions<BinanceAuthenticatedClientOptions> options,
+        IBinanceClockDriftEstimator? clock = null)
+        : this(httpClient, options?.Value ?? throw new ArgumentNullException(nameof(options)), clock)
+    {
+    }
+
+    public async Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default)
+    {
+        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        return await SendSignedAsync<BinanceAccountSnapshot>("v3/account", [], cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(
+        string? symbol = null,
+        CancellationToken cancellationToken = default)
+    {
+        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        var parameters = new List<KeyValuePair<string, string>>();
+        if (symbol is not null)
+        {
+            parameters.Add(new("symbol", NormalizeSymbol(symbol)));
+        }
+
+        return await SendSignedAsync<List<BinanceOpenOrder>>("v3/openOrders", parameters, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(
+        string symbol,
+        BinanceTradeQuery? query = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        query ??= new BinanceTradeQuery();
+        query.Validate();
+        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+
+        var parameters = new List<KeyValuePair<string, string>> { new("symbol", normalizedSymbol) };
+        if (query.FromId is { } fromId)
+        {
+            parameters.Add(new("fromId", fromId.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (query.StartTimeUtc is { } startTime)
+        {
+            parameters.Add(new("startTime", startTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (query.EndTimeUtc is { } endTime)
+        {
+            parameters.Add(new("endTime", endTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (query.Limit is { } limit)
+        {
+            parameters.Add(new("limit", limit.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return await SendSignedAsync<List<BinanceTrade>>("v3/myTrades", parameters, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default)
+    {
+        var sentAt = timeProvider.GetUtcNow();
+        using var response = await httpClient.GetAsync(new Uri("time", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        var receivedAt = timeProvider.GetUtcNow();
+        await EnsureSuccessAsync(response, "time").ConfigureAwait(false);
+        var serverTime = await response.Content.ReadFromJsonAsync<BinanceServerTime>(JsonOptions, cancellationToken).ConfigureAwait(false)
+            ?? throw new JsonException("Binance returned an empty server-time response.");
+
+        clock.Observe(serverTime.ServerTime, sentAt, receivedAt);
+        var withinTolerance = clock.IsWithinTolerance(options.ClockDriftTolerance);
+        if (!withinTolerance)
+        {
+            throw new BinanceClockDriftException(clock.Offset, options.ClockDriftTolerance);
+        }
+
+        return new(serverTime.ServerTime, clock.Offset, withinTolerance);
+    }
+
+    private async Task<T> SendSignedAsync<T>(
+        string endpoint,
+        List<KeyValuePair<string, string>> parameters,
+        CancellationToken cancellationToken)
+    {
+        var queryParameters = new List<KeyValuePair<string, string>>(parameters.Count + 2);
+        queryParameters.AddRange(parameters);
+        queryParameters.Add(new("recvWindow", options.RecvWindowMilliseconds.ToString(CultureInfo.InvariantCulture)));
+        queryParameters.Add(new("timestamp", clock.EstimateServerNow().ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)));
+        var query = BuildQuery(queryParameters);
+        var signature = Sign(query, options.ApiSecret);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"{endpoint}?{query}&signature={signature}", UriKind.Relative));
+        request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
+
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, endpoint).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false)
+            ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, string endpoint)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new BinanceApiException(response.StatusCode, endpoint);
+        }
+
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    private static string BuildQuery(IReadOnlyList<KeyValuePair<string, string>> parameters) =>
+        string.Join('&', parameters.Select(parameter =>
+            $"{Uri.EscapeDataString(parameter.Key)}={Uri.EscapeDataString(parameter.Value)}"));
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1308", Justification = "Binance accepts and documents lowercase hexadecimal HMAC signatures.")]
+    internal static string Sign(string query, string secret)
+    {
+        var queryBytes = Encoding.UTF8.GetBytes(query);
+        var secretBytes = Encoding.UTF8.GetBytes(secret);
+        try
+        {
+            var signatureBytes = HMACSHA256.HashData(secretBytes, queryBytes);
+            try
+            {
+                return Convert.ToHexString(signatureBytes).ToLowerInvariant();
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(signatureBytes);
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(queryBytes);
+            CryptographicOperations.ZeroMemory(secretBytes);
+        }
+    }
+
+    private static string NormalizeSymbol(string symbol)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        var normalized = symbol.Trim().ToUpperInvariant();
+        if (normalized.Length > 20 || normalized.Any(character => !char.IsAsciiLetterOrDigit(character)))
+        {
+            throw new ArgumentException("Symbol must contain only ASCII letters and digits and be at most 20 characters.", nameof(symbol));
+        }
+
+        return normalized;
+    }
+}
+
+public sealed class BinanceClockDriftException : InvalidOperationException
+{
+    public BinanceClockDriftException()
+        : this(TimeSpan.Zero, TimeSpan.Zero)
+    {
+    }
+
+    public BinanceClockDriftException(string message)
+        : base(message)
+    {
+    }
+
+    public BinanceClockDriftException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    public BinanceClockDriftException(TimeSpan observedOffset, TimeSpan tolerance)
+        : base($"Binance server clock drift ({observedOffset.TotalMilliseconds:0} ms) exceeds the configured tolerance ({tolerance.TotalMilliseconds:0} ms).")
+    {
+        ObservedOffset = observedOffset;
+        Tolerance = tolerance;
+    }
+
+    public TimeSpan ObservedOffset { get; }
+
+    public TimeSpan Tolerance { get; }
+}
