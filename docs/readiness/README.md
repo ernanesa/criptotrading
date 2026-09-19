@@ -30,10 +30,15 @@ Antes de propor uma decisão aprovada, execute:
 ./scripts/validate-readiness.sh <PRM.md> <CANARY.md> <RISK-POLICY.md>
 ```
 
-O validator exige decisão/status aprovável, owner e aprovador, data de validade,
+O validator exige decisão/status aprovável, owner e aprovador, data de validade
+futura ou vigente em UTC (e rejeita datas inválidas ou expiradas),
 thresholds com unidade e janela, hash SHA-256 da `RiskPolicy` e ausência de
 placeholders ou checkboxes pendentes. Ele não cria aprovação e deve falhar para
 os snapshots atuais enquanto os gates humanos e Testnet permanecerem pendentes.
+
+Para reproduzir uma auditoria em uma data fixa, defina `READINESS_AS_OF_UTC=YYYY-MM-DD`;
+por padrão, a data UTC corrente é usada. Isso evita que um artefato expirado seja
+aceito apenas porque o conteúdo estrutural ainda parece completo.
 
 O contrato automatizado está em `scripts/test-readiness-validator.sh` e é
 executado no CI.

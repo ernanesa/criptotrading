@@ -17,4 +17,21 @@ if "$validator" "$prm" "$canary" "$risk" >"$fixture_dir/invalid.out" 2>&1; then
     exit 1
 fi
 grep -q 'unchecked mandatory item' "$fixture_dir/invalid.out"
+
+cp "$fixture_dir/prm.md" "$fixture_dir/expired-prm.md"
+sed -i 's/2099-01-01/2020-01-01/' "$fixture_dir/expired-prm.md"
+if READINESS_AS_OF_UTC=2026-09-19 "$validator" "$fixture_dir/expired-prm.md" "$fixture_dir/canary.md" "$fixture_dir/risk.md" >"$fixture_dir/expired.out" 2>&1; then
+    echo "Readiness validator contract failed: expired PRM was accepted." >&2
+    exit 1
+fi
+grep -q 'is expired as of 2026-09-19' "$fixture_dir/expired.out"
+
+cp "$fixture_dir/risk.md" "$fixture_dir/invalid-date-risk.md"
+sed -i 's/2099-01-01/2026-02-30/' "$fixture_dir/invalid-date-risk.md"
+if READINESS_AS_OF_UTC=2026-09-19 "$validator" "$fixture_dir/prm.md" "$fixture_dir/canary.md" "$fixture_dir/invalid-date-risk.md" >"$fixture_dir/invalid-date.out" 2>&1; then
+    echo "Readiness validator contract failed: invalid RiskPolicy date was accepted." >&2
+    exit 1
+fi
+grep -q 'is not a calendar date' "$fixture_dir/invalid-date.out"
+
 echo "Readiness validator contract passed: complete and incomplete artifacts behave as expected."
