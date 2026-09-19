@@ -75,7 +75,11 @@ itens em andamento ou bloqueados.
 - [x] Implementar contratos de replay/backtest reproduzível.
 - [x] Especificar baseline Trend Following BTC/USDT.
 - [x] Cobrir fees e slippage explícitos na baseline.
-- [ ] Executar validação out-of-sample, walk-forward, sensibilidade e Monte Carlo.
+- [x] Implementar slice determinístico com equity, retorno líquido, fees, turnover, drawdown e Sharpe parametrizado.
+- [x] Adicionar contratos de janelas out-of-sample/walk-forward e matriz de sensibilidade.
+- [ ] Executar validação OOS com dataset versionado e comparar casos de sensibilidade.
+- [ ] Evoluir o simulador para spread, latência, partial fills, rejeições, limites e impacto de mercado.
+- [ ] Implementar Monte Carlo e stress tests depois de validar o modelo de execução.
 
 ## Fase 7 — Shadow, observabilidade e operação
 
