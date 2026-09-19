@@ -4,6 +4,7 @@ using Xunit;
 
 namespace CryptoTrading.Domain.Tests;
 
+[Trait("Category", "RecoveryDrill")]
 public sealed class LedgerReconstructionTests
 {
     private static readonly AccountId Wallet = new("wallet");
