@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `ceaef88`
+**Commit de código auditado:** `005355e`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 198 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 203 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 3 testes, incluindo migration 005, persistência idempotente e rejeição de símbolo conflitante |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
@@ -46,6 +46,9 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - A migration 005 persiste IDs externos conhecidos de forma append-only e o
   Worker os lê do PostgreSQL para a reconciliação; conflitos de símbolo para o
   mesmo ID falham de forma explícita.
+- A fronteira autenticada rejeita contas com withdrawals habilitados ou
+  permissões fora da allowlist read-only; a coleta de trades pagina por
+  `fromId`, deduplica IDs e falha fechado ao atingir o limite configurado.
 
 ## Gates que continuam pendentes
 
