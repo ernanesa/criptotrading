@@ -36,11 +36,35 @@ public sealed record LeasedOutboxMessage(
     DateTimeOffset LockedUntil,
     string LeaseOwner);
 
+/// <summary>Durable outbox operations required by a dispatcher.</summary>
+public interface IOutboxStore
+{
+    Task<IReadOnlyList<LeasedOutboxMessage>> ClaimOutboxAsync(
+        string leaseOwner,
+        DateTimeOffset nowUtc,
+        TimeSpan leaseDuration,
+        int batchSize,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> MarkOutboxProcessedAsync(
+        Guid messageId,
+        string leaseOwner,
+        DateTimeOffset processedAtUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> FailOutboxAsync(
+        Guid messageId,
+        string leaseOwner,
+        string failure,
+        DateTimeOffset retryAtUtc,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -290,13 +314,13 @@ public sealed class PostgresTradingStore : IAsyncDisposable
     public async Task<bool> FailOutboxAsync(
         Guid messageId,
         string leaseOwner,
-        string error,
+        string failure,
         DateTimeOffset retryAtUtc,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(leaseOwner);
-        ArgumentException.ThrowIfNullOrWhiteSpace(error);
-        var boundedError = error.Length <= 4000 ? error : error[..4000];
+        ArgumentException.ThrowIfNullOrWhiteSpace(failure);
+        var boundedError = failure.Length <= 4000 ? failure : failure[..4000];
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             """
