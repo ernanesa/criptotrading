@@ -9,4 +9,8 @@ public interface IBinanceSpotMarketClient
     Task<BinanceExchangeInfo> GetExchangeInfoAsync(
         string? symbol = null,
         CancellationToken cancellationToken = default);
+
+    Task<BinanceSymbolTradingRules> GetTradingRulesAsync(
+        string symbol,
+        CancellationToken cancellationToken = default);
 }

@@ -35,6 +35,24 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         return GetAsync<BinanceExchangeInfo>(endpoint, cancellationToken);
     }
 
+    public async Task<BinanceSymbolTradingRules> GetTradingRulesAsync(
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        var exchangeInfo = await GetExchangeInfoAsync(normalizedSymbol, cancellationToken).ConfigureAwait(false);
+        var matchingSymbols = exchangeInfo.Symbols
+            .Where(candidate => string.Equals(candidate.Symbol, normalizedSymbol, StringComparison.Ordinal))
+            .ToArray();
+
+        return matchingSymbols.Length switch
+        {
+            1 => matchingSymbols[0].GetTradingRules(),
+            0 => throw new FormatException($"Binance exchangeInfo did not contain symbol '{normalizedSymbol}'."),
+            _ => throw new FormatException($"Binance exchangeInfo contained duplicate symbol '{normalizedSymbol}'.")
+        };
+    }
+
     private async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken)
     {
         using var response = await httpClient.GetAsync(new Uri(endpoint, UriKind.Relative), cancellationToken).ConfigureAwait(false);

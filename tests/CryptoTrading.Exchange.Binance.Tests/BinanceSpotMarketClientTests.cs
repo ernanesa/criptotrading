@@ -31,6 +31,20 @@ public sealed class BinanceSpotMarketClientTests
     }
 
     [Fact]
+    public async Task GetTradingRulesParsesFiltersFromExchangeInfo()
+    {
+        using var httpClient = CreateHttpClient(
+            "{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8,\"filters\":[{\"filterType\":\"PRICE_FILTER\",\"minPrice\":\"0.01\",\"maxPrice\":\"100000\",\"tickSize\":\"0.01\"},{\"filterType\":\"LOT_SIZE\",\"minQty\":\"0.0001\",\"maxQty\":\"9000\",\"stepSize\":\"0.0001\"},{\"filterType\":\"MIN_NOTIONAL\",\"minNotional\":\"10\"}]}]}");
+        var client = new BinanceSpotMarketClient(httpClient);
+
+        var rules = await client.GetTradingRulesAsync("btcusdt");
+
+        Assert.Equal(0.01m, rules.PriceTickSize);
+        Assert.Equal(0.0001m, rules.QuantityStepSize);
+        Assert.Equal(10m, rules.MinimumNotional);
+    }
+
+    [Fact]
     public async Task NonSuccessDoesNotExposeResponseBody()
     {
         using var httpClient = CreateHttpClient("{\"code\":-1003,\"msg\":\"secret-like response\"}", HttpStatusCode.TooManyRequests);
