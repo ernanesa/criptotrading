@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `ea008ec`
+**Commit de código auditado:** `04ac8c9`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -39,6 +39,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Quality gate de dataset externo | `dotnet test` Backtesting | PASS — 3 testes rejeitam look-ahead, sequência duplicada e tempo não monotônico; sem rede/credenciais |
 | Webhook de alertas opt-in | `dotnet test` Observability | PASS — 6 testes cobrem desabilitado, allowlist HTTPS, redaction e não-2xx usando handler fake; nenhum endpoint real chamado |
 | Integração Worker de webhook | `dotnet test` Worker | PASS — configuração URL/allowlist/timeout validada fail-closed; default local preservado; nenhuma chamada externa realizada |
+| Evidência pós-reconciliação redigida | `dotnet test` Worker filtrado | PASS — contrato rejeita timestamps não-UTC, modo mutável, contagens inconsistentes e relatório saudável com drift; nenhuma credencial/payload é persistido |
+| Shadow operational quality gate | `./scripts/test-shadow-operational-gate.sh` | PASS — métricas locais de divergência, stale, recovery, intervention-rate e duração avaliadas com thresholds explícitos; sem rede/credenciais/ordens |
 
 ## O que estes gates comprovam
 
@@ -55,6 +57,10 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   sintética, janelas stale e recovery; o runner repetiu três janelas, agregou os
   resumos e falhou fechado para credenciais presentes. O relatório está em
   `artifacts/shadow/` e não substitui o Shadow operacional com dados reais.
+- O `ShadowOperationalGate` valida thresholds explícitos para divergência, stale,
+  recovery, intervention-rate e duração; esse resultado é somente um gate local.
+- A evidência pós-reconciliação é redigida e validada antes da persistência,
+  rejeitando modo mutável, timestamps não-UTC e estados inconsistentes.
 - O Worker Shadow local persistiu relatório JSONL redigido e publicou alertas
   deduplicados de divergência, stale e recovery; canais externos ainda não
   foram configurados.
