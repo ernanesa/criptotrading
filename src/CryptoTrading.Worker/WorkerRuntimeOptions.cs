@@ -120,6 +120,12 @@ public sealed class WorkerRuntimeOptions
                 ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_APPLY_MIGRATIONS=true."]);
         }
 
+        if (AccountStreamEnabled && !ReconciliationEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_RECONCILIATION_ENABLED=true for initial state recovery."]);
+        }
+
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationAccount))
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),

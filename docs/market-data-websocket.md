@@ -91,9 +91,10 @@ available only as a compatibility/test fixture and is not wired into the
 Worker.
 
 Enable the authenticated consumer only in a local, read-only process with
-`WORKER_ACCOUNT_STREAM_ENABLED=true`, `WORKER_PERSISTENCE_ENABLED=true`,
-`WORKER_APPLY_MIGRATIONS=true` and `WORKER_NO_TRADE=true`. The service starts
-after migrations (and optional reconciliation), persists an append-only event
+`WORKER_ACCOUNT_STREAM_ENABLED=true`, `WORKER_RECONCILIATION_ENABLED=true`,
+`WORKER_PERSISTENCE_ENABLED=true`, `WORKER_APPLY_MIGRATIONS=true` and
+`WORKER_NO_TRADE=true`. The service starts after migrations and the initial
+reconciliation, persists an append-only event
 envelope, and enters SafeMode on stream termination or storage failure.
 
 ```text
