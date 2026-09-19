@@ -49,9 +49,38 @@ public sealed class PaperOutboxMessageExecutor(
             throw new InvalidOperationException("The outbox envelope does not match the command identity.");
         }
 
-        var result = exchange.Submit(
-            new PaperOrderRequest(command.ClientOrderId, command.Symbol, command.Side, command.Type, command.Quantity),
-            command.IdempotencyKey);
+        var request = new PaperOrderRequest(
+            command.ClientOrderId,
+            command.Symbol,
+            command.Side,
+            command.Type,
+            command.Quantity);
+        PaperSubmitResult result;
+        try
+        {
+            result = exchange.Submit(request, command.IdempotencyKey);
+        }
+        catch (TimeoutException submitTimeout)
+        {
+            // A timeout is ambiguous: the exchange may have accepted the order
+            // before the response was lost. Never submit again blindly. Resolve
+            // the outcome by the durable client order identity first; if it is
+            // still absent, preserve the timeout so the outbox retry can safely
+            // repeat the same idempotent command.
+            try
+            {
+                var recovered = exchange.GetOrder(command.ClientOrderId);
+                PaperExecutorLog.RecoveredAfterAmbiguousTimeout(logger, message.MessageId, command.ClientOrderId.Value);
+                result = new PaperSubmitResult(recovered, AlreadyProcessed: true);
+            }
+            catch (KeyNotFoundException)
+            {
+                throw new TimeoutException(
+                    $"The paper exchange did not confirm client order '{command.ClientOrderId}' after an ambiguous submit timeout.",
+                    submitTimeout);
+            }
+        }
+
         PaperExecutorLog.Submitted(logger, message.MessageId, command.Symbol.Value, result.AlreadyProcessed);
         return Task.CompletedTask;
     }
@@ -195,6 +224,9 @@ internal static partial class PaperExecutorLog
 {
     [LoggerMessage(LogLevel.Information, "Paper outbox command submitted. MessageId={MessageId} Symbol={Symbol} AlreadyProcessed={AlreadyProcessed}")]
     public static partial void Submitted(ILogger logger, Guid messageId, string symbol, bool alreadyProcessed);
+
+    [LoggerMessage(LogLevel.Warning, "Paper outbox command recovered after ambiguous submit timeout. MessageId={MessageId} ClientOrderId={ClientOrderId}")]
+    public static partial void RecoveredAfterAmbiguousTimeout(ILogger logger, Guid messageId, string clientOrderId);
 }
 
 internal static partial class DispatcherLog
