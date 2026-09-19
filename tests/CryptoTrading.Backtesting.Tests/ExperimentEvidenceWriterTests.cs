@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using CryptoTrading.Backtesting;
 using Xunit;
 
 namespace CryptoTrading.Backtesting.Tests;

@@ -64,7 +64,8 @@ public sealed record OutOfSampleWindowResult(
     decimal TotalFees,
     decimal TotalSlippageCost,
     int TradeCount,
-    int PeriodCount);
+    int PeriodCount,
+    BenchmarkComparison Benchmark);
 
 public sealed record WalkForwardEvaluationResult(
     DatasetMetadata Dataset,
@@ -127,16 +128,29 @@ public static class WalkForwardEvaluator
             var trades = evaluation.Trades
                 .Where(trade => trade.BarIndex >= window.OutOfSampleStartIndex && trade.BarIndex < endExclusive)
                 .ToArray();
+            var netReturn = startingEquity == 0m ? 0m : finalEquity / startingEquity - 1m;
+            var oosBars = bars
+                .Skip(window.OutOfSampleStartIndex)
+                .Take(window.OutOfSampleLength)
+                .ToArray();
             results.Add(new OutOfSampleWindowResult(
                 window,
                 startingEquity,
                 finalEquity,
-                startingEquity == 0m ? 0m : finalEquity / startingEquity - 1m,
+                netReturn,
                 maximumDrawdown,
                 trades.Sum(trade => trade.Fee),
                 trades.Sum(trade => trade.SlippageCost),
                 trades.Length,
-                oosPoints.Length));
+                oosPoints.Length,
+                BenchmarkComparisonEvaluator.CompareOutOfSample(
+                    $"{parameters.StrategyId}/{parameters.Version}",
+                    startingEquity,
+                    finalEquity,
+                    netReturn,
+                    maximumDrawdown,
+                    oosPoints.Length,
+                    oosBars)));
         }
 
         return new WalkForwardEvaluationResult(
