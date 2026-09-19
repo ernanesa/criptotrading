@@ -7,7 +7,8 @@
 - Node 26 disponível;
 - pnpm ainda precisa ser habilitado/pinado antes do shell React;
 - Docker Engine e Docker Compose disponíveis;
-- PostgreSQL/observabilidade serão adicionados no Compose em uma etapa seguinte.
+- PostgreSQL local está disponível em `compose.yaml`; observabilidade será
+  adicionada em uma etapa seguinte.
 
 Use o SDK pinado sem alterar o SDK global:
 
@@ -33,6 +34,21 @@ preview esperada. A atualização para GA deve ser um commit isolado que atualiz
 Esse teste cobre somente a fronteira pública (`ping`, `time` e
 `exchangeInfo`). Não é evidência de autenticação ou de envio de ordens.
 
+## PostgreSQL local
+
+Suba a dependência somente quando precisar da persistência local. O banco fica
+ligado a `127.0.0.1` e exige uma senha fornecida pelo shell:
+
+```bash
+export POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+docker compose up -d postgres
+docker compose ps postgres
+```
+
+Consulte [`postgres-local.md`](postgres-local.md) para o contrato de conexão,
+healthcheck, volume e procedimento de parada. Migrations e readiness real
+serão adicionados junto com a implementação da persistência financeira.
+
 ## Secrets Testnet
 
 Revogue qualquer chave exposta e gere uma nova na Spot Testnet. Depois execute:
@@ -54,7 +70,7 @@ ou se o segredo não tiver permissões de arquivo mínimas.
 
 1. adicionar `TimeProvider`, IDs e módulos Domain;
 2. adicionar journal, ledger e outbox/inbox;
-3. adicionar PostgreSQL/Compose e health/readiness reais;
+3. adicionar migrations, journal/ledger/outbox e health/readiness reais sobre o PostgreSQL do Compose;
 4. implementar adapter read-only da Binance;
 5. implementar OMS, reconciliação e RiskPolicy;
 6. somente então testar account/order na Testnet com a nova chave local.
