@@ -250,7 +250,10 @@ public sealed record ReconciliationRunResult(
     bool IsHealthy,
     IReadOnlyList<ReconciliationEvent> Events,
     IReadOnlyList<long> UnknownTradeIds,
-    int OpenOrderCount = 0);
+    int OpenOrderCount = 0)
+{
+    public int MismatchCount => Events.Count(static item => item is ReconciliationMismatch or OpenOrderReconciliationMismatch);
+}
 
 /// <summary>
 /// Compares the exchange account snapshot with the local balance projection.

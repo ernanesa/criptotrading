@@ -115,6 +115,7 @@ public sealed class AccountReconciliationServiceTests
         Assert.False(result.IsHealthy);
         Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
             && mismatch.ReasonCode == "EXCHANGE_OPEN_ORDER_UNKNOWN_LOCALLY");
+        Assert.Equal(2, result.MismatchCount);
         Assert.True(control.Snapshot.BlocksNewEntries);
     }
 
