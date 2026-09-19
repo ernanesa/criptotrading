@@ -111,6 +111,13 @@ uma projeção atualizável, alimentada pelo futuro OMS, usada apenas para compa
 Qualquer ordem externa desconhecida, ausente localmente ou com status divergente
 entra em SafeMode.
 
+O teste de integração `ReplaysOpenOrderProjectionAcrossStoreRestartAndRetainsRemovalState`
+valida o contrato operacional dessa projeção: upsert repetido é idempotente,
+uma nova instância do store lê apenas a identidade/status ativos mais recentes,
+remoção persiste após restart e uma observação posterior pode recriar a projeção.
+O teste usa um `clientOrderId` isolado por execução e não se conecta à Binance;
+ele prova somente replay/restart local do PostgreSQL, não reconciliação autenticada.
+
 ## Ativação pelo Worker
 
 O Worker registra o `PostgresTradingStore` somente quando
