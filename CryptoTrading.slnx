@@ -4,11 +4,15 @@
     <Project Path="src/CryptoTrading.Configuration/CryptoTrading.Configuration.csproj" />
     <Project Path="src/CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
     <Project Path="src/CryptoTrading.Exchange.Binance/CryptoTrading.Exchange.Binance.csproj" />
+    <Project Path="src/CryptoTrading.Persistence/CryptoTrading.Persistence.csproj" />
+    <Project Path="src/CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
     <Project Path="src/CryptoTrading.Worker/CryptoTrading.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Exchange.Binance.Tests/CryptoTrading.Exchange.Binance.Tests.csproj" />
+    <Project Path="tests/CryptoTrading.Persistence.Tests/CryptoTrading.Persistence.Tests.csproj" />
+    <Project Path="tests/CryptoTrading.Observability.Tests/CryptoTrading.Observability.Tests.csproj" />
   </Folder>
 </Solution>
