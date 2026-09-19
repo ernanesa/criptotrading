@@ -86,6 +86,134 @@ public interface IBinanceUserDataStreamClient
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>REST lifecycle operations for a Spot user-data listen key.</summary>
+public interface IBinanceUserDataStreamLifecycle
+{
+    Task<string> CreateListenKeyAsync(CancellationToken cancellationToken = default);
+
+    Task KeepAliveListenKeyAsync(string listenKey, CancellationToken cancellationToken = default);
+
+    Task CloseListenKeyAsync(string listenKey, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Restricted REST lifecycle client. It can create, renew and close a stream
+/// key, but exposes no order, withdrawal, transfer, margin or futures endpoint.
+/// </summary>
+public sealed class BinanceUserDataStreamLifecycleClient : IBinanceUserDataStreamLifecycle
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly HttpClient httpClient;
+    private readonly BinanceUserDataStreamRestOptions options;
+
+    public BinanceUserDataStreamLifecycleClient(
+        HttpClient httpClient,
+        BinanceUserDataStreamRestOptions options)
+    {
+        this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.options.Validate();
+    }
+
+    public async Task<string> CreateListenKeyAsync(CancellationToken cancellationToken = default)
+    {
+        using var request = CreateRequest(HttpMethod.Post);
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "create user-data stream").ConfigureAwait(false);
+        var payload = await response.Content.ReadFromJsonAsync<ListenKeyResponse>(JsonOptions, cancellationToken).ConfigureAwait(false)
+            ?? throw new JsonException("Binance returned an empty listen-key response.");
+        ValidateListenKey(payload.ListenKey);
+        return payload.ListenKey;
+    }
+
+    public async Task KeepAliveListenKeyAsync(string listenKey, CancellationToken cancellationToken = default)
+    {
+        ValidateListenKey(listenKey);
+        using var request = CreateRequest(HttpMethod.Put, listenKey);
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "keepalive user-data stream").ConfigureAwait(false);
+    }
+
+    public async Task CloseListenKeyAsync(string listenKey, CancellationToken cancellationToken = default)
+    {
+        ValidateListenKey(listenKey);
+        using var request = CreateRequest(HttpMethod.Delete, listenKey);
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "close user-data stream").ConfigureAwait(false);
+    }
+
+    private HttpRequestMessage CreateRequest(HttpMethod method, string? listenKey = null)
+    {
+        var uri = listenKey is null
+            ? new Uri("v3/userDataStream", UriKind.Relative)
+            : new Uri($"v3/userDataStream?listenKey={Uri.EscapeDataString(listenKey)}", UriKind.Relative);
+        var request = new HttpRequestMessage(method, uri);
+        request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
+        return request;
+    }
+
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, string operation)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new BinanceApiException(response.StatusCode, operation);
+        }
+
+        await Task.CompletedTask.ConfigureAwait(false);
+    }
+
+    private static void ValidateListenKey(string listenKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(listenKey);
+        if (listenKey.Length > 512 || listenKey.Any(static character => char.IsControl(character) || character is '/' or '\\' or '?' or '#'))
+        {
+            throw new ArgumentException("listenKey contains unsupported characters or is too long.", nameof(listenKey));
+        }
+    }
+
+    private sealed record ListenKeyResponse(string ListenKey);
+}
+
+public sealed class BinanceUserDataStreamRestOptions
+{
+    public BinanceEnvironment Environment { get; set; } = BinanceEnvironment.Testnet;
+
+    public Uri? RestBaseAddress { get; set; }
+
+    public string ApiKey { get; set; } = string.Empty;
+
+    internal Uri GetRestBaseAddress()
+    {
+        var expectedHost = Environment switch
+        {
+            BinanceEnvironment.Testnet => "testnet.binance.vision",
+            BinanceEnvironment.Demo => "demo-api.binance.com",
+            _ => throw new ArgumentOutOfRangeException(nameof(Environment), Environment, "Unsupported Binance environment.")
+        };
+        var address = RestBaseAddress ?? new Uri($"https://{expectedHost}/api/");
+        if (!address.IsAbsoluteUri || address.Scheme != Uri.UriSchemeHttps ||
+            !string.Equals(address.Host, expectedHost, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(address.AbsolutePath.Trim('/'), "api", StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrEmpty(address.Query) || !string.IsNullOrEmpty(address.Fragment))
+        {
+            throw new InvalidOperationException($"Binance user-data REST address must be the HTTPS {Environment} API endpoint.");
+        }
+
+        return address.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
+            ? address
+            : new Uri(address.AbsoluteUri + "/");
+    }
+
+    internal void Validate()
+    {
+        _ = GetRestBaseAddress();
+        if (string.IsNullOrWhiteSpace(ApiKey) || ApiKey.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("Binance API key is required and cannot contain whitespace.", nameof(ApiKey));
+        }
+    }
+}
+
 public sealed class BinanceUserDataStreamClient : IBinanceUserDataStreamClient
 {
     private readonly BinanceUserDataStreamOptions options;

@@ -91,4 +91,37 @@ public static class ServiceCollectionExtensions
 
         return services;
     }
+
+    public static IServiceCollection AddBinanceUserDataStreamLifecycleClient(
+        this IServiceCollection services,
+        Action<BinanceUserDataStreamRestOptions>? configure = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<BinanceUserDataStreamRestOptions>()
+            .Configure(options => configure?.Invoke(options))
+            .Validate(options =>
+            {
+                try
+                {
+                    options.Validate();
+                    return true;
+                }
+                catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+                {
+                    return false;
+                }
+            }, "Binance user-data lifecycle options are invalid.")
+            .ValidateOnStart();
+
+        services.AddHttpClient<IBinanceUserDataStreamLifecycle, BinanceUserDataStreamLifecycleClient>((serviceProvider, client) =>
+        {
+            var options = serviceProvider.GetRequiredService<IOptions<BinanceUserDataStreamRestOptions>>().Value;
+            client.BaseAddress = options.GetRestBaseAddress();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading/0.1");
+        });
+
+        return services;
+    }
 }

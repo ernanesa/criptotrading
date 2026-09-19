@@ -1,4 +1,5 @@
 using System.Text;
+using System.Net;
 using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
@@ -51,6 +52,55 @@ public sealed class BinanceUserDataStreamTests
         Assert.Throws<InvalidOperationException>(() => options.Validate());
     }
 
+    [Fact]
+    public async Task ManagesListenKeyLifecycleWithoutExposingMutationEndpoints()
+    {
+        using var handler = new LifecycleHandler();
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://testnet.binance.vision/api/")
+        };
+        var client = new BinanceUserDataStreamLifecycleClient(
+            httpClient,
+            new BinanceUserDataStreamRestOptions
+            {
+                RestBaseAddress = httpClient.BaseAddress,
+                ApiKey = "testnet-key"
+            });
+
+        var listenKey = await client.CreateListenKeyAsync();
+        await client.KeepAliveListenKeyAsync(listenKey);
+        await client.CloseListenKeyAsync(listenKey);
+
+        Assert.Equal([HttpMethod.Post, HttpMethod.Put, HttpMethod.Delete], handler.Methods);
+        Assert.All(handler.Requests, request =>
+        {
+            Assert.Equal("testnet-key", request.Headers.GetValues("X-MBX-APIKEY").Single());
+            Assert.Contains("userDataStream", request.RequestUri!.ToString(), StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
+    public void LifecycleClientRejectsProductionHostAndBlankKey()
+    {
+        Assert.Throws<InvalidOperationException>(() => new BinanceUserDataStreamLifecycleClient(
+            new HttpClient(new LifecycleHandler()),
+            new BinanceUserDataStreamRestOptions
+            {
+                RestBaseAddress = new Uri("https://api.binance.com/api/"),
+                ApiKey = "testnet-key"
+            }));
+        using var invalidHandler = new LifecycleHandler();
+        using var invalidHttpClient = new HttpClient(invalidHandler);
+        Assert.Throws<ArgumentException>(() => new BinanceUserDataStreamLifecycleClient(
+            invalidHttpClient,
+            new BinanceUserDataStreamRestOptions
+            {
+                RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+                ApiKey = " "
+            }));
+    }
+
     private sealed class FakeTransport(params string[] payloads) : IBinanceWebSocketTransport, IDisposable
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -72,4 +122,25 @@ public sealed class BinanceUserDataStreamTests
         {
         }
     }
+
+    private sealed class LifecycleHandler : HttpMessageHandler
+    {
+        public List<HttpMethod> Methods { get; } = [];
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Methods.Add(request.Method);
+            Requests.Add(request);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = request.Method == HttpMethod.Post
+                    ? new StringContent("{\"listenKey\":\"listen-key-1\"}", Encoding.UTF8, "application/json")
+                    : new StringContent(string.Empty)
+            };
+            return Task.FromResult(response);
+        }
+    }
+
 }
