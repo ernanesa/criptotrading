@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using CryptoTrading.Domain.Primitives;
+using CryptoTrading.Domain.Research;
 using Xunit;
 
 namespace CryptoTrading.Backtesting.Tests;
@@ -79,6 +81,91 @@ public sealed class ExperimentEvidenceWriterTests
         Assert.Contains("strategy/walk-forward", input.BenchmarkNetReturns.Keys);
         Assert.Equal(64, input.BenchmarkComparisonFingerprint.Length);
     }
+
+    [Fact]
+    public void BuildsEvidenceInputOnlyWhenExperimentLineageMatches()
+    {
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var evaluation = WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            dataset.Bars,
+            CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline,
+            CryptoTrading.Backtesting.BacktestEvaluationOptions.DailyCrypto(),
+            WalkForwardPlan.Create(dataset.Bars.Count, 60, 20, 20));
+        var preregistration = CreatePreregistration(dataset.Metadata, evaluation.StrategyVersion);
+        var registry = new InMemoryExperimentRegistry();
+        var registration = registry.Register(preregistration);
+        registry.RecordTrial(preregistration.ExperimentId, new ExperimentTrial(
+            1,
+            "baseline",
+            "baseline-v1",
+            new string('C', 64),
+            ExperimentDecision.Rejected,
+            DateTimeOffset.UtcNow,
+            "test",
+            new IdempotencyKey("trial-1")));
+
+        var input = ExperimentEvidenceWriter.FromExperimentRecord(
+            registry.GetById(preregistration.ExperimentId),
+            evaluation,
+            "Rejected",
+            new Dictionary<string, string> { ["dataset"] = dataset.Metadata.Version },
+            ["AC-RESEARCH-LINEAGE-01"]);
+
+        Assert.Equal(preregistration.PreregistrationSha256, input.PreregistrationSha256);
+        var persistedInput = ExperimentEvidenceWriter.FromGovernanceState(
+            preregistration,
+            trialCount: 1,
+            holdoutAccessCount: 0,
+            holdoutContaminated: false,
+            evaluation,
+            "Rejected",
+            new Dictionary<string, string> { ["dataset"] = dataset.Metadata.Version },
+            ["AC-RESEARCH-LINEAGE-03"]);
+        Assert.Equal(input.BenchmarkComparisonFingerprint, persistedInput.BenchmarkComparisonFingerprint);
+        Assert.Throws<InvalidOperationException>(() => ExperimentEvidenceWriter.FromExperimentRecord(
+            registry.GetById(preregistration.ExperimentId),
+            evaluation with
+            {
+                Dataset = new DatasetMetadata(
+                    dataset.Metadata.DatasetId,
+                    "other",
+                    dataset.Metadata.Source,
+                    dataset.Metadata.SchemaVersion,
+                    dataset.Metadata.ContentHash,
+                    dataset.Metadata.IngestedAtUtc,
+                    dataset.Metadata.TimeZoneId)
+            },
+            "Rejected",
+            new Dictionary<string, string>(),
+            ["AC-RESEARCH-LINEAGE-02"]));
+    }
+
+    private static ExperimentPreregistration CreatePreregistration(DatasetMetadata dataset, string strategyVersion) =>
+        new(
+            new ExperimentId(Guid.NewGuid()),
+            "trend-following-family",
+            "Baseline has positive net return after declared costs.",
+            "baseline-only",
+            ["baseline"],
+            1,
+            "net-return",
+            "Reject if net return is not positive after costs.",
+            "NO_TRADE/cash and buy-and-hold",
+            DateTimeOffset.UtcNow,
+            "test",
+            new IdempotencyKey("registration-" + Guid.NewGuid().ToString("N")),
+            strategyVersion,
+            "local",
+            dataset.Version,
+            dataset.ContentHash,
+            "holdout-v1",
+            "metrics-v1",
+            "local-test",
+            new string('D', 64),
+            7,
+            dataset.IngestedAtUtc,
+            dataset.IngestedAtUtc.AddDays(180));
 
     private static ExperimentEvidenceInput CreateInput() => new()
     {
