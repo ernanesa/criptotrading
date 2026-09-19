@@ -108,6 +108,15 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<OrderProjectionService>();
 }
+
+// Operational-control transitions are always audited. The default remains
+// local/in-memory; PostgreSQL is selected only by the explicit persistence
+// gate above. A database outage then fails the transition closed without
+// changing the in-memory control snapshot.
+OperationalControlRegistration.Add(
+    builder.Services,
+    builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false));
+
 // Hosted services are started in registration order. Migrations must complete
 // before reconciliation or account-stream persistence can be used.
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
@@ -130,7 +139,6 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
     _ = builder.Services.AddSingleton<IKnownTradeReader, PostgresKnownTradeReader>();
     _ = builder.Services.AddSingleton<ILocalOpenOrderReader, PostgresLocalOpenOrderReader>();
     _ = builder.Services.AddSingleton<IReconciliationEventSink, InMemoryReconciliationEventSink>();
-    _ = builder.Services.AddSingleton<IOperationalControl>(_ => new InMemoryOperationalControl(new DenyOperationalControlResetAuthorizer()));
     _ = builder.Services.AddSingleton<AccountReconciliationService>(serviceProvider =>
     {
         var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value;
@@ -156,11 +164,6 @@ if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
 }
 if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {
-    if (!builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
-    {
-        _ = builder.Services.AddSingleton<IOperationalControl>(_ => new InMemoryOperationalControl(new DenyOperationalControlResetAuthorizer()));
-    }
-
     _ = builder.Services.AddSingleton<IBinanceUserDataStreamClient>(serviceProvider => new BinanceUserDataStreamApiClient(
         new BinanceUserDataStreamApiOptions
         {

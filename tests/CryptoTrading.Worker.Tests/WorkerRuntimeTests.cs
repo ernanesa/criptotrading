@@ -3,8 +3,10 @@ using System.Text.Json.Nodes;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
+using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Paper;
 using CryptoTrading.Persistence;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -25,6 +27,34 @@ public sealed class WorkerRuntimeTests
         Assert.False(options.PersistenceEnabled);
         Assert.False(options.ReconciliationEnabled);
         Assert.False(options.RiskPolicyRequired);
+    }
+
+    [Fact]
+    public async Task OperationalControlUsesInMemoryAuditByDefault()
+    {
+        var services = new ServiceCollection();
+        OperationalControlRegistration.Add(services, persistenceEnabled: false);
+
+        await using var provider = services.BuildServiceProvider();
+        var control = provider.GetRequiredService<IOperationalControl>();
+
+        Assert.IsType<InMemoryOperationalControlAuditSink>(
+            provider.GetRequiredService<IOperationalControlAuditSink>());
+        Assert.IsType<InMemoryOperationalControl>(control);
+    }
+
+    [Fact]
+    public async Task OperationalControlUsesPostgresAuditOnlyWhenPersistenceIsExplicit()
+    {
+        var services = new ServiceCollection();
+        _ = services.AddSingleton(_ => new PostgresTradingStore(
+            new PostgresPersistenceOptions("Host=127.0.0.1;Port=1;Database=local;Username=local;Password=local")));
+        OperationalControlRegistration.Add(services, persistenceEnabled: true);
+
+        await using var provider = services.BuildServiceProvider();
+
+        Assert.IsType<PostgresOperationalControlAuditSink>(
+            provider.GetRequiredService<IOperationalControlAuditSink>());
     }
 
     [Fact]

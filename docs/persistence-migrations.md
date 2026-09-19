@@ -129,6 +129,15 @@ remoção persiste após restart e uma observação posterior pode recriar a pro
 O teste usa um `clientOrderId` isolado por execução e não se conecta à Binance;
 ele prova somente replay/restart local do PostgreSQL, não reconciliação autenticada.
 
+O Worker também registra esse sink de forma explícita: `WORKER_PERSISTENCE_ENABLED=false`
+(padrão) mantém `IOperationalControlAuditSink` in-memory; somente
+`WORKER_PERSISTENCE_ENABLED=true` seleciona `PostgresOperationalControlAuditSink`.
+O `IOperationalControl` é registrado uma única vez para evitar que as branches de
+reconciliação ou account stream substituam o sink. Com persistência habilitada,
+uma falha no PostgreSQL faz a transição falhar fechado antes de alterar o estado
+em memória. `WORKER_APPLY_MIGRATIONS=true` deve ser usado para preparar a
+migration 010 antes de habilitar transições operacionais persistidas.
+
 ## Ativação pelo Worker
 
 O Worker registra o `PostgresTradingStore` somente quando
