@@ -28,6 +28,7 @@ internal sealed class AccountStreamHostedService(
     ILogger<AccountStreamHostedService> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private bool initialConnectionPending = true;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -53,7 +54,14 @@ internal sealed class AccountStreamHostedService(
                 }
                 else if (userEvent is BinanceUserDataStreamControlEvent { EventType: "connectionEstablished" })
                 {
-                    await ReconcileAfterReconnectAsync(stoppingToken).ConfigureAwait(false);
+                    if (initialConnectionPending)
+                    {
+                        initialConnectionPending = false;
+                    }
+                    else
+                    {
+                        await ReconcileAfterReconnectAsync(stoppingToken).ConfigureAwait(false);
+                    }
                 }
             }
 
