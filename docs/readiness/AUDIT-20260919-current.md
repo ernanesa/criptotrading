@@ -42,6 +42,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Evidência pós-reconciliação redigida | `dotnet test` Worker filtrado | PASS — contrato rejeita timestamps não-UTC, modo mutável, contagens inconsistentes e relatório saudável com drift; nenhuma credencial/payload é persistido |
 | Shadow operational quality gate | `./scripts/test-shadow-operational-gate.sh` | PASS — métricas locais de divergência, stale, recovery, intervention-rate e duração avaliadas com thresholds explícitos; sem rede/credenciais/ordens |
 | Validade de evidência de promoção | `./scripts/test-readiness-validator.sh` | PASS — datas inválidas/expiradas são rejeitadas; auditorias podem fixar `READINESS_AS_OF_UTC`; aprovação humana continua obrigatória |
+| Validade do CanaryPlan | `./scripts/test-readiness-validator.sh` | PASS — CanaryPlan exige data UTC válida e vigente; datas inválidas/expiradas falham fechado |
 | Permissões de evidência local | testes Observability/Shadow/Worker | PASS — arquivos JSONL redigidos são restringidos a `0600` em Unix; conteúdo continua sem credenciais/payloads |
 
 ## O que estes gates comprovam
