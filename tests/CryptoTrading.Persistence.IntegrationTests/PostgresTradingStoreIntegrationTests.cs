@@ -295,7 +295,8 @@ public sealed class PostgresTradingStoreIntegrationTests
         var record = new AccountStreamEventRecord(
             Guid.NewGuid(), "executionReport", "execution-" + Guid.NewGuid().ToString("N"),
             1_720_000_000_123, receivedAt,
-            "{\"e\":\"executionReport\",\"s\":\"BTCUSDT\",\"x\":\"TRADE\"}", "BTCUSDT");
+            "{\"e\":\"executionReport\",\"s\":\"BTCUSDT\",\"x\":\"TRADE\"}", "BTCUSDT",
+            Guid.NewGuid(), 1, 7);
 
         Assert.True(await store.AppendAccountStreamEventAsync(record));
         Assert.False(await store.AppendAccountStreamEventAsync(record));
@@ -303,10 +304,14 @@ public sealed class PostgresTradingStoreIntegrationTests
         var persisted = Assert.Single(events, item => item.EventId == record.EventId);
         Assert.Equal(record.PayloadSha256, persisted.PayloadSha256);
         Assert.Equal(record.Symbol, persisted.Symbol);
+        Assert.Equal(record.SessionId, persisted.SessionId);
+        Assert.Equal(record.SessionGeneration, persisted.SessionGeneration);
+        Assert.Equal(record.SubscriptionId, persisted.SubscriptionId);
 
         var conflicting = new AccountStreamEventRecord(
             record.EventId, record.EventType, record.DedupeKey, record.EventTimeMilliseconds,
-            record.ReceivedAtUtc, "{\"e\":\"executionReport\",\"s\":\"ETHUSDT\"}", "ETHUSDT");
+            record.ReceivedAtUtc, "{\"e\":\"executionReport\",\"s\":\"ETHUSDT\"}", "ETHUSDT",
+            record.SessionId, record.SessionGeneration, record.SubscriptionId);
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendAccountStreamEventAsync(conflicting));
     }
 }

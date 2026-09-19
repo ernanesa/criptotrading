@@ -52,7 +52,17 @@ public sealed class BinanceUserDataStreamOptions
     }
 }
 
-public abstract record BinanceUserDataEvent(DateTimeOffset ReceivedAtUtc, long EventTimeMilliseconds);
+public abstract record BinanceUserDataEvent(DateTimeOffset ReceivedAtUtc, long EventTimeMilliseconds)
+{
+    /// <summary>Identity of the WebSocket session that delivered the event.</summary>
+    public Guid? SessionId { get; init; }
+
+    /// <summary>Monotonic connection generation assigned by the client.</summary>
+    public long? SessionGeneration { get; init; }
+
+    /// <summary>Modern Binance subscription identifier, when available.</summary>
+    public long? StreamSubscriptionId { get; init; }
+}
 
 public sealed record BinanceExecutionReportEvent(
     DateTimeOffset ReceivedAtUtc,

@@ -86,7 +86,10 @@ with HMAC `userDataStream.subscribe.signature` over the allowlisted Testnet or
 Demo endpoint. It parses nested `executionReport` and
 `outboundAccountPosition` events, preserves `subscriptionId`, recognizes
 `eventStreamTerminated`/`serverShutdown`, quarantines malformed events and
-reconnects with bounded backoff; control envelopes retain `subscriptionId`. The legacy `listenKey` adapter below remains
+reconnects with bounded backoff. Each connection receives a new `sessionId` and
+monotonic `sessionGeneration`; the durable account-stream envelope retains both
+plus `subscriptionId`, including the synthetic `connectionEstablished` marker.
+The legacy `listenKey` adapter below remains
 available only as a compatibility/test fixture and is not wired into the
 Worker.
 

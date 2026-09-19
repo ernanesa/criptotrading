@@ -7,6 +7,7 @@ using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Persistence;
+using CryptoTrading.Reconciliation;
 using Microsoft.Extensions.Options;
 
 namespace CryptoTrading.Worker;
@@ -22,6 +23,8 @@ internal sealed class AccountStreamHostedService(
     IBinanceUserDataStreamClient streamClient,
     IAccountStreamEventStore eventStore,
     IOperationalControl operationalControl,
+    AccountReconciliationService reconciliation,
+    ReconciliationReportWriter reconciliationReportWriter,
     ILogger<AccountStreamHostedService> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -48,6 +51,10 @@ internal sealed class AccountStreamHostedService(
                 {
                     EnterSafeMode($"ACCOUNT_STREAM_{control.EventType.ToUpperInvariant()}");
                 }
+                else if (userEvent is BinanceUserDataStreamControlEvent { EventType: "connectionEstablished" })
+                {
+                    await ReconcileAfterReconnectAsync(stoppingToken).ConfigureAwait(false);
+                }
             }
 
             if (!stoppingToken.IsCancellationRequested)
@@ -65,6 +72,26 @@ internal sealed class AccountStreamHostedService(
             EnterSafeMode("ACCOUNT_STREAM_FAILURE");
             AccountStreamLog.Failed(logger, exception.GetType().Name);
             throw;
+        }
+    }
+
+    private async Task ReconcileAfterReconnectAsync(CancellationToken cancellationToken)
+    {
+        var result = await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+        var reportPath = await reconciliationReportWriter.AppendAsync(new ReconciliationRunReport(
+            Guid.NewGuid().ToString("N"),
+            result.ObservedAtUtc,
+            result.IsHealthy,
+            result.Events.Count,
+            result.Events.OfType<ReconciliationMismatch>().Count(),
+            result.UnknownTradeIds.Count), cancellationToken).ConfigureAwait(false);
+        if (result.IsHealthy)
+        {
+            ReconciliationStartupLog.Healthy(logger, result.CorrelationId.ToString(), result.Events.Count, reportPath);
+        }
+        else
+        {
+            ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTradeIds.Count, reportPath);
         }
     }
 
@@ -118,7 +145,10 @@ internal sealed class AccountStreamHostedService(
             userEvent.EventTimeMilliseconds,
             userEvent.ReceivedAtUtc,
             payload,
-            userEvent is BinanceExecutionReportEvent execution ? execution.Symbol : null);
+            userEvent is BinanceExecutionReportEvent execution ? execution.Symbol : null,
+            userEvent.SessionId,
+            userEvent.SessionGeneration,
+            userEvent.StreamSubscriptionId ?? (userEvent as BinanceUserDataStreamControlEvent)?.SubscriptionId);
     }
 
     private static string BuildDedupeKey(BinanceUserDataEvent userEvent, string payload)

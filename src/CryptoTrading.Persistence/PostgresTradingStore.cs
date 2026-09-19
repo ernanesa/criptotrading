@@ -311,8 +311,10 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         var inserted = await ExecuteScalarAsync(connection, transaction,
             """
             INSERT INTO trading.account_stream_events
-                (event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256)
-            VALUES (@event_id, @event_type, @dedupe_key, @event_time_ms, @received_at, @symbol, @payload, @payload_sha256)
+                (event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256,
+                 session_id, session_generation, subscription_id)
+            VALUES (@event_id, @event_type, @dedupe_key, @event_time_ms, @received_at, @symbol, @payload, @payload_sha256,
+                    @session_id, @session_generation, @subscription_id)
             ON CONFLICT DO NOTHING
             RETURNING event_id;
             """,
@@ -325,6 +327,9 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
                 Parameter("symbol", NpgsqlDbType.Varchar, record.Symbol),
                 Parameter("payload", NpgsqlDbType.Jsonb, record.PayloadJson),
                 Parameter("payload_sha256", NpgsqlDbType.Char, record.PayloadSha256),
+                Parameter("session_id", NpgsqlDbType.Uuid, record.SessionId),
+                Parameter("session_generation", NpgsqlDbType.Bigint, record.SessionGeneration),
+                Parameter("subscription_id", NpgsqlDbType.Bigint, record.SubscriptionId),
             ], cancellationToken).ConfigureAwait(false);
 
         if (inserted is null or DBNull)
@@ -358,7 +363,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             """
-            SELECT event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256
+            SELECT event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256,
+                   session_id, session_generation, subscription_id
             FROM trading.account_stream_events
             WHERE received_at >= @since_utc
             ORDER BY received_at, event_id
@@ -1008,7 +1014,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
     {
         await using var command = new NpgsqlCommand(
             """
-            SELECT event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256
+            SELECT event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256,
+                   session_id, session_generation, subscription_id
             FROM trading.account_stream_events
             WHERE event_id = @event_id OR (event_type = @event_type AND dedupe_key = @dedupe_key)
             ORDER BY event_id
@@ -1177,7 +1184,10 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         reader.GetInt64(3),
         new DateTimeOffset(reader.GetDateTime(4), TimeSpan.Zero),
         reader.GetString(6),
-        reader.IsDBNull(5) ? null : reader.GetString(5));
+        reader.IsDBNull(5) ? null : reader.GetString(5),
+        reader.IsDBNull(8) ? null : reader.GetGuid(8),
+        reader.IsDBNull(9) ? null : reader.GetInt64(9),
+        reader.IsDBNull(10) ? null : reader.GetInt64(10));
 
     private static void EnsureEquivalent(RiskPolicyRow existing, RiskPolicyDocument candidate)
     {
@@ -1208,6 +1218,9 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
             existing.EventTimeMilliseconds != candidate.EventTimeMilliseconds ||
             existing.ReceivedAtUtc.UtcTicks / 10 != candidate.ReceivedAtUtc.UtcTicks / 10 ||
             !string.Equals(existing.Symbol, candidate.Symbol, StringComparison.Ordinal) ||
+            existing.SessionId != candidate.SessionId ||
+            existing.SessionGeneration != candidate.SessionGeneration ||
+            existing.SubscriptionId != candidate.SubscriptionId ||
             !string.Equals(existing.PayloadSha256, candidate.PayloadSha256, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(existing.PayloadJson, candidate.PayloadJson, StringComparison.Ordinal))
         {
