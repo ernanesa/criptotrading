@@ -60,3 +60,6 @@ jobs:
 
       - name: Validate traceability manifest
         run: ./scripts/validate-traceability.sh
+
+      - name: Test traceability validator contract
+        run: ./scripts/test-traceability-validator.sh
