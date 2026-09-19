@@ -20,3 +20,9 @@ O manifesto comprova a consistência das quatro fatias locais fornecidas; não
 evidências do stream são capturadas para comparação. Rebuild de estado após
 restore ainda deve ser seguido por reconciliação read-only contra a exchange,
 e o backup/PITR precisa ser validado separadamente.
+
+`FullStateReconciler.Compare` compara o manifesto pré-restore com o manifesto
+pós-restore sem escrever no banco. Ele verifica o hash canônico, a quantidade
+de entradas aplicadas, o último timestamp do ledger, as contagens de ordens,
+eventos e outbox e a presença das quatro fatias. Qualquer diferença produz
+razões explícitas e `IsEquivalent=false`, mantendo o gate fail-closed.

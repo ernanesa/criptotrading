@@ -87,6 +87,40 @@ public sealed class FullStateReconstructionTests
             FullStateReconstructionInput.Create([entry], [], [], [])));
     }
 
+    [Fact]
+    public void EquivalentManifestsReconcileWithoutMutation()
+    {
+        var input = FullStateReconstructionInput.Create([Entry(1, 10m)], [], [], []);
+        var clock = new FixedTimeProvider(new DateTimeOffset(2026, 9, 19, 12, 1, 0, TimeSpan.Zero));
+        var expected = FullStateReconstructor.Build(input, [External], clock);
+        var actual = FullStateReconstructor.Build(input, [External], clock);
+
+        var result = FullStateReconciler.Compare(expected, actual);
+
+        Assert.True(result.IsEquivalent);
+        Assert.Empty(result.Mismatches);
+        Assert.Equal(expected.ManifestSha256, result.ExpectedManifestSha256);
+        Assert.Equal(actual.ManifestSha256, result.ActualManifestSha256);
+    }
+
+    [Fact]
+    public void ChangedDurableStateIsReportedFailClosed()
+    {
+        var first = FullStateReconstructor.Build(
+            FullStateReconstructionInput.Create([Entry(1, 10m)], [], [], []),
+            [External],
+            new FixedTimeProvider(new DateTimeOffset(2026, 9, 19, 12, 1, 0, TimeSpan.Zero)));
+        var changed = FullStateReconstructor.Build(
+            FullStateReconstructionInput.Create([Entry(1, 11m)], [], [], []),
+            [External],
+            new FixedTimeProvider(new DateTimeOffset(2026, 9, 19, 12, 1, 0, TimeSpan.Zero)));
+
+        var result = FullStateReconciler.Compare(first, changed);
+
+        Assert.False(result.IsEquivalent);
+        Assert.Contains("manifest_sha256", result.Mismatches);
+    }
+
     private static LedgerEntry Entry(int sequence, decimal amount) => new(
         new LedgerEntryId(Guid.Parse($"00000000-0000-0000-0000-{sequence + 1:D12}")),
         CorrelationId.New(), DateTimeOffset.UtcNow.AddMinutes(sequence), "recovery-test", [
