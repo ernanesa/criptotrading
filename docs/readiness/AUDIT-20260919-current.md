@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `410790a`  
+**Commit de código auditado:** `cf89005`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 169 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 190 aprovados, 0 falhas, 0 skips |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
@@ -32,15 +32,19 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - O avaliador local `ShadowDriftEvaluator` calcula divergência, stale e recovery
   de observações redigidas sem qualquer capacidade de submissão de ordem.
 - O soak determinístico local foi executado com 64 observações, divergência
-  sintética, janelas stale e recovery; o relatório está em `artifacts/shadow/`
-  e não substitui o Shadow operacional com dados reais.
+  sintética, janelas stale e recovery; o runner repetiu três janelas, agregou os
+  resumos e falhou fechado para credenciais presentes. O relatório está em
+  `artifacts/shadow/` e não substitui o Shadow operacional com dados reais.
+- O Worker Shadow local persistiu relatório JSONL redigido e publicou alertas
+  deduplicados de divergência, stale e recovery; canais externos ainda não
+  foram configurados.
 
 ## Gates que continuam pendentes
 
 - dataset de mercado real com OOS/walk-forward/sensitivity e critérios
   quantitativos aprovados;
 - soak Shadow com período, volume, regimes, recovery e intervention-rate
-  medidos;
+  medidos em dados reais;
 - execução autenticada read-only contra uma nova chave Testnet, com relatório
   redigido de balances, open orders e trades e reconciliação do ledger;
 - alert delivery real, RPO/RTO medidos e reconstrução completa de estado;
