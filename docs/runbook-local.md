@@ -30,6 +30,19 @@ Para o teste de persistência, usar somente a senha efêmera do script:
 ./scripts/test-postgres-integration.sh
 ```
 
+Para validar o caminho real de inicialização do Worker com a migration atual e
+o sink de auditoria operacional, use o smoke test abaixo. Ele cria um banco
+efêmero, executa o host por alguns segundos em `PAPER/NO_TRADE` e não habilita
+reconciliação, account stream, Binance ou qualquer endpoint mutável:
+
+```bash
+./scripts/test-worker-persistence-startup.sh
+```
+
+O processo é encerrado deliberadamente pelo harness após confirmar
+conectividade e aplicação das migrations. O código de saída `124` do timeout é
+esperado quando o host permanece saudável até o encerramento controlado.
+
 Antes de qualquer probe autenticado, execute o preflight offline. Ele roda a
 ferramenta em um diretório temporário sem `.env`, remove credenciais do
 ambiente, exige `WORKER_NO_TRADE=true`/`PAPER` e comprova que o probe falha
