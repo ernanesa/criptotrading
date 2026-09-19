@@ -17,6 +17,15 @@ de on-call. Uma integração externa deve preservar `environment`, `exchange`,
 `scope`, timestamp UTC, correlation ID, severidade, owner, ação e runbook, sem
 enviar credenciais ou payloads privados.
 
+Existe um `HttpWebhookTradingAlertSink` opt-in para a próxima etapa
+operacional. Ele permanece desabilitado por padrão e somente aceita endpoint
+HTTPS na porta 443, sem `userinfo`, query string ou fragmento, quando o host
+também estiver em uma allowlist explícita. O payload é exclusivamente o
+envelope `TradingAlert`; não são adicionados headers de autenticação, API keys
+ou tokens. Configuração inválida falha na instanciação, e o sink não faz
+chamadas quando desabilitado. Os testes usam `HttpMessageHandler` fake; nenhum
+webhook real faz parte da validação local.
+
 Os instrumentos têm dimensões de baixa cardinalidade. IDs de ordens, chaves, secrets, tokens e payloads de exchange não devem ser adicionados como labels ou propriedades de log. A classe `SecretRedactor` fornece uma proteção explícita para valores sensíveis, mas a regra principal é não registrar credenciais.
 
 ## Validação
