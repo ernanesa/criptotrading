@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `af15fa7`
+**Commit de código auditado:** `18c47cf`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 287 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 290 aprovados, 0 falhas, 0 skips |
+| Benchmark comparison | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — cash e buy-and-hold obrigatórios, fingerprint determinístico e timeline fail-closed |
 | Experiment evidence bundle | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — 3 testes de manifesto, hash, idempotência, redaction e holdout contaminado |
 | Worker persistence startup | `./scripts/test-worker-persistence-startup.sh` | PASS — host real, migrations 010–011 e sink PostgreSQL; `PAPER/NO_TRADE`, sem Binance |
 | Experiment governance | `dotnet test tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj --configuration Release --no-restore` | PASS — 8 testes de preregistration, budget, idempotência e holdout; OOS real continua pendente |
