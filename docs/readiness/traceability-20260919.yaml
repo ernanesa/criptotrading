@@ -18,7 +18,7 @@ items:
     pending: [real-market-oos-dataset, empirical-slippage-latency, execution-sensitivity]
   - id: risk-safe-mode
     capability: RiskPolicy contracts, kill switch, SafeMode, Strategy Health
-    evidence: [src/CryptoTrading.Domain/Risk, src/CryptoTrading.Domain/Orders/OrderContracts.cs, e080792, 8ffb4d8, 7589429]
+    evidence: [src/CryptoTrading.Domain/Risk, src/CryptoTrading.Domain/Orders/OrderContracts.cs, src/CryptoTrading.Shadow/PostReleaseReport.cs, e080792, 8ffb4d8, 7589429]
     validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
     status: pass-code
     pending: [shadow-real-market-drill, approved-thresholds]
@@ -30,7 +30,7 @@ items:
     pending: [authenticated-testnet-run, orders-fills-ledger-rebuild]
   - id: release-readiness
     capability: promotion, canary, release and traceability evidence
-    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md, scripts/validate-readiness.sh, src/CryptoTrading.Observability/HttpWebhookTradingAlertSink.cs, src/CryptoTrading.Worker/Program.cs, src/CryptoTrading.Worker/ReconciliationReportWriter.cs, src/CryptoTrading.Shadow/ShadowOperationalGate.cs, docs/observability-local.md, 544a156, 59c79c2, 3c3a3f6, 04ac8c9, 0e06648, 214d462, d170a3e, ea008ec]
+    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md, scripts/validate-readiness.sh, src/CryptoTrading.Observability/HttpWebhookTradingAlertSink.cs, src/CryptoTrading.Domain/Risk/OperationalControl.cs, src/CryptoTrading.Shadow/PostReleaseReport.cs, src/CryptoTrading.Worker/Program.cs, src/CryptoTrading.Worker/ReconciliationReportWriter.cs, src/CryptoTrading.Shadow/ShadowOperationalGate.cs, docs/observability-local.md, 544a156, 59c79c2, 3c3a3f6, 04ac8c9, 0e06648, 214d462, d170a3e, 33eaf73, ea008ec]
     validation: ./scripts/scan-secrets.sh
     status: no-go
     pending: [real-oos-walk-forward, shadow-soak, production-rpo-rto, alert-delivery, human-approval]
