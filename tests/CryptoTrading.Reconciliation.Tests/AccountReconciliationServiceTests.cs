@@ -1,7 +1,5 @@
 using CryptoTrading.Domain.Accounting;
-using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
-using CryptoTrading.Reconciliation;
 using Xunit;
 
 namespace CryptoTrading.Reconciliation.Tests;
