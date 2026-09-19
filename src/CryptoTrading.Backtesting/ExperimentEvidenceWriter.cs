@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using CryptoTrading.Domain.Research;
 
 namespace CryptoTrading.Backtesting;
 
@@ -74,6 +75,66 @@ public static class ExperimentEvidenceWriter
             SourceVersions = sourceVersions,
             TraceabilityReferences = traceabilityReferences,
         };
+    }
+
+    public static ExperimentEvidenceInput FromExperimentRecord(
+        ExperimentRecord record,
+        WalkForwardEvaluationResult evaluation,
+        string decision,
+        IReadOnlyDictionary<string, string> sourceVersions,
+        IReadOnlyCollection<string> traceabilityReferences)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(evaluation);
+        var preregistration = record.Preregistration;
+        return FromGovernanceState(
+            preregistration,
+            record.TrialCount,
+            record.HoldoutAccessCount,
+            record.HoldoutStatus == HoldoutStatus.Contaminated,
+            evaluation,
+            decision,
+            sourceVersions,
+            traceabilityReferences);
+    }
+
+    public static ExperimentEvidenceInput FromGovernanceState(
+        ExperimentPreregistration preregistration,
+        int trialCount,
+        int holdoutAccessCount,
+        bool holdoutContaminated,
+        WalkForwardEvaluationResult evaluation,
+        string decision,
+        IReadOnlyDictionary<string, string> sourceVersions,
+        IReadOnlyCollection<string> traceabilityReferences)
+    {
+        ArgumentNullException.ThrowIfNull(preregistration);
+        ArgumentNullException.ThrowIfNull(evaluation);
+        if (trialCount < 1 || trialCount > preregistration.TrialBudget)
+        {
+            throw new ArgumentOutOfRangeException(nameof(trialCount), "Persisted trial count must be within the preregistered budget.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegative(holdoutAccessCount);
+
+        if (!string.Equals(evaluation.Dataset.Version, preregistration.DatasetVersion, StringComparison.Ordinal) ||
+            !string.Equals(evaluation.Dataset.ContentHash, preregistration.DatasetHash, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(evaluation.StrategyVersion, preregistration.StrategyVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Walk-forward lineage does not match the experiment preregistration.");
+        }
+
+        return FromWalkForward(
+            preregistration.ExperimentId.Value.ToString("D"),
+            preregistration.PreregistrationSha256,
+            trialCount,
+            preregistration.TrialBudget,
+            holdoutAccessCount,
+            holdoutContaminated,
+            decision,
+            evaluation,
+            sourceVersions,
+            traceabilityReferences);
     }
 
     public static ExperimentEvidenceBundle Write(

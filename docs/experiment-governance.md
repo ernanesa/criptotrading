@@ -41,3 +41,9 @@ janelas (produto de `1 + retorno`) e inclui os fingerprints individuais. A
 factory `ExperimentEvidenceWriter.FromWalkForward` usa esse resumo para
 preencher os benchmarks do manifesto, incluindo `strategy/walk-forward`, sem
 permitir que o chamador monte os retornos manualmente.
+
+`ExperimentEvidenceWriter.FromExperimentRecord` e
+`FromGovernanceState` exigem que versão/hash do dataset e versão da estratégia
+coincidam com a preregistration, além de exigir trial dentro do budget. A
+segunda forma recebe as contagens/estado reconstruídos pelo snapshot
+PostgreSQL, sem acoplar o writer à camada de persistência.
