@@ -26,12 +26,13 @@ internal sealed class ShadowDrillHostedService(
 
         cancellationToken.ThrowIfCancellationRequested();
         var symbol = new Symbol("BTCUSDT");
+        var start = DateTimeOffset.UtcNow.AddSeconds(1);
         var bars = new[]
         {
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch, 100m),
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(1), 90m),
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(2), 80m),
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(3), 120m),
+            new CloseBar(symbol, start, 100m),
+            new CloseBar(symbol, start.AddMinutes(1), 90m),
+            new CloseBar(symbol, start.AddMinutes(2), 80m),
+            new CloseBar(symbol, start.AddMinutes(3), 120m),
         };
         var strategy = new TrendFollowingStrategy(
             new TrendFollowingParameters("worker-shadow-drill", "1.0.0", symbol, 2, 3, 0m, 0m));

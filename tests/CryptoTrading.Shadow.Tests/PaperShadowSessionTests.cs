@@ -46,4 +46,22 @@ public sealed class PaperShadowSessionTests
         Assert.Equal(1, result.RecoveryCount);
         Assert.Equal(0, result.DivergenceCount);
     }
+
+    [Fact]
+    public void AppliesPaperFillWhenClockAndBarWindowAreAligned()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var start = DateTimeOffset.UtcNow.AddSeconds(1);
+        var bars = new[]
+        {
+            new CloseBar(symbol, start, 100m),
+            new CloseBar(symbol, start.AddMinutes(1), 90m),
+            new CloseBar(symbol, start.AddMinutes(2), 80m),
+            new CloseBar(symbol, start.AddMinutes(3), 120m),
+        };
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+        var result = new PaperShadowSession(strategy, new PaperExchange()).Run(bars);
+
+        Assert.Equal(0, result.DivergenceCount);
+    }
 }
