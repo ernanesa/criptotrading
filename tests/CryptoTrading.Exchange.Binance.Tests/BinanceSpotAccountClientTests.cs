@@ -176,6 +176,25 @@ public sealed class BinanceSpotAccountClientTests
         Assert.Throws<InvalidOperationException>(() => new BinanceSpotAccountClient(httpClient, options));
     }
 
+    [Theory]
+    [InlineData("https://testnet.binance.vision:8443/api/")]
+    [InlineData("https://user@testnet.binance.vision/api/")]
+    public void AuthenticatedOptionsRejectEndpointPortAndUserInfo(
+        string endpoint)
+    {
+        var options = new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri(endpoint),
+            ApiKey = "key",
+            ApiSecret = "secret"
+        };
+
+        using var handler = new RecordingHandler(("time", "{}"));
+        using var httpClient = new HttpClient(handler) { BaseAddress = options.RestBaseAddress };
+
+        Assert.Throws<InvalidOperationException>(() => new BinanceSpotAccountClient(httpClient, options));
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test handler owns the HttpClient lifetime for the duration of each test.")]
     private static BinanceSpotAccountClient CreateClient(RecordingHandler handler)
     {

@@ -19,7 +19,12 @@ if (!string.Equals(configuration["TRADING_ENVIRONMENT"], "TESTNET", StringCompar
 var restBaseUrl = configuration["BINANCE_REST_BASE_URL"];
 if (!Uri.TryCreate(restBaseUrl, UriKind.Absolute, out var restUri) ||
     restUri.Scheme != Uri.UriSchemeHttps ||
-    !string.Equals(restUri.Host, "testnet.binance.vision", StringComparison.OrdinalIgnoreCase))
+    restUri.Port != 443 ||
+    !string.IsNullOrEmpty(restUri.UserInfo) ||
+    !string.Equals(restUri.Host, "testnet.binance.vision", StringComparison.OrdinalIgnoreCase) ||
+    !string.Equals(restUri.AbsolutePath.Trim('/'), "api", StringComparison.OrdinalIgnoreCase) ||
+    !string.IsNullOrEmpty(restUri.Query) ||
+    !string.IsNullOrEmpty(restUri.Fragment))
 {
     return Fail("BINANCE_REST_BASE_URL must be the HTTPS Spot Testnet endpoint.");
 }
@@ -36,7 +41,11 @@ if (bool.TryParse(configuration["BINANCE_WITHDRAWALS_ENABLED"], out var withdraw
     return Fail("BINANCE_WITHDRAWALS_ENABLED must remain false.");
 }
 
-var symbol = configuration["BINANCE_PROBE_SYMBOL"] ?? "BTCUSDT";
+var configuredSymbol = configuration["BINANCE_PROBE_SYMBOL"] ?? "BTCUSDT";
+if (!TryNormalizeSymbol(configuredSymbol, out var symbol))
+{
+    return Fail("BINANCE_PROBE_SYMBOL must contain only 2-20 ASCII letters or digits.");
+}
 var options = new BinanceAuthenticatedClientOptions
 {
     Environment = BinanceEnvironment.Testnet,
@@ -78,4 +87,10 @@ static int Fail(string message)
 {
     Console.Error.WriteLine($"Read-only probe refused: {message}");
     return 2;
+}
+
+static bool TryNormalizeSymbol(string value, out string normalized)
+{
+    normalized = value.Trim().ToUpperInvariant();
+    return normalized.Length is >= 2 and <= 20 && normalized.All(char.IsAsciiLetterOrDigit);
 }

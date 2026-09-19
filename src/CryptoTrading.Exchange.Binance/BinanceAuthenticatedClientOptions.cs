@@ -39,6 +39,8 @@ public sealed class BinanceAuthenticatedClientOptions
         if (!address.IsAbsoluteUri ||
             address.Scheme != Uri.UriSchemeHttps ||
             !string.Equals(address.Host, expectedHost, StringComparison.OrdinalIgnoreCase) ||
+            address.Port != 443 ||
+            !string.IsNullOrEmpty(address.UserInfo) ||
             !string.Equals(address.AbsolutePath.Trim('/'), "api", StringComparison.OrdinalIgnoreCase) ||
             !string.IsNullOrEmpty(address.Query) ||
             !string.IsNullOrEmpty(address.Fragment))
