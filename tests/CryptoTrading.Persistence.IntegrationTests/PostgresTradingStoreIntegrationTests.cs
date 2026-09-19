@@ -314,4 +314,58 @@ public sealed class PostgresTradingStoreIntegrationTests
             record.SessionId, record.SessionGeneration, record.SubscriptionId);
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendAccountStreamEventAsync(conflicting));
     }
+
+    [Fact]
+    public async Task ReplaysOpenOrderProjectionAcrossStoreRestartAndRetainsRemovalState()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        var clientOrderId = "r-" + Guid.NewGuid().ToString("N");
+        var createdAtUtc = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+        var initial = new LocalOpenOrderRecord(
+            "BTCUSDT",
+            7_000_000_001,
+            clientOrderId,
+            "NEW",
+            createdAtUtc);
+        var updated = initial with
+        {
+            Status = "PARTIALLY_FILLED",
+            UpdatedAtUtc = createdAtUtc.AddSeconds(1),
+        };
+
+        await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
+        {
+            await firstProcess.ApplyMigrationsAsync();
+            await firstProcess.UpsertOpenOrderAsync(initial);
+            await firstProcess.UpsertOpenOrderAsync(initial);
+            await firstProcess.UpsertOpenOrderAsync(updated);
+        }
+
+        // A new store instance represents a worker restart. The projection is
+        // replayable: only the latest active identity/status is visible.
+        await using (var restartedProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
+        {
+            var replayed = Assert.Single(await restartedProcess.ReadOpenOrdersAsync());
+            Assert.Equal(updated, replayed);
+
+            await restartedProcess.RemoveOpenOrderAsync(clientOrderId);
+        }
+
+        await using var verificationProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        Assert.Empty(await verificationProcess.ReadOpenOrdersAsync());
+
+        // A later authoritative open-order snapshot may recreate the identity;
+        // this verifies that removal is a projection state transition, not a
+        // destructive loss of the ability to replay the order.
+        await verificationProcess.UpsertOpenOrderAsync(updated);
+        var replayedAfterRemoval = Assert.Single(await verificationProcess.ReadOpenOrdersAsync());
+        Assert.Equal(updated, replayedAfterRemoval);
+        await verificationProcess.RemoveOpenOrderAsync(clientOrderId);
+    }
 }
