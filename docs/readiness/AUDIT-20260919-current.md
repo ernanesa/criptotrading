@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `098d276`
+**Commit de código auditado:** `b758b58`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -24,7 +24,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | API operational status | `dotnet run --configuration Release --no-build --no-launch-profile` + `GET /operational/status` | PASS — estado process-local read-only; `mutatingEndpointsEnabled=false`; nenhuma chamada à Binance |
 | RiskPolicy registry | `./scripts/test-postgres-integration.sh` | PASS — migration 006, hash/replay idempotente, aprovação segregada, ativação e supersession; 5 testes PostgreSQL |
 | Account stream persistence | `./scripts/test-postgres-integration.sh` | PASS — migrations 007–008, JSON/hash canonicalizado, dedupe idempotente, identidade de sessão e leitura por janela; 6 testes PostgreSQL |
-| Modern account stream | `dotnet test` Binance + Worker | PASS — HMAC subscription ACK, parser de controles, reconnect/session identity, reconciliação pós-reconnect e gates SafeMode; 49 + 23 testes |
+| Modern account stream | `dotnet test` Binance + Worker | PASS — HMAC subscription ACK, parser de controles, reconnect/session identity, rotação preventiva, clock drift e reconciliação pós-reconnect; 50 + 23 testes |
 
 ## O que estes gates comprovam
 
