@@ -10,6 +10,9 @@ postgres_user="cryptotrading"
 postgres_port=$((55000 + ($$ % 1000)))
 volume_name="cryptotrading-backup-$$"
 backup_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.dump")"
+report_dir="$repo_root/artifacts/recovery"
+run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+report_file="$report_dir/postgres-rpo-rto-$run_stamp-$$.md"
 password="$(openssl rand -hex 32)"
 compose=(docker compose --project-name "$compose_project" --file "$repo_root/compose.yaml")
 
@@ -18,6 +21,12 @@ cleanup() {
     rm -f -- "$backup_file"
 }
 trap cleanup EXIT
+
+mkdir -p -- "$report_dir"
+umask 077
+
+now_ns() { date +%s%N; }
+elapsed_ms() { printf '%s' "$(( ($2 - $1) / 1000000 ))"; }
 
 export POSTGRES_DB="$postgres_db"
 export POSTGRES_USER="$postgres_user"
@@ -39,16 +48,45 @@ done
 
 # Create a non-sensitive marker, dump it, restore into a second database and
 # verify the row. The generated password never appears in command arguments.
+drill_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" \
     -c 'CREATE TABLE backup_drill_marker (id integer PRIMARY KEY, status text NOT NULL);' \
     -c "INSERT INTO backup_drill_marker VALUES (1, 'ok');" >/dev/null
+backup_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_dump -U "$postgres_user" -d "$postgres_db" --format=custom > "$backup_file"
+backup_finished_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres createdb -U "$postgres_user" cryptotrading_restore
+restore_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_restore -U "$postgres_user" --dbname=cryptotrading_restore < "$backup_file"
+restore_finished_ns="$(now_ns)"
+verify_started_ns="$(now_ns)"
 restored_status="$("${compose[@]}" exec -T postgres psql -At -U "$postgres_user" -d cryptotrading_restore -c 'SELECT status FROM backup_drill_marker WHERE id = 1;')"
+verify_finished_ns="$(now_ns)"
 if [[ "${restored_status//$'\r'/}" != "ok" ]]; then
     echo "Backup/restore verification failed." >&2
     exit 1
 fi
 
-echo "PostgreSQL backup/restore drill passed; only ephemeral resources were removed."
+drill_finished_ns="$(now_ns)"
+backup_ms="$(elapsed_ms "$backup_started_ns" "$backup_finished_ns")"
+restore_ms="$(elapsed_ms "$restore_started_ns" "$restore_finished_ns")"
+verify_ms="$(elapsed_ms "$verify_started_ns" "$verify_finished_ns")"
+total_ms="$(elapsed_ms "$drill_started_ns" "$drill_finished_ns")"
+backup_bytes="$(wc -c < "$backup_file" | tr -d '[:space:]')"
+
+cat > "$report_file" <<EOF
+# PostgreSQL RPO/RTO drill — $run_stamp
+
+- Scope: ephemeral local PostgreSQL backup/restore only.
+- Environment: local Docker Compose; no Binance credentials, exchange calls, or application volume targeted.
+- Backup artifact size: ${backup_bytes} bytes.
+- Backup duration: ${backup_ms} ms.
+- Restore duration (RTO probe): ${restore_ms} ms.
+- Verification duration: ${verify_ms} ms.
+- Total drill duration: ${total_ms} ms.
+- RPO probe: 0 rows lost for the committed marker transaction; this is a deterministic drill result, not a production RPO guarantee.
+- Verification: restored marker status was \`ok\`.
+- Cleanup: ephemeral containers, volume, restore database, and dump file were removed.
+EOF
+chmod 600 "$report_file"
+echo "PostgreSQL backup/restore drill passed; RPO/RTO report: $report_file"
