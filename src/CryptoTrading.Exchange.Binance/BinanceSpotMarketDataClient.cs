@@ -122,6 +122,9 @@ public interface IBinanceWebSocketTransport : IAsyncDisposable
 {
     Task ConnectAsync(Uri uri, CancellationToken cancellationToken);
 
+    ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This transport is receive-only.");
+
     IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(CancellationToken cancellationToken);
 }
 
@@ -130,6 +133,9 @@ internal sealed class ClientWebSocketTransport : IBinanceWebSocketTransport
     private readonly ClientWebSocket client = new();
 
     public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => client.ConnectAsync(uri, cancellationToken);
+
+    public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) =>
+        client.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
 
     public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)

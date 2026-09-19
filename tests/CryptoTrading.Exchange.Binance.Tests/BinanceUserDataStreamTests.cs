@@ -1,5 +1,7 @@
 using System.Text;
 using System.Net;
+using System.Text.Json;
+using System.Security.Cryptography;
 using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
@@ -101,6 +103,46 @@ public sealed class BinanceUserDataStreamTests
             }));
     }
 
+    [Fact]
+    public void BuildsModernHmacSubscriptionWithSortedSignaturePayload()
+    {
+        var request = BinanceUserDataStreamApiClient.BuildSubscriptionRequest(
+            "api-key", "secret", 1_700_000_000_000, 5_000, Guid.Parse("11111111-1111-1111-1111-111111111111"));
+        using var document = JsonDocument.Parse(request);
+        var parameters = document.RootElement.GetProperty("params");
+        var expectedPayload = "apiKey=api-key&recvWindow=5000&timestamp=1700000000000";
+        var expectedSignature = Convert.ToHexString(HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes("secret"), Encoding.UTF8.GetBytes(expectedPayload))).ToUpperInvariant();
+        Assert.Equal("userDataStream.subscribe.signature", document.RootElement.GetProperty("method").GetString());
+        Assert.Equal(expectedSignature, parameters.GetProperty("signature").GetString()!.ToUpperInvariant());
+    }
+
+    [Fact]
+    public async Task ModernApiClientConsumesAcknowledgementAndEmitsNestedEvents()
+    {
+        using var transport = new ModernFakeTransport();
+        var client = new BinanceUserDataStreamApiClient(
+            new BinanceUserDataStreamApiOptions
+            {
+                ApiKey = "api-key",
+                ApiSecret = "secret",
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectAttempts = 1
+            },
+            () => transport);
+
+        using var cancellation = new CancellationTokenSource();
+        await using var enumerator = client.ReadAsync("ignored-by-modern-api", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+        Assert.True(await enumerator.MoveNextAsync());
+        var execution = Assert.IsType<BinanceExecutionReportEvent>(enumerator.Current);
+        Assert.Equal(99, execution.OrderId);
+        Assert.True(await enumerator.MoveNextAsync());
+        var shutdown = Assert.IsType<BinanceUserDataStreamControlEvent>(enumerator.Current);
+        Assert.Equal("serverShutdown", shutdown.EventType);
+        await cancellation.CancelAsync();
+    }
+
     private sealed class FakeTransport(params string[] payloads) : IBinanceWebSocketTransport, IDisposable
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -121,6 +163,38 @@ public sealed class BinanceUserDataStreamTests
         public void Dispose()
         {
         }
+    }
+
+    private sealed class ModernFakeTransport : IBinanceWebSocketTransport, IDisposable
+    {
+        private readonly List<ReadOnlyMemory<byte>> payloads = [];
+
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        {
+            using var request = JsonDocument.Parse(payload.ToArray());
+            var id = request.RootElement.GetProperty("id").GetGuid();
+            payloads.Add(Encoding.UTF8.GetBytes($"{{\"id\":\"{id}\",\"status\":200,\"result\":{{\"subscriptionId\":7}}}}"));
+            payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":99,\"t\":8,\"c\":\"client-99\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\"}}"));
+            payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"serverShutdown\",\"E\":1720000000124}}"));
+            return ValueTask.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var payload in payloads)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return payload;
+                await Task.Yield();
+            }
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public void Dispose() { }
     }
 
     private sealed class LifecycleHandler : HttpMessageHandler
