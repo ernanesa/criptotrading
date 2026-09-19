@@ -1,3 +1,7 @@
+using System.Security.Cryptography;
+using System.Text;
+using CryptoTrading.Backtesting.Strategies;
+
 namespace CryptoTrading.Backtesting;
 
 /// <summary>One redacted observation emitted by a local Shadow/Paper comparison.</summary>
@@ -69,5 +73,69 @@ public static class ShadowDriftEvaluator
             recoveryCount,
             denominator == 0 ? 0m : (decimal)divergenceCount / denominator,
             denominator == 0 ? 0m : (decimal)staleCount / denominator);
+    }
+}
+
+/// <summary>Redacted execution-side observation captured from Paper or another local simulator.</summary>
+public sealed record ShadowExecutionObservation(
+    long Sequence,
+    DateTimeOffset EventTimeUtc,
+    string ObservedDecisionFingerprint,
+    bool IsStale,
+    bool Recovered);
+
+/// <summary>
+/// Connects strategy decisions to execution observations without giving the
+/// runner any exchange command or network capability.
+/// </summary>
+public static class ShadowRunRunner
+{
+    public static ShadowRunResult Run(
+        IReadOnlyList<TrendFollowingDecision> decisions,
+        IReadOnlyList<ShadowExecutionObservation> observations)
+    {
+        ArgumentNullException.ThrowIfNull(decisions);
+        ArgumentNullException.ThrowIfNull(observations);
+        if (decisions.Count != observations.Count)
+        {
+            throw new ArgumentException("Each strategy decision must have exactly one execution observation.", nameof(observations));
+        }
+
+        var comparison = new ShadowObservation[decisions.Count];
+        for (var index = 0; index < decisions.Count; index++)
+        {
+            var decision = decisions[index];
+            var observation = observations[index];
+            if (observation.Sequence != decision.BarIndex || observation.EventTimeUtc != decision.CloseTimeUtc)
+            {
+                throw new InvalidOperationException("Shadow observations must align with the decision bar index and UTC close time.");
+            }
+
+            comparison[index] = new(
+                observation.Sequence,
+                observation.EventTimeUtc,
+                Fingerprint(decision),
+                observation.ObservedDecisionFingerprint,
+                observation.IsStale,
+                observation.Recovered);
+        }
+
+        return ShadowDriftEvaluator.Evaluate(comparison);
+    }
+
+    public static string Fingerprint(TrendFollowingDecision decision)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        var canonical = string.Join(
+            '|',
+            decision.Symbol.Value,
+            decision.CloseTimeUtc.ToString("O"),
+            decision.BarIndex,
+            decision.Signal,
+            decision.Reason,
+            decision.StrategyId,
+            decision.StrategyVersion,
+            decision.ConfigurationFingerprint);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 }

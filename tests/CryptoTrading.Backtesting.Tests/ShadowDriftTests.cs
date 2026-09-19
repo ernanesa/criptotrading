@@ -1,9 +1,13 @@
+using CryptoTrading.Backtesting.Strategies;
+using CryptoTrading.Domain.Primitives;
 using Xunit;
 
 namespace CryptoTrading.Backtesting.Tests;
 
 public sealed class ShadowDriftTests
 {
+    private static readonly decimal[] ShadowPrices = [100m, 90m, 80m, 120m];
+
     [Fact]
     public void ComputesDivergenceStaleAndRecoveryRates()
     {
@@ -55,6 +59,50 @@ public sealed class ShadowDriftTests
             false);
 
         Assert.Throws<ArgumentException>(() => ShadowDriftEvaluator.Evaluate([observation]));
+    }
+
+    [Fact]
+    public void RunnerAlignsStrategyDecisionsWithExecutionObservations()
+    {
+        var bars = Enumerable.Range(0, 4)
+            .Select(index => new CloseBar(
+                new Symbol("BTCUSDT"),
+                DateTimeOffset.UnixEpoch.AddMinutes(index),
+                ShadowPrices[index]))
+            .ToArray();
+        var parameters = new TrendFollowingParameters("shadow", "1", new Symbol("BTCUSDT"), 2, 3, 0m, 0m);
+        var decisions = new TrendFollowingStrategy(parameters).Evaluate(bars);
+        var observations = decisions.Select(decision => new ShadowExecutionObservation(
+            decision.BarIndex,
+            decision.CloseTimeUtc,
+            ShadowRunRunner.Fingerprint(decision),
+            IsStale: decision.BarIndex == 2,
+            Recovered: decision.BarIndex == 3)).ToArray();
+
+        var result = ShadowRunRunner.Run(decisions, observations);
+
+        Assert.Equal(4, result.ObservationCount);
+        Assert.Equal(0, result.DivergenceCount);
+        Assert.Equal(1, result.StaleCount);
+        Assert.Equal(1, result.RecoveryCount);
+    }
+
+    [Fact]
+    public void RunnerRejectsMisalignedExecutionObservation()
+    {
+        var decisions = new TrendFollowingStrategy(
+                new TrendFollowingParameters("shadow", "1", new Symbol("BTCUSDT"), 2, 3, 0m, 0m))
+            .Evaluate([
+                new(new Symbol("BTCUSDT"), DateTimeOffset.UnixEpoch, 100m),
+                new(new Symbol("BTCUSDT"), DateTimeOffset.UnixEpoch.AddMinutes(1), 90m),
+                new(new Symbol("BTCUSDT"), DateTimeOffset.UnixEpoch.AddMinutes(2), 80m),
+                new(new Symbol("BTCUSDT"), DateTimeOffset.UnixEpoch.AddMinutes(3), 120m),
+            ]);
+        var decision = decisions[0];
+
+        Assert.Throws<InvalidOperationException>(() => ShadowRunRunner.Run(
+            [decision],
+            [new ShadowExecutionObservation(9, decision.CloseTimeUtc, "fingerprint", false, false)]));
     }
 
     private static ShadowObservation Observation(
