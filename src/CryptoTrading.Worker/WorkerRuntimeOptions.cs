@@ -1,6 +1,8 @@
 #pragma warning disable CA1515 // Options are public to support host-level composition and contract tests.
+#pragma warning disable CA1056 // Environment-bound configuration is kept as text until fail-closed validation at startup.
 
 using Microsoft.Extensions.Options;
+using CryptoTrading.Observability;
 
 namespace CryptoTrading.Worker;
 
@@ -54,6 +56,14 @@ public sealed class WorkerRuntimeOptions
 
     /// <summary>Optional local JSONL alert directory; blank keeps the in-memory sink.</summary>
     public string AlertFileDirectory { get; set; } = string.Empty;
+
+    /// <summary>Optional HTTPS webhook URL; blank keeps the local sink.</summary>
+    public string AlertWebhookUrl { get; set; } = string.Empty;
+
+    /// <summary>Comma-separated concrete hosts allowed for the alert webhook.</summary>
+    public string AlertWebhookAllowedHosts { get; set; } = string.Empty;
+
+    public int AlertWebhookTimeoutSeconds { get; set; } = 5;
 
     public void Validate()
     {
@@ -175,6 +185,52 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_SHADOW_REPORT_DIRECTORY is required when WORKER_SHADOW_ENABLED=true."]);
+        }
+
+        if (AlertWebhookTimeoutSeconds is < 1 or > 120)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ALERT_WEBHOOK_TIMEOUT_SECONDS must be between 1 and 120."]);
+        }
+
+        if (string.IsNullOrWhiteSpace(AlertWebhookUrl) && !string.IsNullOrWhiteSpace(AlertWebhookAllowedHosts))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ALERT_WEBHOOK_ALLOWED_HOSTS requires WORKER_ALERT_WEBHOOK_URL."]);
+        }
+
+        if (!string.IsNullOrWhiteSpace(AlertWebhookUrl))
+        {
+            if (string.IsNullOrWhiteSpace(AlertWebhookAllowedHosts))
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_ALERT_WEBHOOK_URL requires WORKER_ALERT_WEBHOOK_ALLOWED_HOSTS."]);
+            }
+
+            if (!Uri.TryCreate(AlertWebhookUrl.Trim(), UriKind.Absolute, out var endpoint))
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_ALERT_WEBHOOK_URL must be an absolute HTTPS URL."]);
+            }
+
+            var allowedHosts = AlertWebhookAllowedHosts
+                .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                new TradingAlertWebhookOptions
+                {
+                    Enabled = true,
+                    Endpoint = endpoint,
+                    AllowedHosts = allowedHosts,
+                    RequestTimeout = TimeSpan.FromSeconds(AlertWebhookTimeoutSeconds)
+                }.Validate();
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_ALERT_WEBHOOK_URL/ALLOWED_HOSTS configuration is unsafe or invalid."]);
+            }
         }
     }
 }

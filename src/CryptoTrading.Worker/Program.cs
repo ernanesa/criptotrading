@@ -45,6 +45,9 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ReconciliationIntervalMinutes = builder.Configuration.GetValue("WORKER_RECONCILIATION_INTERVAL_MINUTES", 15);
         options.ReconciliationReportDirectory = builder.Configuration["WORKER_RECONCILIATION_REPORT_DIRECTORY"] ?? "artifacts/reconciliation";
         options.AlertFileDirectory = builder.Configuration["WORKER_ALERT_FILE_DIRECTORY"] ?? string.Empty;
+        options.AlertWebhookUrl = builder.Configuration["WORKER_ALERT_WEBHOOK_URL"] ?? string.Empty;
+        options.AlertWebhookAllowedHosts = builder.Configuration["WORKER_ALERT_WEBHOOK_ALLOWED_HOSTS"] ?? string.Empty;
+        options.AlertWebhookTimeoutSeconds = builder.Configuration.GetValue("WORKER_ALERT_WEBHOOK_TIMEOUT_SECONDS", 5);
     })
     .Validate(static options =>
     {
@@ -63,9 +66,29 @@ builder.Services.AddSingleton<IPaperExchange, PaperExchange>();
 builder.Services.AddSingleton<CryptoTrading.Observability.ITradingAlertSink>(serviceProvider =>
 {
     var options = serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value;
-    CryptoTrading.Observability.ITradingAlertSink sink = string.IsNullOrWhiteSpace(options.AlertFileDirectory)
-        ? new CryptoTrading.Observability.InMemoryTradingAlertSink()
-        : new CryptoTrading.Observability.JsonlTradingAlertSink(options.AlertFileDirectory);
+    CryptoTrading.Observability.ITradingAlertSink sink;
+    if (!string.IsNullOrWhiteSpace(options.AlertWebhookUrl))
+    {
+        var endpoint = new Uri(options.AlertWebhookUrl.Trim(), UriKind.Absolute);
+        var allowedHosts = options.AlertWebhookAllowedHosts
+            .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        sink = new CryptoTrading.Observability.HttpWebhookTradingAlertSink(
+            new HttpClient { Timeout = TimeSpan.FromSeconds(options.AlertWebhookTimeoutSeconds) },
+            new CryptoTrading.Observability.TradingAlertWebhookOptions
+            {
+                Enabled = true,
+                Endpoint = endpoint,
+                AllowedHosts = allowedHosts,
+                RequestTimeout = TimeSpan.FromSeconds(options.AlertWebhookTimeoutSeconds)
+            });
+    }
+    else
+    {
+        sink = string.IsNullOrWhiteSpace(options.AlertFileDirectory)
+            ? new CryptoTrading.Observability.InMemoryTradingAlertSink()
+            : new CryptoTrading.Observability.JsonlTradingAlertSink(options.AlertFileDirectory);
+    }
     return new CryptoTrading.Observability.RetryingTradingAlertSink(sink);
 });
 builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher>();

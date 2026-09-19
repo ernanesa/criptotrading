@@ -63,7 +63,7 @@ public sealed record TradingAlertWebhookOptions
 /// Sends only the redacted operational alert envelope. It never adds API keys,
 /// authorization headers, or query-string tokens and is disabled by default.
 /// </summary>
-public sealed class HttpWebhookTradingAlertSink : ITradingAlertSink
+public sealed class HttpWebhookTradingAlertSink : ITradingAlertSink, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient httpClient;
@@ -104,4 +104,6 @@ public sealed class HttpWebhookTradingAlertSink : ITradingAlertSink
                 response.StatusCode);
         }
     }
+
+    public void Dispose() => httpClient.Dispose();
 }

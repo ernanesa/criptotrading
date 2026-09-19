@@ -26,6 +26,13 @@ ou tokens. Configuração inválida falha na instanciação, e o sink não faz
 chamadas quando desabilitado. Os testes usam `HttpMessageHandler` fake; nenhum
 webhook real faz parte da validação local.
 
+No Worker, `WORKER_ALERT_WEBHOOK_URL` vazio mantém o sink em memória ou JSONL.
+Quando preenchido, `WORKER_ALERT_WEBHOOK_ALLOWED_HOSTS` é obrigatório e o
+Worker falha no startup se o endpoint não for HTTPS/443, contiver userinfo,
+query/fragmento ou não estiver na allowlist. O timeout é limitado a 120
+segundos. Essa configuração apenas habilita o adaptador; a entrega real e o
+teste de on-call continuam exigindo um endpoint operacional aprovado.
+
 Os instrumentos têm dimensões de baixa cardinalidade. IDs de ordens, chaves, secrets, tokens e payloads de exchange não devem ser adicionados como labels ou propriedades de log. A classe `SecretRedactor` fornece uma proteção explícita para valores sensíveis, mas a regra principal é não registrar credenciais.
 
 ## Validação
