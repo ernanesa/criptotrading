@@ -1,0 +1,207 @@
+using System.Globalization;
+using System.Text.Json;
+
+namespace CryptoTrading.Exchange.Binance;
+
+/// <summary>
+/// Validates authenticated Binance payloads at the trust boundary.
+/// A syntactically valid JSON response is not considered trustworthy until all
+/// required fields and non-negative numeric invariants have been checked.
+/// </summary>
+internal static class BinanceAuthenticatedResponseValidator
+{
+    public static BinanceAccountSnapshot Validate(BinanceAccountSnapshot? account)
+    {
+        if (account is null)
+        {
+            throw Invalid("account response cannot be null");
+        }
+
+        RequireText(account.AccountType, "accountType");
+        RequireNonNegative(account.MakerCommission, "makerCommission");
+        RequireNonNegative(account.TakerCommission, "takerCommission");
+        RequireNonNegative(account.BuyerCommission, "buyerCommission");
+        RequireNonNegative(account.SellerCommission, "sellerCommission");
+        RequireNonNegative(account.UpdateTime, "updateTime");
+        if (account.Balances is null)
+        {
+            throw Invalid("balances is required");
+        }
+
+        var assets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var balance in account.Balances)
+        {
+            Validate(balance);
+            if (!assets.Add(NormalizeAsset(balance.Asset, "asset")))
+            {
+                throw Invalid("balances cannot contain duplicate assets");
+            }
+        }
+
+        if (account.Permissions is not null)
+        {
+            foreach (var permission in account.Permissions)
+            {
+                RequireText(permission, "permission");
+            }
+        }
+
+        return account;
+    }
+
+    public static BinanceBalance Validate(BinanceBalance? balance)
+    {
+        if (balance is null)
+        {
+            throw Invalid("balance cannot be null");
+        }
+
+        NormalizeAsset(balance.Asset, "asset");
+        ParseNonNegativeDecimal(balance.Free, "free");
+        ParseNonNegativeDecimal(balance.Locked, "locked");
+        return balance;
+    }
+
+    public static IReadOnlyList<BinanceOpenOrder> Validate(IReadOnlyList<BinanceOpenOrder>? orders)
+    {
+        if (orders is null)
+        {
+            throw Invalid("open orders response cannot be null");
+        }
+
+        var orderIds = new HashSet<long>();
+        foreach (var order in orders)
+        {
+            Validate(order);
+            if (!orderIds.Add(order.OrderId))
+            {
+                throw Invalid("open orders cannot contain duplicate orderId values");
+            }
+        }
+
+        return orders;
+    }
+
+    public static BinanceOpenOrder Validate(BinanceOpenOrder? order)
+    {
+        if (order is null)
+        {
+            throw Invalid("open order cannot be null");
+        }
+
+        NormalizeSymbol(order.Symbol, "symbol");
+        RequireNonNegative(order.OrderId, "orderId");
+        RequireText(order.ClientOrderId, "clientOrderId");
+        var originalQuantity = ParseNonNegativeDecimal(order.OriginalQuantity, "origQty");
+        var executedQuantity = ParseNonNegativeDecimal(order.ExecutedQuantity, "executedQty");
+        ParseNonNegativeDecimal(order.Price, "price");
+        ParseNonNegativeDecimal(order.CumulativeQuoteQuantity, "cummulativeQuoteQty");
+        if (executedQuantity > originalQuantity)
+        {
+            throw Invalid("executedQty cannot exceed origQty");
+        }
+
+        RequireText(order.Status, "status");
+        RequireText(order.Type, "type");
+        RequireText(order.Side, "side");
+        RequireNonNegative(order.Time, "time");
+        RequireNonNegative(order.UpdateTime, "updateTime");
+        if (order.TimeInForce is not null)
+        {
+            RequireText(order.TimeInForce, "timeInForce");
+        }
+
+        return order;
+    }
+
+    public static IReadOnlyList<BinanceTrade> Validate(IReadOnlyList<BinanceTrade>? trades)
+    {
+        if (trades is null)
+        {
+            throw Invalid("trades response cannot be null");
+        }
+
+        var tradeIds = new HashSet<long>();
+        foreach (var trade in trades)
+        {
+            Validate(trade);
+            if (!tradeIds.Add(trade.Id))
+            {
+                throw Invalid("trades cannot contain duplicate id values");
+            }
+        }
+
+        return trades;
+    }
+
+    public static BinanceTrade Validate(BinanceTrade? trade)
+    {
+        if (trade is null)
+        {
+            throw Invalid("trade cannot be null");
+        }
+
+        NormalizeSymbol(trade.Symbol, "symbol");
+        RequireNonNegative(trade.Id, "id");
+        RequireNonNegative(trade.OrderId, "orderId");
+        ParseNonNegativeDecimal(trade.Price, "price");
+        ParseNonNegativeDecimal(trade.Quantity, "qty");
+        ParseNonNegativeDecimal(trade.QuoteQuantity, "quoteQty");
+        ParseNonNegativeDecimal(trade.Commission, "commission");
+        NormalizeAsset(trade.CommissionAsset, "commissionAsset");
+        RequireNonNegative(trade.Time, "time");
+        return trade;
+    }
+
+    internal static string NormalizeSymbol(string? value, string fieldName)
+    {
+        var normalized = RequireText(value, fieldName).ToUpperInvariant();
+        if (normalized.Length > 20 || normalized.Any(static character => !char.IsAsciiLetterOrDigit(character)))
+        {
+            throw Invalid($"{fieldName} must contain only ASCII letters and digits and be at most 20 characters");
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeAsset(string? value, string fieldName) => NormalizeSymbol(value, fieldName);
+
+    private static decimal ParseNonNegativeDecimal(string? value, string fieldName)
+    {
+        var text = RequireText(value, fieldName);
+        if (!decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) || parsed < 0m)
+        {
+            throw Invalid($"{fieldName} must be a non-negative invariant decimal");
+        }
+
+        return parsed;
+    }
+
+    private static string RequireText(string? value, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw Invalid($"{fieldName} is required");
+        }
+
+        return value.Trim();
+    }
+
+    private static void RequireNonNegative(long value, string fieldName)
+    {
+        if (value < 0)
+        {
+            throw Invalid($"{fieldName} cannot be negative");
+        }
+    }
+
+    private static void RequireNonNegative(int value, string fieldName)
+    {
+        if (value < 0)
+        {
+            throw Invalid($"{fieldName} cannot be negative");
+        }
+    }
+
+    private static JsonException Invalid(string message) => new($"Binance authenticated response validation failed: {message}.");
+}
