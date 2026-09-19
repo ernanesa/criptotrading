@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: 29291c1
+commit: 410790a
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -9,19 +9,19 @@ items:
     evidence: [scripts/test-postgres-integration.sh, f7b073a]
     validation: ./scripts/test-postgres-integration.sh
     status: pass-local
-    pending: [restart-crash-recovery, restore-rpo-rto]
+    pending: [captured-rpo-rto, full-state-reconstruction]
   - id: market-data-recorder
     capability: public market data, bounded order book, deterministic recorder/replay
     evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, docs/market-data-recorder.md, 83657bd]
     validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
     status: pass-code
-    pending: [versioned-oos-dataset, empirical-slippage-latency]
+    pending: [real-market-oos-dataset, empirical-slippage-latency, execution-sensitivity]
   - id: risk-safe-mode
     capability: RiskPolicy contracts, kill switch, SafeMode, Strategy Health
     evidence: [src/CryptoTrading.Domain/Risk, e080792, 8ffb4d8]
     validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
     status: pass-code
-    pending: [operational-drill, approved-thresholds]
+    pending: [shadow-operational-drill, approved-thresholds]
   - id: reconciliation
     capability: read-only account drift detection and fail-closed decision
     evidence: [src/CryptoTrading.Reconciliation, eb12678, docs/readiness/RECON-20260919-local.md]
@@ -33,4 +33,4 @@ items:
     evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md]
     validation: ./scripts/scan-secrets.sh
     status: no-go
-    pending: [oos-walk-forward, soak, restore, chaos, alerts, human-approval]
+    pending: [real-oos-walk-forward, shadow-soak, captured-rpo-rto, alert-delivery, human-approval]

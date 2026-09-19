@@ -147,7 +147,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
 | 2026-09-19 | Reconciliação | Comparação de ledger com account/fills read-only e SafeMode em drift; 4 testes | `src/CryptoTrading.Reconciliation` | `eb12678` | Codex |
 | 2026-09-19 | Strategy Health | Healthy/NoTrade/Blocked, freshness, risco, reconciliação e kill switch | `src/CryptoTrading.Domain/Risk/StrategyHealth.cs` | `8ffb4d8` | Codex |
-| 2026-09-19 | Operação local | Runbook, threat model e recovery drill sem capital | `docs/runbook-local.md`, `docs/threat-model-local.md`, `docs/recovery-drill.md` | Em andamento: drill ainda não executado | Codex |
+| 2026-09-19 | Operação local | Runbook, threat model, backup/restore isolado e Paper chaos/soak executados sem capital; Shadow soak e alert delivery permanecem pendentes | `docs/runbook-local.md`, `docs/threat-model-local.md`, `docs/recovery-drill.md`, `docs/readiness/AUDIT-20260919-current.md` | `410790a` (evidência executada) | Codex |
 
 ## Bloqueios e decisões
 
