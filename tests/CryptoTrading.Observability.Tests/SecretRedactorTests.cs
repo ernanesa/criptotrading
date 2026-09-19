@@ -1,4 +1,3 @@
-using CryptoTrading.Observability;
 using Xunit;
 
 namespace CryptoTrading.Observability.Tests;
