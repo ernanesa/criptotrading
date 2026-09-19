@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `2863800`
+**Commit de código auditado:** `6f161a5`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,8 +13,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 224 aprovados, 0 falhas, 0 skips |
-| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 6 testes, incluindo migrations 005–008, persistência idempotente, canonicalização JSON e identidade de sessão |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 225 aprovados, 0 falhas, 0 skips |
+| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 6 testes, incluindo migrations 005–009, persistência idempotente, canonicalização JSON, identidade de sessão e projeção de open orders |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
@@ -23,8 +23,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Contrato do readiness validator | `./scripts/test-readiness-validator.sh` | PASS — fixture aprovada aceita; checkbox pendente rejeitado; snapshot corrente continua bloqueado |
 | API operational status | `dotnet run --configuration Release --no-build --no-launch-profile` + `GET /operational/status` | PASS — estado process-local read-only; `mutatingEndpointsEnabled=false`; nenhuma chamada à Binance |
 | RiskPolicy registry | `./scripts/test-postgres-integration.sh` | PASS — migration 006, hash/replay idempotente, aprovação segregada, ativação e supersession; 5 testes PostgreSQL |
-| Account stream persistence | `./scripts/test-postgres-integration.sh` | PASS — migrations 007–008, JSON/hash canonicalizado, dedupe idempotente, identidade de sessão e leitura por janela; 6 testes PostgreSQL |
-| Modern account stream | `dotnet test` Binance + Worker + Reconciliation | PASS — HMAC subscription ACK, parser de controles, reconnect/session identity, rotação preventiva, clock drift, reconciliação pós-reconnect/periódica, filtros dinâmicos e evidência de open orders; 51 + 24 + 10 testes |
+| Account stream persistence | `./scripts/test-postgres-integration.sh` | PASS — migrations 007–009, JSON/hash canonicalizado, dedupe idempotente, identidade de sessão, leitura por janela e projeção de open orders; 6 testes PostgreSQL |
+| Modern account stream | `dotnet test` Binance + Worker + Reconciliation | PASS — HMAC subscription ACK, parser de controles, reconnect/session identity, rotação preventiva, clock drift, reconciliação pós-reconnect/periódica, filtros dinâmicos e comparação de open orders; 51 + 24 + 11 testes |
 
 ## O que estes gates comprovam
 
