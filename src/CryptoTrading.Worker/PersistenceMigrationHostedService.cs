@@ -12,17 +12,25 @@ internal sealed class PersistenceMigrationHostedService(
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (!options.Value.ApplyMigrations)
+        if (!options.Value.PersistenceEnabled)
         {
             return;
         }
 
         foreach (var store in stores)
         {
-            await store.ApplyMigrationsAsync(cancellationToken).ConfigureAwait(false);
+            await store.CheckConnectivityAsync(cancellationToken).ConfigureAwait(false);
+            if (options.Value.ApplyMigrations)
+            {
+                await store.ApplyMigrationsAsync(cancellationToken).ConfigureAwait(false);
+            }
         }
 
-        PersistenceMigrationLog.Applied(logger);
+        PersistenceMigrationLog.Connected(logger, stores.Count());
+        if (options.Value.ApplyMigrations)
+        {
+            PersistenceMigrationLog.Applied(logger);
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -30,6 +38,9 @@ internal sealed class PersistenceMigrationHostedService(
 
 internal static partial class PersistenceMigrationLog
 {
+    [LoggerMessage(LogLevel.Information, "Trading PostgreSQL connectivity verified. Stores={StoreCount}")]
+    public static partial void Connected(ILogger logger, int storeCount);
+
     [LoggerMessage(LogLevel.Information, "Trading persistence migrations applied.")]
     public static partial void Applied(ILogger logger);
 }

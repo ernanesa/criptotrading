@@ -146,7 +146,7 @@ public sealed class OutboxDispatcher(
 
                 foreach (var message in messages)
                 {
-                    await DispatchOneAsync(store, message, executorMap, runtime, stoppingToken).ConfigureAwait(false);
+                    await DispatchOneAsync(store, message, executorMap, stoppingToken).ConfigureAwait(false);
                 }
             }
 
@@ -158,7 +158,6 @@ public sealed class OutboxDispatcher(
         IOutboxStore store,
         LeasedOutboxMessage message,
         Dictionary<string, IOutboxMessageExecutor> executors,
-        WorkerRuntimeOptions runtime,
         CancellationToken cancellationToken)
     {
         try
@@ -186,7 +185,7 @@ public sealed class OutboxDispatcher(
         {
             var delaySeconds = Math.Min(300d, Math.Pow(2d, Math.Min(message.Attempts - 1, 8)));
             var retryAt = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
-            await store.FailOutboxAsync(message.MessageId, leaseOwner, exception.GetType().Name, retryAt, cancellationToken).ConfigureAwait(false);
+            _ = await store.FailOutboxAsync(message.MessageId, leaseOwner, exception.GetType().Name, retryAt, cancellationToken).ConfigureAwait(false);
             DispatcherLog.Failed(logger, message.MessageId, message.MessageType, exception.GetType().Name, delaySeconds);
         }
     }

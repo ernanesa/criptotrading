@@ -1,5 +1,6 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Observability;
+using CryptoTrading.Persistence;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
@@ -18,6 +19,11 @@ builder.Configuration.AddLocalDotEnv();
 builder.Services.AddTradingConfiguration(builder.Configuration);
 builder.Services.AddOptions<TradingOptions>().ValidateOnStart();
 builder.Services.AddHealthChecks().AddCheck<TradingReadinessCheck>("trading-configuration", tags: ["ready"]);
+var postgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"];
+if (!string.IsNullOrWhiteSpace(postgresConnectionString))
+{
+    _ = builder.Services.AddPostgresTradingStore(postgresConnectionString);
+}
 
 builder.Services.AddOpenApi();
 
@@ -57,7 +63,7 @@ app.Use(async (context, next) =>
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    _ = app.MapOpenApi();
 }
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false })

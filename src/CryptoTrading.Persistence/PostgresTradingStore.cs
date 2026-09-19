@@ -1,12 +1,17 @@
 #pragma warning disable CA2007 // Npgsql async disposal/commands are intentionally awaited with ConfigureAwait(false) at each I/O boundary.
 #pragma warning disable CA1849 // The small result sets use synchronous field access after an async read; no blocking I/O is performed.
 #pragma warning disable CA2100 // SQL is either a trusted embedded migration or a constant query; values are always parameters.
+#pragma warning disable CA1031 // The readiness boundary converts provider failures into an unhealthy result.
+#pragma warning disable IDE0058 // Npgsql parameter registration intentionally ignores the returned parameter.
 
 using System.Data;
 using System.Text.Json;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Primitives;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -84,13 +89,13 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         {
             await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
             await ExecuteAsync(connection, transaction,
-                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0));",
+                "SELECT pg_advisory_xact_lock(hashtextextended(@lock_name, 0));",
                 [Parameter("lock_name", NpgsqlDbType.Text, MigrationLockKey)], cancellationToken).ConfigureAwait(false);
 
             var schemaMigrationsExists = await ExistsAsync(connection, transaction,
                 "SELECT to_regclass('trading.schema_migrations') IS NOT NULL;", [], cancellationToken).ConfigureAwait(false);
             var alreadyApplied = schemaMigrationsExists && await ExistsAsync(connection, transaction,
-                "SELECT EXISTS (SELECT 1 FROM trading.schema_migrations WHERE version = $1);",
+                "SELECT EXISTS (SELECT 1 FROM trading.schema_migrations WHERE version = @version);",
                 [Parameter("version", NpgsqlDbType.Varchar, migration.Version)], cancellationToken).ConfigureAwait(false);
 
             if (!alreadyApplied)
@@ -100,6 +105,14 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
 
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Checks the database connection without mutating schema or data.</summary>
+    public async Task CheckConnectivityAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand("SELECT 1;", connection);
+        _ = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -130,7 +143,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             await ExecuteAsync(connection, transaction,
                 """
                 INSERT INTO trading.ledger_postings (entry_id, posting_index, account_id, asset, amount)
-                VALUES ($1, $2, $3, $4, $5);
+                VALUES (@entry_id, @posting_index, @account_id, @asset, @amount);
                 """,
                 [
                     Parameter("entry_id", NpgsqlDbType.Uuid, entry.Id.Value),
@@ -143,7 +156,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             await ExecuteAsync(connection, transaction,
                 """
                 INSERT INTO trading.ledger_balances (account_id, asset, balance, projection_version)
-                VALUES ($1, $2, $3, 1)
+                VALUES (@account_id, @asset, @balance, 1)
                 ON CONFLICT (account_id, asset) DO UPDATE SET
                     balance = trading.ledger_balances.balance + EXCLUDED.balance,
                     projection_version = trading.ledger_balances.projection_version + 1,
@@ -167,7 +180,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "SELECT balance FROM trading.ledger_balances WHERE account_id = $1 AND asset = $2;", connection);
+            "SELECT balance FROM trading.ledger_balances WHERE account_id = @account_id AND asset = @asset;", connection);
         command.Parameters.Add(Parameter("account_id", NpgsqlDbType.Varchar, account.Value));
         command.Parameters.Add(Parameter("asset", NpgsqlDbType.Varchar, asset.Value));
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -188,7 +201,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             INSERT INTO trading.outbox_messages
                 (message_id, aggregate_type, aggregate_id, event_type, payload, correlation_id,
                  idempotency_key, occurred_at, available_at)
-            VALUES ($1, 'order', $2, $3, $4, $5, $6, $7, $7)
+            VALUES (@message_id, 'order', @aggregate_id, @event_type, @payload, @correlation_id,
+                    @idempotency_key, @occurred_at, @occurred_at)
             ON CONFLICT DO NOTHING
             RETURNING message_id;
             """,
@@ -207,7 +221,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             var existing = await ReadExistingOutboxIdentityAsync(connection, transaction, record, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The outbox uniqueness constraint reported a conflict, but no message was found.");
             if (!string.Equals(existing.EventType, record.MessageType, StringComparison.Ordinal)
-                || !string.Equals(existing.PayloadJson, payload, StringComparison.Ordinal)
+                || !EquivalentJson(existing.PayloadJson, payload)
                 || existing.CorrelationId != record.CorrelationId
                 || !string.Equals(existing.IdempotencyKey, record.IdempotencyKey.Value, StringComparison.Ordinal))
             {
@@ -249,15 +263,15 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
                 SELECT message_id
                 FROM trading.outbox_messages
                 WHERE processed_at IS NULL
-                  AND available_at <= $1
-                  AND (locked_until IS NULL OR locked_until <= $1)
+                  AND available_at <= @now
+                  AND (locked_until IS NULL OR locked_until <= @now)
                 ORDER BY available_at, created_at, message_id
                 FOR UPDATE SKIP LOCKED
-                LIMIT $3
+                LIMIT @batch_size
             )
             UPDATE trading.outbox_messages AS messages
-            SET locked_until = $2,
-                lease_owner = $4,
+            SET locked_until = @locked_until,
+                lease_owner = @lease_owner,
                 attempts = messages.attempts + 1
             FROM candidates
             WHERE messages.message_id = candidates.message_id
@@ -302,8 +316,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         await using var command = new NpgsqlCommand(
             """
             UPDATE trading.outbox_messages
-            SET processed_at = COALESCE(processed_at, $3), locked_until = NULL, lease_owner = NULL
-            WHERE message_id = $1 AND lease_owner = $2 AND processed_at IS NULL;
+            SET processed_at = COALESCE(processed_at, @processed_at), locked_until = NULL, lease_owner = NULL
+            WHERE message_id = @message_id AND lease_owner = @lease_owner AND processed_at IS NULL;
             """, connection);
         command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, messageId));
         command.Parameters.Add(Parameter("lease_owner", NpgsqlDbType.Varchar, leaseOwner));
@@ -325,8 +339,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         await using var command = new NpgsqlCommand(
             """
             UPDATE trading.outbox_messages
-            SET available_at = $3, locked_until = NULL, lease_owner = NULL, last_error = $4
-            WHERE message_id = $1 AND lease_owner = $2 AND processed_at IS NULL;
+            SET available_at = @available_at, locked_until = NULL, lease_owner = NULL, last_error = @last_error
+            WHERE message_id = @message_id AND lease_owner = @lease_owner AND processed_at IS NULL;
             """, connection);
         command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, messageId));
         command.Parameters.Add(Parameter("lease_owner", NpgsqlDbType.Varchar, leaseOwner));
@@ -346,7 +360,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         var result = await ExecuteScalarAsync(connection, transaction,
             """
             INSERT INTO trading.journal_entries (entry_id, correlation_id, occurred_at, reason, idempotency_key)
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES (@entry_id, @correlation_id, @occurred_at, @reason, @idempotency_key)
             ON CONFLICT DO NOTHING
             RETURNING entry_id;
             """,
@@ -370,8 +384,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             """
             SELECT entry_id, correlation_id, occurred_at, reason, idempotency_key
             FROM trading.journal_entries
-            WHERE entry_id = $1 OR ($2 IS NOT NULL AND idempotency_key = $2)
-            ORDER BY CASE WHEN entry_id = $1 THEN 0 ELSE 1 END
+            WHERE entry_id = @entry_id OR (@idempotency_key IS NOT NULL AND idempotency_key = @idempotency_key)
+            ORDER BY CASE WHEN entry_id = @entry_id THEN 0 ELSE 1 END
             LIMIT 1;
             """, connection, transaction);
         command.Parameters.Add(Parameter("entry_id", NpgsqlDbType.Uuid, candidate.Id.Value));
@@ -405,7 +419,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            "SELECT account_id, asset, amount FROM trading.ledger_postings WHERE entry_id = $1 ORDER BY posting_index;",
+            "SELECT account_id, asset, amount FROM trading.ledger_postings WHERE entry_id = @entry_id ORDER BY posting_index;",
             connection, transaction);
         command.Parameters.Add(Parameter("entry_id", NpgsqlDbType.Uuid, entryId.Value));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -431,8 +445,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
             """
             SELECT event_type, payload::text, correlation_id, idempotency_key
             FROM trading.outbox_messages
-            WHERE message_id = $1 OR idempotency_key = $2
-            ORDER BY CASE WHEN message_id = $1 THEN 0 ELSE 1 END
+            WHERE message_id = @message_id OR idempotency_key = @idempotency_key
+            ORDER BY CASE WHEN message_id = @message_id THEN 0 ELSE 1 END
             LIMIT 1;
             """, connection, transaction);
         command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, record.MessageId));
@@ -448,13 +462,22 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
     {
         if (existing.Id != candidate.Id
             || existing.CorrelationId != candidate.CorrelationId
-            || existing.OccurredAt != candidate.OccurredAt
+            // PostgreSQL timestamptz stores microseconds while DateTimeOffset
+            // carries 100ns ticks; compare at the database precision.
+            || existing.OccurredAt.ToUniversalTime().Ticks / 10 != candidate.OccurredAt.ToUniversalTime().Ticks / 10
             || !string.Equals(existing.Reason, candidate.Reason, StringComparison.Ordinal)
             || existing.IdempotencyKey != candidate.IdempotencyKey
             || !existing.Postings.SequenceEqual(candidate.Postings))
         {
             throw new InvalidOperationException("The journal identity is already associated with different data.");
         }
+    }
+
+    private static bool EquivalentJson(string left, string right)
+    {
+        using var leftDocument = JsonDocument.Parse(left);
+        using var rightDocument = JsonDocument.Parse(right);
+        return JsonElement.DeepEquals(leftDocument.RootElement, rightDocument.RootElement);
     }
 
     private static NpgsqlParameter Parameter(string name, NpgsqlDbType type, object? value) =>
@@ -493,5 +516,54 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
     {
         return (bool)(await ExecuteScalarAsync(connection, transaction, sql, parameters, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The existence query returned no value."));
+    }
+}
+
+/// <summary>Readiness check backed by a real PostgreSQL round-trip.</summary>
+public sealed class PostgresHealthCheck(
+    PostgresTradingStore store,
+    ILogger<PostgresHealthCheck> logger) : IHealthCheck
+{
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await store.CheckConnectivityAsync(cancellationToken).ConfigureAwait(false);
+            return HealthCheckResult.Healthy("PostgreSQL accepted a connectivity probe.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            PostgresHealthLog.ProbeFailed(logger, exception);
+            return HealthCheckResult.Unhealthy("PostgreSQL is unavailable.");
+        }
+    }
+}
+
+internal static partial class PostgresHealthLog
+{
+    [LoggerMessage(LogLevel.Warning, "PostgreSQL readiness probe failed.")]
+    public static partial void ProbeFailed(ILogger logger, Exception exception);
+}
+
+/// <summary>Registers the shared PostgreSQL store and a real readiness check.</summary>
+public static class PostgresServiceCollectionExtensions
+{
+    public static IServiceCollection AddPostgresTradingStore(
+        this IServiceCollection services,
+        string connectionString)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
+        services.AddSingleton(_ => new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)));
+        services.AddHealthChecks().AddCheck<PostgresHealthCheck>(
+            "postgres",
+            HealthStatus.Unhealthy,
+            tags: ["ready", "postgres"]);
+        return services;
     }
 }

@@ -17,6 +17,7 @@
     <Project Path="tests/CryptoTrading.Exchange.Binance.Tests/CryptoTrading.Exchange.Binance.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Exchange.Paper.Tests/CryptoTrading.Exchange.Paper.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Persistence.Tests/CryptoTrading.Persistence.Tests.csproj" />
+    <Project Path="tests/CryptoTrading.Persistence.IntegrationTests/CryptoTrading.Persistence.IntegrationTests.csproj" />
     <Project Path="tests/CryptoTrading.Observability.Tests/CryptoTrading.Observability.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Worker.Tests/CryptoTrading.Worker.Tests.csproj" />
   </Folder>
