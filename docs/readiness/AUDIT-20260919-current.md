@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `f5db9e9`
+**Commit de código auditado:** `8812f68`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,13 +13,13 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 245 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 247 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 7 testes, incluindo migrations 005–009, persistência idempotente, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
 | Reconstrução determinística do ledger | `./scripts/test-ledger-recovery.sh` | PASS — 3 testes de reconstrução journal → projeção; relatório redigido em `artifacts/recovery/` |
 | Backup/restore + RPO/RTO local | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; tempos de backup/restore/validação e RPO do marcador registrados em `artifacts/recovery/postgres-rpo-rto-*.md`; recursos removidos |
-| Manifesto full-state local | `dotnet test` Persistence filtrado | PASS — 5 testes validam ledger, open orders, Account Stream, outbox metadata e hash canônico; sem escrita/rede |
+| Manifesto full-state local | `dotnet test` Persistence filtrado | PASS — 7 testes validam ledger, open orders, Account Stream, outbox metadata, hash canônico e comparação pré/pós-restore; sem escrita/rede |
 | Read-only offline preflight | `./scripts/test-binance-readonly-preflight.sh` | PASS — probe recusou sem credenciais, em diretório sem `.env`, com `NO_TRADE=true`/`PAPER`; nenhuma chamada autenticada |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
 | Compose | `POSTGRES_PASSWORD='validation-only-not-a-credential' docker compose config --quiet` | PASS |
