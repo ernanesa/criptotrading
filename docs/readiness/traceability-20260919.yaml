@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: e9d60f0
+commit: abdccf7
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -12,7 +12,7 @@ items:
     pending: [production-rpo-rto, production-full-state-reconstruction]
   - id: market-data-recorder
     capability: public market data, bounded order book, deterministic recorder/replay
-    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, src/CryptoTrading.Backtesting/MarketDataQualityGate.cs, src/CryptoTrading.Exchange.Binance/IBinanceSpotMarketClient.cs, src/CryptoTrading.Exchange.Binance/BinanceSpotMarketClient.cs, tests/CryptoTrading.Exchange.Binance.Tests/BinanceSpotMarketClientTests.cs, tools/CryptoTrading.PublicKlinesRecorder/Program.cs, docs/public-klines-recorder.md, scripts/test-binance-testnet-public.sh, scripts/test-oos-sensitivity.sh, docs/oos-sensitivity-local.md, docs/market-data-recorder.md, 83657bd, cf25d94, b5ee287, 0859bed, 4e2cdad, e9d60f0]
+    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, src/CryptoTrading.Backtesting/MarketDataQualityGate.cs, src/CryptoTrading.Backtesting/PublicKlineDatasetLoader.cs, src/CryptoTrading.Exchange.Binance/IBinanceSpotMarketClient.cs, src/CryptoTrading.Exchange.Binance/BinanceSpotMarketClient.cs, tests/CryptoTrading.Exchange.Binance.Tests/BinanceSpotMarketClientTests.cs, tests/CryptoTrading.Backtesting.Tests/MarketDataQualityGateTests.cs, tools/CryptoTrading.PublicKlinesRecorder/Program.cs, docs/public-klines-recorder.md, scripts/test-binance-testnet-public.sh, scripts/test-oos-sensitivity.sh, docs/oos-sensitivity-local.md, docs/market-data-recorder.md, 83657bd, cf25d94, b5ee287, 0859bed, 4e2cdad, e9d60f0, abdccf7]
     validation: ./scripts/test-oos-sensitivity.sh
     status: pass-code
     pending: [real-market-oos-dataset, empirical-slippage-latency, execution-sensitivity]
