@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: e41fe2a
+commit: 59c79c2
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -12,7 +12,7 @@ items:
     pending: [production-rpo-rto, production-full-state-reconstruction]
   - id: market-data-recorder
     capability: public market data, bounded order book, deterministic recorder/replay
-    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, scripts/test-oos-sensitivity.sh, docs/oos-sensitivity-local.md, 83657bd, cf25d94]
+    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, src/CryptoTrading.Backtesting/MarketDataQualityGate.cs, scripts/test-oos-sensitivity.sh, docs/oos-sensitivity-local.md, 83657bd, cf25d94, b5ee287]
     validation: ./scripts/test-oos-sensitivity.sh
     status: pass-code
     pending: [real-market-oos-dataset, empirical-slippage-latency, execution-sensitivity]
@@ -30,7 +30,7 @@ items:
     pending: [authenticated-testnet-run, orders-fills-ledger-rebuild]
   - id: release-readiness
     capability: promotion, canary, release and traceability evidence
-    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md]
+    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md, src/CryptoTrading.Observability/HttpWebhookTradingAlertSink.cs, docs/observability-local.md, 544a156, 59c79c2]
     validation: ./scripts/scan-secrets.sh
     status: no-go
     pending: [real-oos-walk-forward, shadow-soak, production-rpo-rto, alert-delivery, human-approval]
