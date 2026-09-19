@@ -89,6 +89,9 @@ Demo endpoint. It parses nested `executionReport` and
 reconnects with bounded backoff. Each connection receives a new `sessionId` and
 monotonic `sessionGeneration`; the durable account-stream envelope retains both
 plus `subscriptionId`, including the synthetic `connectionEstablished` marker.
+Sessions are rotated proactively after the configured 23-hour default (never
+later than Binance's 24-hour WebSocket session limit), then resubscribed and
+reconciled before downstream processing continues.
 The legacy `listenKey` adapter below remains
 available only as a compatibility/test fixture and is not wired into the
 Worker.

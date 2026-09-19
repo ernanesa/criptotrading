@@ -16,6 +16,8 @@ public sealed class BinanceUserDataStreamApiOptions
     public long RecvWindowMilliseconds { get; set; } = 5_000;
     public TimeSpan InitialReconnectDelay { get; set; } = TimeSpan.FromMilliseconds(250);
     public TimeSpan MaxReconnectDelay { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>Maximum lifetime of one WebSocket session; keep below Binance's 24-hour limit.</summary>
+    public TimeSpan MaxSessionLifetime { get; set; } = TimeSpan.FromHours(23);
     public int MaxReconnectAttempts { get; set; } = 10;
 
     internal Uri GetWebSocketApiBaseAddress()
@@ -62,6 +64,11 @@ public sealed class BinanceUserDataStreamApiOptions
             throw new ArgumentOutOfRangeException(nameof(InitialReconnectDelay));
         }
 
+        if (MaxSessionLifetime <= TimeSpan.Zero || MaxSessionLifetime > TimeSpan.FromHours(24))
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxSessionLifetime), "Session lifetime must be positive and no greater than 24 hours.");
+        }
+
         if (MaxReconnectAttempts is < 0 or > 1_000)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxReconnectAttempts));
@@ -86,11 +93,13 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
     private readonly BinanceUserDataStreamApiOptions options;
     private readonly Func<IBinanceWebSocketTransport> transportFactory;
     private readonly TimeProvider timeProvider;
+    private readonly IBinanceClockDriftEstimator clock;
 
     public BinanceUserDataStreamApiClient(
         BinanceUserDataStreamApiOptions options,
         Func<IBinanceWebSocketTransport>? transportFactory = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IBinanceClockDriftEstimator? clock = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
@@ -98,6 +107,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
         transportFactory = transportFactory ?? (() => new ClientWebSocketTransport());
         this.transportFactory = transportFactory;
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.clock = clock ?? new BinanceClockDriftEstimator(this.timeProvider);
     }
 
     public async IAsyncEnumerable<BinanceUserDataEvent> ReadAsync(
@@ -113,20 +123,27 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
 #pragma warning disable CA2007
             await using var transport = transportFactory();
 #pragma warning restore CA2007
+            using var sessionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            sessionCancellation.CancelAfter(options.MaxSessionLifetime);
+            var sessionToken = sessionCancellation.Token;
             IAsyncEnumerator<ReadOnlyMemory<byte>>? enumerator = null;
             var subscriptionSucceeded = false;
             var receivedEvent = false;
             long? subscriptionId = null;
             try
             {
-                await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), cancellationToken).ConfigureAwait(false);
-                enumerator = transport.ReadMessagesAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
-                subscriptionId = await SubscribeAsync(transport, enumerator, cancellationToken).ConfigureAwait(false);
+                await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), sessionToken).ConfigureAwait(false);
+                enumerator = transport.ReadMessagesAsync(sessionToken).GetAsyncEnumerator(sessionToken);
+                subscriptionId = await SubscribeAsync(transport, enumerator, sessionToken).ConfigureAwait(false);
                 subscriptionSucceeded = true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 yield break;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Session lifetime elapsed; dispose and establish a fresh subscription.
             }
             catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -161,6 +178,10 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         yield break;
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        break;
                     }
                     catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
                     {
@@ -254,7 +275,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
         var request = BuildSubscriptionRequest(
             options.ApiKey,
             options.ApiSecret,
-            timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+            clock.EstimateServerNow().ToUnixTimeMilliseconds(),
             options.RecvWindowMilliseconds,
             requestId);
         await transport.SendAsync(Encoding.UTF8.GetBytes(request), cancellationToken).ConfigureAwait(false);
