@@ -63,3 +63,6 @@ jobs:
 
       - name: Test traceability validator contract
         run: ./scripts/test-traceability-validator.sh
+
+      - name: Test readiness validator contract
+        run: ./scripts/test-readiness-validator.sh

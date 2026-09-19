@@ -22,4 +22,20 @@ evidências de promoção: dataset de mercado real OOS/walk-forward, soak Shadow
 reconciliação autenticada contra a conta Testnet, alert delivery, thresholds
 aprovados e aprovação humana. Ausência de evidência é falha fechada.
 
+## Validator executável
+
+Antes de propor uma decisão aprovada, execute:
+
+```bash
+./scripts/validate-readiness.sh <PRM.md> <CANARY.md> <RISK-POLICY.md>
+```
+
+O validator exige decisão/status aprovável, owner e aprovador, data de validade,
+thresholds com unidade e janela, hash SHA-256 da `RiskPolicy` e ausência de
+placeholders ou checkboxes pendentes. Ele não cria aprovação e deve falhar para
+os snapshots atuais enquanto os gates humanos e Testnet permanecerem pendentes.
+
+O contrato automatizado está em `scripts/test-readiness-validator.sh` e é
+executado no CI.
+
 Para atualizar um snapshot, copie o arquivo, altere o ID/data, registre commit/comandos/resultados observáveis e obtenha revisão explícita. Nunca preencha threshold com “adequado”, “suficiente” ou `TBD` em uma decisão de promoção.
