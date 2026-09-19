@@ -118,10 +118,20 @@ public sealed record ReconciliationFill(string Symbol, long TradeId, long OrderI
     }
 }
 
+public sealed record ReconciliationOpenOrder(string Symbol, long OrderId, string ClientOrderId, string Status)
+{
+    public static ReconciliationOpenOrder FromBinance(BinanceOpenOrder order)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        return new(order.Symbol.Trim().ToUpperInvariant(), order.OrderId, order.ClientOrderId, order.Status);
+    }
+}
+
 public sealed record ReconciliationSnapshot(
     DateTimeOffset ObservedAtUtc,
     IReadOnlyList<ReconciliationBalance> Balances,
-    IReadOnlyList<ReconciliationFill> Fills)
+    IReadOnlyList<ReconciliationFill> Fills,
+    IReadOnlyList<ReconciliationOpenOrder> OpenOrders)
 {
     public ReconciliationSnapshot(
         DateTimeOffset observedAtUtc,
@@ -130,7 +140,21 @@ public sealed record ReconciliationSnapshot(
         : this(
             ValidateUtc(observedAtUtc),
             Materialize(balances, nameof(balances)),
-            Materialize(fills, nameof(fills)))
+            Materialize(fills, nameof(fills)),
+            Array.AsReadOnly(Array.Empty<ReconciliationOpenOrder>()))
+    {
+    }
+
+    public ReconciliationSnapshot(
+        DateTimeOffset observedAtUtc,
+        IEnumerable<ReconciliationBalance> balances,
+        IEnumerable<ReconciliationFill> fills,
+        IEnumerable<ReconciliationOpenOrder> openOrders)
+        : this(
+            ValidateUtc(observedAtUtc),
+            Materialize(balances, nameof(balances)),
+            Materialize(fills, nameof(fills)),
+            Materialize(openOrders, nameof(openOrders)))
     {
     }
 
@@ -207,7 +231,8 @@ public sealed record ReconciliationRunResult(
     DateTimeOffset ObservedAtUtc,
     bool IsHealthy,
     IReadOnlyList<ReconciliationEvent> Events,
-    IReadOnlyList<long> UnknownTradeIds);
+    IReadOnlyList<long> UnknownTradeIds,
+    int OpenOrderCount = 0);
 
 /// <summary>
 /// Compares the exchange account snapshot with the local balance projection.
@@ -316,7 +341,7 @@ public sealed class AccountReconciliationService
             _ = operationalControl.EnterSafeMode(command);
         }
 
-        return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds);
+        return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count);
     }
 }
 
@@ -341,8 +366,15 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
     {
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         var trades = new Dictionary<long, ReconciliationFill>();
+        var openOrders = new Dictionary<long, ReconciliationOpenOrder>();
         foreach (var symbol in options.Symbols)
         {
+            var symbolOpenOrders = await accountClient.GetOpenOrdersAsync(symbol, cancellationToken).ConfigureAwait(false);
+            foreach (var order in symbolOpenOrders)
+            {
+                openOrders.TryAdd(order.OrderId, ReconciliationOpenOrder.FromBinance(order));
+            }
+
             long? fromId = null;
             var completed = false;
             for (var page = 0; page < options.MaxTradePages; page++)
@@ -382,7 +414,8 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
         return new(
             timeProvider.GetUtcNow(),
             account.Balances.Select(ReconciliationBalance.FromBinance),
-            trades.Values.OrderBy(static trade => trade.TradeId).ToArray());
+            trades.Values.OrderBy(static trade => trade.TradeId).ToArray(),
+            openOrders.Values.OrderBy(static order => order.OrderId).ToArray());
     }
 }
 

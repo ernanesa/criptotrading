@@ -33,7 +33,8 @@ internal sealed class PeriodicReconciliationHostedService(
                     result.IsHealthy,
                     result.Events.Count,
                     result.Events.OfType<ReconciliationMismatch>().Count(),
-                    result.UnknownTradeIds.Count), stoppingToken).ConfigureAwait(false);
+                    result.UnknownTradeIds.Count,
+                    result.OpenOrderCount), stoppingToken).ConfigureAwait(false);
 
                 if (result.IsHealthy)
                 {

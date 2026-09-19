@@ -10,6 +10,7 @@ internal sealed record ReconciliationRunReport(
     int EventCount,
     int MismatchCount,
     int UnknownTradeCount,
+    int OpenOrderCount = 0,
     string ExecutionMode = "READ_ONLY_RECONCILIATION");
 
 /// <summary>Persists reconciliation evidence without exchange payloads or balances.</summary>

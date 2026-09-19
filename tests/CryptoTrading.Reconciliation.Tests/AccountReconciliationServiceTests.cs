@@ -21,6 +21,24 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
+    public void SnapshotPreservesOpenOrderIdentityAndStatus()
+    {
+        var openOrder = ReconciliationOpenOrder.FromBinance(new BinanceOpenOrder(
+            "btcusdt", 42, "client-42", "100", "1", "0", "0", "NEW",
+            1_700_000_000_000, 1_700_000_000_001, true, "LIMIT", "BUY"));
+
+        var snapshot = new ReconciliationSnapshot(
+            Now,
+            [new ReconciliationBalance("USDT", 100m, 0m)],
+            [],
+            [openOrder]);
+
+        Assert.Equal("BTCUSDT", snapshot.OpenOrders.Single().Symbol);
+        Assert.Equal(42, snapshot.OpenOrders.Single().OrderId);
+        Assert.Equal("NEW", snapshot.OpenOrders.Single().Status);
+    }
+
+    [Fact]
     public async Task MatchingBalancesPublishReconciledEventsAndKeepNormalMode()
     {
         var control = CreateControl();

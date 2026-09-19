@@ -15,12 +15,14 @@ public sealed class ReconciliationReportWriterTests
             false,
             2,
             1,
-            3));
+            3,
+            4));
 
         var lines = await File.ReadAllLinesAsync(path);
         Assert.Single(lines);
         Assert.Contains("READ_ONLY_RECONCILIATION", lines[0], StringComparison.Ordinal);
         Assert.Contains("unknownTradeCount", lines[0], StringComparison.Ordinal);
+        Assert.Contains("openOrderCount", lines[0], StringComparison.Ordinal);
         Assert.DoesNotContain("balance", lines[0], StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("secret", lines[0], StringComparison.OrdinalIgnoreCase);
     }
