@@ -4,4 +4,7 @@
     <Project Path="src/CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
     <Project Path="src/CryptoTrading.Worker/CryptoTrading.Worker.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj" />
+  </Folder>
 </Solution>
