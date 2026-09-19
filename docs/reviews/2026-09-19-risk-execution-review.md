@@ -6,9 +6,13 @@ Escopo: `RiskPolicy`/`RiskEvaluator`, `OrderExecutionPipeline`,
 read-only da Binance.  Esta revisão foi somente de leitura sobre o código de
 produção; o único artefato alterado é este relatório.
 
-## Achados
+## Achados históricos e resolução
 
-### P1 — O adapter autenticado aceita um endpoint arbitrário
+Os achados abaixo foram registrados na revisão inicial e foram corrigidos em
+commits posteriores. Esta seção é mantida para preservar a trilha de auditoria;
+ela não representa o estado atual do código.
+
+### P1 — Endpoint arbitrário (corrigido em `77484a6`)
 
 Arquivo: `src/CryptoTrading.Exchange.Binance/BinanceAuthenticatedClientOptions.cs:32-40`
 
@@ -20,14 +24,14 @@ composição que não passe pelo `TradingOptionsValidator`) pode usar
 mas ainda envia API key e assinatura para esse destino; isso viola a barreira
 de ambiente e pode expor credenciais.
 
-Correção recomendada: restringir o override a uma allow-list derivada de
+Correção aplicada: restringir o override a uma allow-list derivada de
 `BinanceEnvironment` (`testnet.binance.vision` para Testnet e o endpoint Demo
 correspondente), exigir HTTPS e rejeitar host/path divergentes. Cobrir tanto o
 construtor direto quanto o registro via DI com testes de validação. Manter a
 validação em `TradingConfiguration` como segunda barreira, não como única
 barreira.
 
-### P1 — Timestamp futuro de mercado pode passar pelo stale-data gate
+### P1 — Timestamp futuro de mercado (corrigido em `77484a6`)
 
 Arquivo: `src/CryptoTrading.Domain/Risk/RiskPolicy.cs:256-259`
 
@@ -38,12 +42,12 @@ ocorrer por relógio adiantado, erro de serialização ou dado de uma fonte
 incorreta. Em um sistema financeiro, a resposta segura é bloquear nova
 exposição quando a ordem temporal não é confiável.
 
-Correção recomendada: rejeitar quando `marketDataAt > evaluatedAt` (idealmente
+Correção aplicada: rejeitar quando `marketDataAt > evaluatedAt` (idealmente
 com um pequeno limite explícito de skew, documentado e testado), usando um
 reason code de market-data indisponível/stale. Adicionar testes para timestamp
 futuro e para o limite exato.
 
-### P2 — Payload inválido do Outbox entra em retry indefinido
+### P2 — Payload inválido do Outbox (corrigido em `77484a6`)
 
 Arquivos: `src/CryptoTrading.Worker/OutboxDispatcher.cs:186-218` e
 `src/CryptoTrading.Worker/OutboxDispatcher.cs:88-120`
@@ -57,7 +61,7 @@ ocupando o fluxo para sempre e gera ruído operacional; também não existe uma
 ação explícita para impedir que a mesma mensagem seja reexecutada após cada
 reinício.
 
-Correção recomendada: distinguir falhas permanentes de transitórias, registrar
+Correção aplicada: distinguir falhas permanentes de transitórias, registrar
 um motivo redigido, e mover a mensagem para dead-letter (ou marcar como
 permanently failed) depois de uma política versionada de tentativas. Expor
 métrica/alerta para a fila e cobrir o caminho com teste de poison message.
@@ -99,7 +103,8 @@ métrica/alerta para a fila e cobrir o caminho com teste de poison message.
 ## Validação realizada
 
 Foi feita inspeção de implementação, contratos e testes existentes; nenhuma
-chave foi carregada e nenhuma chamada externa ou ordem foi executada. Os
-achados acima ainda não foram corrigidos neste commit, conforme solicitado para
-esta revisão.
-
+chave foi carregada e nenhuma chamada externa ou ordem foi executada. A
+validação atual inclui testes de endpoint, timestamp futuro, retry/dead-letter e
+integração PostgreSQL. Os achados históricos acima estão resolvidos; permanecem
+como recomendações de evolução apenas o enriquecimento do corpo de erros e a
+formalização adicional da semântica de exposição, já documentada na política.
