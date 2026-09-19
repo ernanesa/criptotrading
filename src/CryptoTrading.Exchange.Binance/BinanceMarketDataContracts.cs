@@ -77,6 +77,25 @@ public sealed record BinanceKlineEvent(
     decimal Volume,
     bool IsClosed) : BinanceMarketDataEvent(Stream, Symbol, EventTime, ReceivedAt);
 
+public sealed record BinanceOrderBookLevel(decimal Price, decimal Quantity);
+
+public sealed record BinanceDepthUpdateEvent(
+    string Stream,
+    string Symbol,
+    long EventTime,
+    DateTimeOffset ReceivedAt,
+    long FirstUpdateId,
+    long FinalUpdateId,
+    long? PreviousFinalUpdateId,
+    IReadOnlyList<BinanceOrderBookLevel> Bids,
+    IReadOnlyList<BinanceOrderBookLevel> Asks) : BinanceMarketDataEvent(Stream, Symbol, EventTime, ReceivedAt);
+
+public sealed record BinanceOrderBookSnapshot(
+    string Symbol,
+    long LastUpdateId,
+    IReadOnlyList<BinanceOrderBookLevel> Bids,
+    IReadOnlyList<BinanceOrderBookLevel> Asks);
+
 internal static class BinanceMarketDataParser
 {
     public static BinanceMarketDataEvent? TryParse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAt)
@@ -107,6 +126,7 @@ internal static class BinanceMarketDataParser
         {
             "trade" => ParseTrade(stream, data, receivedAt),
             "kline" => ParseKline(stream, data, receivedAt),
+            "depthUpdate" => ParseDepthUpdate(stream, data, receivedAt),
             _ => throw new JsonException($"Unsupported Binance market event '{eventType}'.")
         };
     }
@@ -141,6 +161,45 @@ internal static class BinanceMarketDataParser
             kline.GetProperty("x").GetBoolean());
     }
 
+    private static BinanceDepthUpdateEvent ParseDepthUpdate(string stream, JsonElement data, DateTimeOffset receivedAt) =>
+        new(
+            stream,
+            data.GetProperty("s").GetString() ?? throw new JsonException("Missing depth symbol."),
+            data.GetProperty("E").GetInt64(),
+            receivedAt,
+            data.GetProperty("U").GetInt64(),
+            data.GetProperty("u").GetInt64(),
+            data.TryGetProperty("pu", out var previousFinalUpdateId) ? previousFinalUpdateId.GetInt64() : null,
+            ParseLevels(data, "b"),
+            ParseLevels(data, "a"));
+
+    private static List<BinanceOrderBookLevel> ParseLevels(JsonElement data, string propertyName)
+    {
+        var values = data.GetProperty(propertyName);
+        if (values.ValueKind is not JsonValueKind.Array)
+        {
+            throw new JsonException($"Depth property '{propertyName}' must be an array.");
+        }
+
+        var levels = new List<BinanceOrderBookLevel>(values.GetArrayLength());
+        foreach (var value in values.EnumerateArray())
+        {
+            if (value.ValueKind is not JsonValueKind.Array || value.GetArrayLength() != 2)
+            {
+                throw new JsonException($"Depth level in '{propertyName}' must contain price and quantity.");
+            }
+
+            levels.Add(new BinanceOrderBookLevel(
+                ParseDecimal(value[0]),
+                ParseDecimal(value[1])));
+        }
+
+        return levels;
+    }
+
     private static decimal ParseDecimal(JsonElement element, string propertyName) =>
         decimal.Parse(element.GetProperty(propertyName).GetString() ?? throw new JsonException($"Missing numeric property '{propertyName}'."), CultureInfo.InvariantCulture);
+
+    private static decimal ParseDecimal(JsonElement element) =>
+        decimal.Parse(element.GetString() ?? throw new JsonException("Missing numeric level value."), CultureInfo.InvariantCulture);
 }
