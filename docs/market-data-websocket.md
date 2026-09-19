@@ -102,6 +102,9 @@ Enable the authenticated consumer only in a local, read-only process with
 `WORKER_NO_TRADE=true`. The service starts after migrations and the initial
 reconciliation, persists an append-only event
 envelope, and enters SafeMode on stream termination or storage failure.
+The same read-only reconciliation also runs every 15 minutes by default
+(`WORKER_RECONCILIATION_INTERVAL_MINUTES`) and writes a local redacted report;
+an unexpected reconciliation error fails closed.
 
 ```text
 BINANCE_API_KEY=<restricted-testnet-key>

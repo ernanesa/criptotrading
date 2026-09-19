@@ -99,6 +99,19 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void ReconciliationIntervalIsBounded()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationIntervalMinutes = 0
+        }.Validate());
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationIntervalMinutes = 1_441
+        }.Validate());
+    }
+
+    [Fact]
     public async Task NoTradeExecutorDoesNotParseOrExecutePayload()
     {
         var executor = new PaperOutboxMessageExecutor(

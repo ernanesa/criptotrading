@@ -47,6 +47,9 @@ public sealed class WorkerRuntimeOptions
 
     public int ReconciliationMaxSnapshotAgeSeconds { get; set; } = 30;
 
+    /// <summary>Periodic read-only reconciliation interval after startup, in minutes.</summary>
+    public int ReconciliationIntervalMinutes { get; set; } = 15;
+
     public string ReconciliationReportDirectory { get; set; } = "artifacts/reconciliation";
 
     /// <summary>Optional local JSONL alert directory; blank keeps the in-memory sink.</summary>
@@ -142,6 +145,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS must be between 1 and 86400."]);
+        }
+
+        if (ReconciliationIntervalMinutes is < 1 or > 1_440)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_INTERVAL_MINUTES must be between 1 and 1440."]);
         }
 
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationReportDirectory))
