@@ -22,6 +22,7 @@ public sealed class WorkerRuntimeTests
         Assert.Equal("PAPER", options.ExecutionMode);
         Assert.True(options.NoTrade);
         Assert.False(options.PersistenceEnabled);
+        Assert.False(options.ReconciliationEnabled);
     }
 
     [Fact]
@@ -38,6 +39,38 @@ public sealed class WorkerRuntimeTests
         {
             ShadowEnabled = true,
             NoTrade = false,
+        }.Validate());
+    }
+
+    [Fact]
+    public void ReconciliationRequiresNoTradeAndPersistence()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationEnabled = true,
+            NoTrade = false,
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost",
+        }.Validate());
+
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationEnabled = true,
+            NoTrade = true,
+            PersistenceEnabled = false,
+        }.Validate());
+    }
+
+    [Fact]
+    public void ReconciliationSnapshotAgeIsBounded()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationMaxSnapshotAgeSeconds = 0,
+        }.Validate());
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationMaxSnapshotAgeSeconds = 86_401,
         }.Validate());
     }
 

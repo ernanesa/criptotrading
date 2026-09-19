@@ -1,6 +1,10 @@
 using CryptoTrading.Configuration;
+using CryptoTrading.Domain.Accounting;
+using CryptoTrading.Domain.Risk;
+using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Exchange.Paper;
 using CryptoTrading.Persistence;
+using CryptoTrading.Reconciliation;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using CryptoTrading.Worker;
@@ -16,7 +20,8 @@ builder.Logging.AddJsonConsole(options =>
 builder.Configuration.AddLocalDotEnv();
 builder.Services.AddTradingConfiguration(builder.Configuration);
 // The worker's default PAPER/NO_TRADE mode does not require Binance credentials.
-// Private exchange configuration is validated only by a future explicitly enabled adapter.
+// The authenticated account client is registered only when the explicit,
+// read-only reconciliation gate is enabled.
 builder.Services.AddOptions<WorkerRuntimeOptions>()
     .Configure(options =>
     {
@@ -31,6 +36,10 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.BatchSize = builder.Configuration.GetValue("WORKER_OUTBOX_BATCH_SIZE", 25);
         options.LeaseSeconds = builder.Configuration.GetValue("WORKER_OUTBOX_LEASE_SECONDS", 30);
         options.MaxOutboxAttempts = builder.Configuration.GetValue("WORKER_MAX_OUTBOX_ATTEMPTS", 5);
+        options.ReconciliationEnabled = builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false);
+        options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
+        options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
+        options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
     })
     .Validate(static options =>
     {
@@ -60,6 +69,40 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         ?? throw new InvalidOperationException("POSTGRES_CONNECTION_STRING is required when persistence is enabled."));
     _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+}
+if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
+{
+    _ = builder.Services.AddBinanceSpotAccountClientFromConfiguration(builder.Configuration);
+    _ = builder.Services.AddSingleton<IReadOnlyAccountSnapshotProvider>(serviceProvider =>
+    {
+        var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value;
+        var reconciliationOptions = new ReconciliationOptions(
+            new AccountId(options.ReconciliationAccount),
+            options.ReconciliationSymbols.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
+            maxSnapshotAge: TimeSpan.FromSeconds(options.ReconciliationMaxSnapshotAgeSeconds));
+        return new BinanceReadOnlySnapshotProvider(
+            serviceProvider.GetRequiredService<IBinanceSpotAccountClient>(), reconciliationOptions);
+    });
+    _ = builder.Services.AddSingleton<ILocalBalanceReader, PostgresLocalBalanceReader>();
+    _ = builder.Services.AddSingleton<IKnownTradeReader, NoKnownTradesReader>();
+    _ = builder.Services.AddSingleton<IReconciliationEventSink, InMemoryReconciliationEventSink>();
+    _ = builder.Services.AddSingleton<IOperationalControl>(_ => new InMemoryOperationalControl(new DenyOperationalControlResetAuthorizer()));
+    _ = builder.Services.AddSingleton<AccountReconciliationService>(serviceProvider =>
+    {
+        var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value;
+        var reconciliationOptions = new ReconciliationOptions(
+            new AccountId(options.ReconciliationAccount),
+            options.ReconciliationSymbols.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
+            maxSnapshotAge: TimeSpan.FromSeconds(options.ReconciliationMaxSnapshotAgeSeconds));
+        return new AccountReconciliationService(
+            serviceProvider.GetRequiredService<IReadOnlyAccountSnapshotProvider>(),
+            serviceProvider.GetRequiredService<ILocalBalanceReader>(),
+            serviceProvider.GetRequiredService<IKnownTradeReader>(),
+            serviceProvider.GetRequiredService<IReconciliationEventSink>(),
+            serviceProvider.GetRequiredService<IOperationalControl>(),
+            reconciliationOptions);
+    });
+    builder.Services.AddHostedService<ReconciliationStartupHostedService>();
 }
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
 builder.Services.AddHostedService<OutboxDispatcher>();
