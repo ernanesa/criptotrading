@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `4e2cdad`
+**Commit de código auditado:** `e9d60f0`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -40,6 +40,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Reconciliation alert delivery | `dotnet test` Worker | PASS — divergência não saudável publica alerta crítico redigido e saudável não publica; startup, periodicidade e reconnect integrados; 26 testes Worker |
 | Alert delivery retry | `dotnet test` Observability + Worker | PASS — backoff exponencial limitado, cancelamento não repetido, falha final propagada e wrapper registrado no Worker; 13 + 24 testes |
 | Testnet public boundary | `./scripts/test-binance-testnet-public.sh` | PASS — ping, server time, exchangeInfo BTCUSDT e klines BTCUSDT/1d públicos, sem credenciais; cliente fake coberto por 56 testes Binance |
+| Public kline recorder | `dotnet run --project tools/CryptoTrading.PublicKlinesRecorder -c Release --no-build -- ...` | PASS — guard de credenciais exit 2 e coleta real limitada a 3 barras; Testnet retornou 2 barras fechadas e manifesto com fingerprint em diretório temporário |
 | Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 56 testes |
 
 | OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
