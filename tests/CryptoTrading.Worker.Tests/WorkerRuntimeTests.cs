@@ -75,6 +75,18 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void ReconciliationReportDirectoryIsRequiredWhenEnabled()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            ReconciliationEnabled = true,
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost",
+            ReconciliationReportDirectory = " ",
+        }.Validate());
+    }
+
+    [Fact]
     public async Task NoTradeExecutorDoesNotParseOrExecutePayload()
     {
         var executor = new PaperOutboxMessageExecutor(

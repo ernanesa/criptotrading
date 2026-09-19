@@ -40,6 +40,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
+        options.ReconciliationReportDirectory = builder.Configuration["WORKER_RECONCILIATION_REPORT_DIRECTORY"] ?? "artifacts/reconciliation";
     })
     .Validate(static options =>
     {
@@ -72,6 +73,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 }
 if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
 {
+    _ = builder.Services.AddSingleton<ReconciliationReportWriter>(serviceProvider =>
+        new ReconciliationReportWriter(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ReconciliationReportDirectory));
     _ = builder.Services.AddBinanceSpotAccountClientFromConfiguration(builder.Configuration);
     _ = builder.Services.AddSingleton<IReadOnlyAccountSnapshotProvider>(serviceProvider =>
     {

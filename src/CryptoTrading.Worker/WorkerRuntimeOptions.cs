@@ -41,6 +41,8 @@ public sealed class WorkerRuntimeOptions
 
     public int ReconciliationMaxSnapshotAgeSeconds { get; set; } = 30;
 
+    public string ReconciliationReportDirectory { get; set; } = "artifacts/reconciliation";
+
     public void Validate()
     {
         if (!string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase))
@@ -101,6 +103,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS must be between 1 and 86400."]);
+        }
+
+        if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationReportDirectory))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_REPORT_DIRECTORY is required when reconciliation is enabled."]);
         }
 
         if (PersistenceEnabled && string.IsNullOrWhiteSpace(PostgresConnectionString))
