@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: fe269ee
+commit: d643c6c
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -36,7 +36,7 @@ items:
     pending: [real-oos-walk-forward, shadow-soak, production-rpo-rto, alert-delivery, human-approval]
   - id: experiment-governance
     capability: preregistration, trial-budget accounting, immutable hashes and locked-holdout access audit
-    evidence: [src/CryptoTrading.Domain/Research/ExperimentRegistry.cs, src/CryptoTrading.Persistence/PostgresTradingStore.cs, src/CryptoTrading.Persistence/Migrations/011_experiment_governance.up.sql, src/CryptoTrading.Backtesting/ExperimentEvidenceWriter.cs, src/CryptoTrading.Backtesting/BenchmarkComparison.cs, src/CryptoTrading.Backtesting/OutOfSampleEvaluation.cs, tests/CryptoTrading.Domain.Tests/ExperimentRegistryTests.cs, tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs, tests/CryptoTrading.Backtesting.Tests/ExperimentEvidenceWriterTests.cs, tests/CryptoTrading.Backtesting.Tests/BenchmarkComparisonTests.cs, tests/CryptoTrading.Backtesting.Tests/TrendFollowingBacktestTests.cs, docs/experiment-governance.md, e54ba74, 0479442, af15fa7, 18c47cf, 90785de, 1f2ec6f]
+    evidence: [src/CryptoTrading.Domain/Research/ExperimentRegistry.cs, src/CryptoTrading.Persistence/PostgresTradingStore.cs, src/CryptoTrading.Persistence/Migrations/011_experiment_governance.up.sql, src/CryptoTrading.Backtesting/ExperimentEvidenceWriter.cs, src/CryptoTrading.Backtesting/BenchmarkComparison.cs, src/CryptoTrading.Backtesting/OutOfSampleEvaluation.cs, tests/CryptoTrading.Domain.Tests/ExperimentRegistryTests.cs, tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs, tests/CryptoTrading.Backtesting.Tests/ExperimentEvidenceWriterTests.cs, tests/CryptoTrading.Backtesting.Tests/BenchmarkComparisonTests.cs, tests/CryptoTrading.Backtesting.Tests/TrendFollowingBacktestTests.cs, docs/experiment-governance.md, e54ba74, 0479442, af15fa7, 18c47cf, 90785de, 1f2ec6f, d643c6c]
     validation: dotnet test tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj --configuration Release --no-restore
     status: pass-code
     pending: [postgres-append-only-store, real-market-oos-dataset, human-approval]
