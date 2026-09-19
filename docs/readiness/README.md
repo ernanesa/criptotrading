@@ -2,16 +2,24 @@
 
 Este diretório contém snapshots versionados dos artefatos de decisão do CryptoTrading. Eles registram o estado observado no commit indicado; não substituem aprovação humana nem autorizam capital real.
 
-## Snapshot atual
+## Snapshots e auditoria atual
 
-- `PRM-20260919-foundation.md`: matriz de promoção da fundação para Paper/Shadow.
-- `CANARY-20260919-draft.md`: plano preliminar de canary; permanece bloqueado e sem capital.
-- `RECON-20260919-local.md`: evidência de reconciliação local e limites do que ainda não foi executado contra a Binance Testnet.
-- `RELEASE-20260919-foundation.md`: gates executados, evidências e riscos residuais.
-- `traceability-20260919.yaml`: vínculo entre capacidades, testes, comandos e pendências.
+- `PRM-20260919-foundation.md`, `CANARY-20260919-draft.md`, `RECON-20260919-local.md` e `RELEASE-20260919-foundation.md` são snapshots da fundação congelados no commit `29291c1`.
+- `traceability-20260919.yaml` é o manifesto da auditoria corrente no commit de referência registrado nele.
+- `AUDIT-20260919-current.md` é a auditoria corrente, com comandos executados e distinção entre evidência local automatizada e gates ainda dependentes de dados/ações externas.
+
+O snapshot histórico continua válido como registro imutável da decisão daquele
+momento. Para evitar que seja confundido com o estado atual, qualquer mudança
+posterior deve atualizar o manifesto e criar uma nova auditoria; não se deve
+alterar retroativamente o commit de referência de um snapshot já publicado.
 
 ## Regra de decisão
 
-O snapshot atual é `No-Go` para Shadow, Canary e Live. O código possui fundação local, Paper e adaptadores read-only, mas ainda faltam evidências operacionais (OOS real, soak, restore/restart, reconciliação contra conta Testnet, alertas e drills). Ausência de evidência é falha fechada.
+A decisão corrente permanece `No-Go` para Shadow, Canary e Live. A fundação
+local possui Paper, OOS sintético para validação do pipeline, crash recovery,
+backup/restore isolado, Paper chaos/soak e adaptadores read-only. Ainda faltam
+evidências de promoção: dataset de mercado real OOS/walk-forward, soak Shadow,
+reconciliação autenticada contra a conta Testnet, alert delivery, thresholds
+aprovados e aprovação humana. Ausência de evidência é falha fechada.
 
 Para atualizar um snapshot, copie o arquivo, altere o ID/data, registre commit/comandos/resultados observáveis e obtenha revisão explícita. Nunca preencha threshold com “adequado”, “suficiente” ou `TBD` em uma decisão de promoção.
