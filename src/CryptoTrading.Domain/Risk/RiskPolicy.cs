@@ -79,6 +79,7 @@ public sealed record RiskPolicy
 
     public decimal MaxOrderNotional { get; }
 
+    /// <summary>Maximum absolute target exposure, not an incremental order size.</summary>
     public decimal MaxExposureNotional { get; }
 
     public decimal MaxDailyLoss { get; }
@@ -190,6 +191,7 @@ public sealed record RiskEvaluationRequest
         MarketRisk = marketRisk;
     }
 
+    /// <summary>Absolute post-order target exposure used by the evaluator.</summary>
     public decimal RequestedTargetNotional { get; }
     public decimal CurrentExposureNotional { get; }
     public decimal DailyLoss { get; }
