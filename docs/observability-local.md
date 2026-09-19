@@ -8,6 +8,14 @@ O runtime local expõe um baseline sem dependência de cloud:
 - readiness em `GET /health/ready`, que valida configuração mínima do Testnet sem revelar credenciais;
 - snapshot local em `GET /metrics` com requests, erros 5xx, latência acumulada e heartbeats do Worker;
 - `Meter` e `ActivitySource` em `CryptoTrading.Runtime` para futura exportação OpenTelemetry.
+- `TradingAlertDispatcher` com envelope operacional obrigatório, deduplicação por
+  chave e `InMemoryTradingAlertSink` para drills/testes determinísticos locais.
+
+O sink em memória comprova apenas que o runtime produz e entrega o envelope ao
+componente configurado. Ele não comprova entrega a um canal externo ou cobertura
+de on-call. Uma integração externa deve preservar `environment`, `exchange`,
+`scope`, timestamp UTC, correlation ID, severidade, owner, ação e runbook, sem
+enviar credenciais ou payloads privados.
 
 Os instrumentos têm dimensões de baixa cardinalidade. IDs de ordens, chaves, secrets, tokens e payloads de exchange não devem ser adicionados como labels ou propriedades de log. A classe `SecretRedactor` fornece uma proteção explícita para valores sensíveis, mas a regra principal é não registrar credenciais.
 

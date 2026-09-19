@@ -16,6 +16,9 @@ public static class TradingTelemetry
     private static long apiErrors;
     private static long workerHeartbeats;
     private static long apiDurationMilliseconds;
+    private static long alertDeliveries;
+    private static long alertDeliveryFailures;
+    private static long alertDeduplicated;
 
     public static readonly Meter Meter = new(MeterName);
     public static readonly ActivitySource ActivitySource = new(ActivitySourceName);
@@ -35,6 +38,18 @@ public static class TradingTelemetry
         "cryptotrading.worker.heartbeats",
         unit: "{heartbeat}",
         description: "Worker heartbeat cycles.");
+    public static readonly Counter<long> AlertDeliveries = Meter.CreateCounter<long>(
+        "cryptotrading.alert.deliveries",
+        unit: "{alert}",
+        description: "Alerts delivered to the configured sink.");
+    public static readonly Counter<long> AlertDeliveryFailures = Meter.CreateCounter<long>(
+        "cryptotrading.alert.delivery_failures",
+        unit: "{failure}",
+        description: "Alert delivery attempts that failed.");
+    public static readonly Counter<long> AlertDeduplicated = Meter.CreateCounter<long>(
+        "cryptotrading.alert.deduplicated",
+        unit: "{alert}",
+        description: "Alerts suppressed by deduplication key.");
 
     public static void RecordApiRequest(int statusCode, double durationMilliseconds)
     {
@@ -57,18 +72,42 @@ public static class TradingTelemetry
         Interlocked.Increment(ref workerHeartbeats);
     }
 
+    public static void RecordAlertDelivery(TradingAlertSeverity severity)
+    {
+        AlertDeliveries.Add(1, new KeyValuePair<string, object?>("severity", severity.ToString()));
+        Interlocked.Increment(ref alertDeliveries);
+    }
+
+    public static void RecordAlertDeliveryFailure(TradingAlertSeverity severity)
+    {
+        AlertDeliveryFailures.Add(1, new KeyValuePair<string, object?>("severity", severity.ToString()));
+        Interlocked.Increment(ref alertDeliveryFailures);
+    }
+
+    public static void RecordAlertDeduplicated()
+    {
+        AlertDeduplicated.Add(1);
+        Interlocked.Increment(ref alertDeduplicated);
+    }
+
     public static TradingMetricsSnapshot Snapshot() => new(
         Interlocked.Read(ref apiRequests),
         Interlocked.Read(ref apiErrors),
         Interlocked.Read(ref workerHeartbeats),
-        Interlocked.Read(ref apiDurationMilliseconds));
+        Interlocked.Read(ref apiDurationMilliseconds),
+        Interlocked.Read(ref alertDeliveries),
+        Interlocked.Read(ref alertDeliveryFailures),
+        Interlocked.Read(ref alertDeduplicated));
 }
 
 public sealed record TradingMetricsSnapshot(
     long ApiRequests,
     long ApiErrors,
     long WorkerHeartbeats,
-    long ApiDurationMilliseconds);
+    long ApiDurationMilliseconds,
+    long AlertDeliveries,
+    long AlertDeliveryFailures,
+    long AlertDeduplicated);
 
 public static class SecretRedactor
 {
