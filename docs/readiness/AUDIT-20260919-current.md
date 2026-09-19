@@ -44,6 +44,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Validade de evidência de promoção | `./scripts/test-readiness-validator.sh` | PASS — datas inválidas/expiradas são rejeitadas; auditorias podem fixar `READINESS_AS_OF_UTC`; aprovação humana continua obrigatória |
 | Validade do CanaryPlan | `./scripts/test-readiness-validator.sh` | PASS — CanaryPlan exige data UTC válida e vigente; datas inválidas/expiradas falham fechado |
 | Permissões de evidência local | testes Observability/Shadow/Worker | PASS — arquivos JSONL redigidos são restringidos a `0600` em Unix; conteúdo continua sem credenciais/payloads |
+| OMS partial-fill/idempotency | `dotnet test` Domain | PASS — fills parciais, replay idempotente, duplicata conflitante, overfill, ordem temporal invertida e cancelamento pós-fill cobertos; sem rede/ordens |
 
 ## O que estes gates comprovam
 
