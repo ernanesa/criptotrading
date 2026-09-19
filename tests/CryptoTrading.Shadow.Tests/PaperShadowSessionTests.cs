@@ -64,4 +64,23 @@ public sealed class PaperShadowSessionTests
 
         Assert.Equal(0, result.DivergenceCount);
     }
+
+    [Fact]
+    public async Task AppendsRedactedReportAsOneJsonLine()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-shadow-{Guid.NewGuid():N}");
+        using var writer = new ShadowReportWriter(directory);
+        var path = await writer.AppendAsync(new ShadowRunReport(
+            "run-1",
+            new DateTimeOffset(2026, 9, 19, 15, 0, 0, TimeSpan.Zero),
+            4,
+            0,
+            1,
+            1));
+
+        var lines = await File.ReadAllLinesAsync(path);
+        Assert.Single(lines);
+        Assert.Contains("PAPER_SHADOW", lines[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", lines[0], StringComparison.OrdinalIgnoreCase);
+    }
 }

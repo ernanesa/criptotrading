@@ -15,6 +15,11 @@ No Worker, o drill integrado é opt-in com `WORKER_SHADOW_ENABLED=true` e exige
 `WORKER_NO_TRADE=true`; ele executa uma única janela local no startup e não
 habilita o dispatcher de ordens.
 
+Quando integrado ao Worker, cada execução acrescenta uma linha JSONL em
+`WORKER_SHADOW_REPORT_DIRECTORY` (por padrão `artifacts/shadow`) e publica
+alertas locais deduplicados para divergência, stale e recovery. Esses alertas
+não são entrega externa de on-call.
+
 O teste deve ser executado com o SDK/restore da solução já preparado. O runner
 recusa a execução quando `BINANCE_API_KEY` ou `BINANCE_API_SECRET` estão
 presentes, e falha se o filtro não produzir um resumo de testes aprovado. Cada

@@ -22,6 +22,8 @@ public sealed class WorkerRuntimeOptions
     /// <summary>Runs one deterministic local Shadow drill at worker startup when enabled.</summary>
     public bool ShadowEnabled { get; set; }
 
+    public string ShadowReportDirectory { get; set; } = "artifacts/shadow";
+
     public int PollIntervalMilliseconds { get; set; } = 1_000;
 
     public int BatchSize { get; set; } = 25;
@@ -72,6 +74,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_SHADOW_ENABLED requires WORKER_NO_TRADE=true."]);
+        }
+
+        if (ShadowEnabled && string.IsNullOrWhiteSpace(ShadowReportDirectory))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_SHADOW_REPORT_DIRECTORY is required when WORKER_SHADOW_ENABLED=true."]);
         }
     }
 }
