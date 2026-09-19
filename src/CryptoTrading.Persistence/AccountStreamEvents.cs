@@ -14,7 +14,10 @@ public sealed record AccountStreamEventRecord
         long eventTimeMilliseconds,
         DateTimeOffset receivedAtUtc,
         string payloadJson,
-        string? symbol = null)
+        string? symbol = null,
+        Guid? sessionId = null,
+        long? sessionGeneration = null,
+        long? subscriptionId = null)
     {
         if (eventId == Guid.Empty)
         {
@@ -24,6 +27,21 @@ public sealed record AccountStreamEventRecord
         EventType = ValidateText(eventType, nameof(eventType), 64);
         DedupeKey = ValidateText(dedupeKey, nameof(dedupeKey), 200);
         ArgumentOutOfRangeException.ThrowIfNegative(eventTimeMilliseconds);
+
+        if (sessionId is null != (sessionGeneration is null))
+        {
+            throw new ArgumentException("Session ID and session generation must be supplied together.");
+        }
+
+        if (sessionGeneration is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sessionGeneration), "Session generations must be positive.");
+        }
+
+        if (subscriptionId is < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(subscriptionId));
+        }
 
         if (receivedAtUtc.Offset != TimeSpan.Zero)
         {
@@ -50,6 +68,9 @@ public sealed record AccountStreamEventRecord
         PayloadJson = CanonicalizeJson(payloadJson);
         PayloadSha256 = ComputeHash(PayloadJson);
         Symbol = symbol is null ? null : NormalizeSymbol(symbol);
+        SessionId = sessionId;
+        SessionGeneration = sessionGeneration;
+        SubscriptionId = subscriptionId;
     }
 
     public Guid EventId { get; }
@@ -60,6 +81,12 @@ public sealed record AccountStreamEventRecord
     public string PayloadJson { get; }
     public string PayloadSha256 { get; }
     public string? Symbol { get; }
+    /// <summary>WebSocket connection identity; null only for rows created before migration 008.</summary>
+    public Guid? SessionId { get; }
+    /// <summary>Monotonic connection generation within the Worker process.</summary>
+    public long? SessionGeneration { get; }
+    /// <summary>Binance subscription identifier returned by the modern WS API.</summary>
+    public long? SubscriptionId { get; }
 
     public static string ComputeHash(string payloadJson)
     {

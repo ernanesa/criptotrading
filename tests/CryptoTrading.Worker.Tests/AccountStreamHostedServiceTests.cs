@@ -62,6 +62,39 @@ public sealed class AccountStreamHostedServiceTests
     }
 
     [Fact]
+    public void StreamSessionIdentityIsPropagatedToTheDurableEnvelope()
+    {
+        var sessionId = Guid.NewGuid();
+        var source = new BinanceExecutionReportEvent(
+            DateTimeOffset.UtcNow,
+            1_700_000_000_125,
+            "BTCUSDT",
+            43,
+            8,
+            "client-43",
+            "BUY",
+            "LIMIT",
+            "TRADE",
+            "FILLED",
+            0.01m,
+            0.01m,
+            100.50m,
+            0.001m,
+            "USDT")
+        {
+            SessionId = sessionId,
+            SessionGeneration = 3,
+            StreamSubscriptionId = 11
+        };
+
+        var record = AccountStreamHostedService.ToRecord(source);
+
+        Assert.Equal(sessionId, record.SessionId);
+        Assert.Equal(3, record.SessionGeneration);
+        Assert.Equal(11, record.SubscriptionId);
+    }
+
+    [Fact]
     public void AccountStreamGateRequiresPersistenceMigrationAndNoTrade()
     {
         Assert.Throws<Microsoft.Extensions.Options.OptionsValidationException>(() => new WorkerRuntimeOptions

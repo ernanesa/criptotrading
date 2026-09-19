@@ -105,19 +105,23 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var attempt = 0;
+        long sessionGeneration = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
+            var sessionId = Guid.NewGuid();
+            var currentGeneration = checked(++sessionGeneration);
 #pragma warning disable CA2007
             await using var transport = transportFactory();
 #pragma warning restore CA2007
             IAsyncEnumerator<ReadOnlyMemory<byte>>? enumerator = null;
             var subscriptionSucceeded = false;
             var receivedEvent = false;
+            long? subscriptionId = null;
             try
             {
                 await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), cancellationToken).ConfigureAwait(false);
                 enumerator = transport.ReadMessagesAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
-                await SubscribeAsync(transport, enumerator, cancellationToken).ConfigureAwait(false);
+                subscriptionId = await SubscribeAsync(transport, enumerator, cancellationToken).ConfigureAwait(false);
                 subscriptionSucceeded = true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -136,6 +140,17 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
 
             if (subscriptionSucceeded && enumerator is not null)
             {
+                var establishedAt = timeProvider.GetUtcNow();
+                yield return new BinanceUserDataStreamControlEvent(
+                    establishedAt,
+                    establishedAt.ToUnixTimeMilliseconds(),
+                    "connectionEstablished",
+                    subscriptionId)
+                {
+                    SessionId = sessionId,
+                    SessionGeneration = currentGeneration,
+                    StreamSubscriptionId = subscriptionId
+                };
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     bool hasMessage;
@@ -167,7 +182,12 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
                         continue;
                     }
 
-                    yield return parsed;
+                    yield return parsed with
+                    {
+                        SessionId = sessionId,
+                        SessionGeneration = currentGeneration,
+                        StreamSubscriptionId = subscriptionId ?? (parsed as BinanceUserDataStreamControlEvent)?.SubscriptionId
+                    };
                     receivedEvent = true;
                     if (parsed is BinanceUserDataStreamControlEvent control &&
                         control.EventType is "eventStreamTerminated" or "serverShutdown")
@@ -225,7 +245,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
         }, JsonOptions);
     }
 
-    private async Task SubscribeAsync(
+    private async Task<long?> SubscribeAsync(
         IBinanceWebSocketTransport transport,
         IAsyncEnumerator<ReadOnlyMemory<byte>> enumerator,
         CancellationToken cancellationToken)
@@ -256,6 +276,11 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
         {
             throw new BinanceUserDataStreamProtocolException($"WebSocket API subscription failed with status {status}.");
         }
+
+        return root.TryGetProperty("result", out var result) &&
+            result.TryGetProperty("subscriptionId", out var subscriptionId)
+            ? subscriptionId.GetInt64()
+            : null;
     }
 
     private static BinanceUserDataEvent? ParseMessage(ReadOnlySpan<byte> payload, DateTimeOffset receivedAtUtc)

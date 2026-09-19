@@ -95,6 +95,15 @@ após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
   janela de leitura e trigger append-only. Replays idênticos são no-op; colisão
   de identidade com conteúdo diferente falha fechado.
 
+Migration `008_account_stream_session_identity` acrescenta `session_id`,
+`session_generation` e `subscription_id` ao envelope append-only. O cliente
+moderno da Binance atribui uma identidade nova a cada conexão WebSocket e uma
+geração monotônica ao reconnect; o Worker persiste esses valores junto de cada
+evento e do marcador `connectionEstablished`. Assim é possível distinguir
+duplicação, reconnect e encerramento remoto durante a reconciliação. Linhas
+anteriores à migration permanecem legíveis com identidade nula e não são
+preenchidas retroativamente.
+
 ## Ativação pelo Worker
 
 O Worker registra o `PostgresTradingStore` somente quando

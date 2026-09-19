@@ -135,8 +135,18 @@ public sealed class BinanceUserDataStreamTests
         using var cancellation = new CancellationTokenSource();
         await using var enumerator = client.ReadAsync("ignored-by-modern-api", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
         Assert.True(await enumerator.MoveNextAsync());
+        var established = Assert.IsType<BinanceUserDataStreamControlEvent>(enumerator.Current);
+        Assert.Equal("connectionEstablished", established.EventType);
+        Assert.Equal(7, established.SubscriptionId);
+        Assert.NotNull(established.SessionId);
+        Assert.Equal(1, established.SessionGeneration);
+        Assert.Equal(7, established.StreamSubscriptionId);
+        Assert.True(await enumerator.MoveNextAsync());
         var execution = Assert.IsType<BinanceExecutionReportEvent>(enumerator.Current);
         Assert.Equal(99, execution.OrderId);
+        Assert.Equal(established.SessionId, execution.SessionId);
+        Assert.Equal(established.SessionGeneration, execution.SessionGeneration);
+        Assert.Equal(established.StreamSubscriptionId, execution.StreamSubscriptionId);
         Assert.True(await enumerator.MoveNextAsync());
         var shutdown = Assert.IsType<BinanceUserDataStreamControlEvent>(enumerator.Current);
         Assert.Equal("serverShutdown", shutdown.EventType);
