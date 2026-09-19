@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
@@ -75,6 +76,50 @@ public sealed class BinanceSpotAccountClientTests
 
         Assert.Single(handler.Requests);
         Assert.DoesNotContain(handler.Requests, request => request.RequestUri!.AbsolutePath.Contains("v3/", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InvalidAccountBalanceFailsClosedBeforeItReachesCallers()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"USDT\",\"free\":\"-1\",\"locked\":\"0\"}]}"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+    }
+
+    [Fact]
+    public async Task InvalidOpenOrderQuantityFailsClosedBeforeItReachesCallers()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/openOrders", "[{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"local-1\",\"price\":\"100\",\"origQty\":\"0.01\",\"executedQty\":\"0.02\",\"cummulativeQuoteQty\":\"0\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"BUY\"}]"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetOpenOrdersAsync("BTCUSDT"));
+    }
+
+    [Fact]
+    public async Task MissingTradeRequiredFieldFailsClosedBeforeItReachesCallers()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/myTrades", "[{\"symbol\":\"BTCUSDT\",\"id\":7,\"orderId\":42,\"price\":\"100\",\"qty\":\"0.01\",\"quoteQty\":\"1\",\"commission\":\"0.001\",\"commissionAsset\":null,\"time\":1,\"isBuyer\":true,\"isMaker\":false,\"isBestMatch\":true}]"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetMyTradesAsync("BTCUSDT"));
+    }
+
+    [Fact]
+    public async Task InvalidSymbolAndDecimalResponsesAreRejected()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/openOrders", "[{\"symbol\":\"BTC-USDT\",\"orderId\":42,\"clientOrderId\":\"local-1\",\"price\":\"not-a-number\",\"origQty\":\"0.01\",\"executedQty\":\"0\",\"cummulativeQuoteQty\":\"0\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"BUY\"}]"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetOpenOrdersAsync("BTCUSDT"));
     }
 
     [Fact]

@@ -42,7 +42,8 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     public async Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default)
     {
         await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
-        return await SendSignedAsync<BinanceAccountSnapshot>("v3/account", [], cancellationToken).ConfigureAwait(false);
+        var account = await SendSignedAsync<BinanceAccountSnapshot>("v3/account", [], cancellationToken).ConfigureAwait(false);
+        return BinanceAuthenticatedResponseValidator.Validate(account);
     }
 
     public async Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(
@@ -56,7 +57,8 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
             parameters.Add(new("symbol", NormalizeSymbol(symbol)));
         }
 
-        return await SendSignedAsync<List<BinanceOpenOrder>>("v3/openOrders", parameters, cancellationToken).ConfigureAwait(false);
+        var orders = await SendSignedAsync<List<BinanceOpenOrder>>("v3/openOrders", parameters, cancellationToken).ConfigureAwait(false);
+        return BinanceAuthenticatedResponseValidator.Validate(orders);
     }
 
     public async Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(
@@ -90,7 +92,8 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
             parameters.Add(new("limit", limit.ToString(CultureInfo.InvariantCulture)));
         }
 
-        return await SendSignedAsync<List<BinanceTrade>>("v3/myTrades", parameters, cancellationToken).ConfigureAwait(false);
+        var trades = await SendSignedAsync<List<BinanceTrade>>("v3/myTrades", parameters, cancellationToken).ConfigureAwait(false);
+        return BinanceAuthenticatedResponseValidator.Validate(trades);
     }
 
     public async Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default)
@@ -172,14 +175,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
 
     private static string NormalizeSymbol(string symbol)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
-        var normalized = symbol.Trim().ToUpperInvariant();
-        if (normalized.Length > 20 || normalized.Any(character => !char.IsAsciiLetterOrDigit(character)))
-        {
-            throw new ArgumentException("Symbol must contain only ASCII letters and digits and be at most 20 characters.", nameof(symbol));
-        }
-
-        return normalized;
+        return BinanceAuthenticatedResponseValidator.NormalizeSymbol(symbol, nameof(symbol));
     }
 }
 
