@@ -25,6 +25,13 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void MaxOutboxAttemptsIsBounded()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions { MaxOutboxAttempts = 0 }.Validate());
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions { MaxOutboxAttempts = 101 }.Validate());
+    }
+
+    [Fact]
     public async Task NoTradeExecutorDoesNotParseOrExecutePayload()
     {
         var executor = new PaperOutboxMessageExecutor(
