@@ -1,4 +1,3 @@
-using CryptoTrading.Configuration;
 using Microsoft.Extensions.Options;
 using Xunit;
 

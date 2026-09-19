@@ -1,10 +1,14 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/CryptoTrading.Api/CryptoTrading.Api.csproj" />
+    <Project Path="src/CryptoTrading.Configuration/CryptoTrading.Configuration.csproj" />
     <Project Path="src/CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <Project Path="src/CryptoTrading.Exchange.Binance/CryptoTrading.Exchange.Binance.csproj" />
     <Project Path="src/CryptoTrading.Worker/CryptoTrading.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj" />
+    <Project Path="tests/CryptoTrading.Exchange.Binance.Tests/CryptoTrading.Exchange.Binance.Tests.csproj" />
   </Folder>
 </Solution>

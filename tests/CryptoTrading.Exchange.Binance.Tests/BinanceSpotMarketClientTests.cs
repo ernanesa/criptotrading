@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Headers;
-using CryptoTrading.Exchange.Binance;
 using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
