@@ -93,6 +93,52 @@ public sealed class TrendFollowingBacktestTests
             new SensitivityCase("baseline", parameters)]));
     }
 
+    [Fact]
+    public void SyntheticDatasetAndWalkForwardEvaluationAreReproducible()
+    {
+        var first = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var second = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var windows = WalkForwardPlan.Create(first.Bars.Count, trainingBars: 60, outOfSampleBars: 20, stepBars: 20);
+
+        var result = WalkForwardEvaluator.Evaluate(
+            first.Metadata,
+            first.Bars,
+            TrendFollowingParameters.BtcUsdtBaseline,
+            BacktestEvaluationOptions.DailyCrypto(),
+            windows);
+
+        Assert.Equal("synthetic-btcusdt-oos", first.Metadata.DatasetId);
+        Assert.Equal("1.0.0", first.Metadata.Version);
+        Assert.Equal(first.Metadata.ContentHash, second.Metadata.ContentHash);
+        Assert.Equal(first.Bars.Select(bar => bar.ClosePrice.Value), second.Bars.Select(bar => bar.ClosePrice.Value));
+        Assert.Equal(6, result.Windows.Count);
+        Assert.All(result.Windows, window => Assert.Equal(20, window.PeriodCount));
+        Assert.All(result.Windows, window => Assert.InRange(window.NetReturn, -1m, 1m));
+    }
+
+    [Fact]
+    public void WalkForwardUsesTrainingOnlyAsWarmupAndRejectsOutOfRangeWindows()
+    {
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var window = new WalkForwardWindow(1, 0, 60, 60, 20);
+
+        var result = WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            dataset.Bars,
+            TrendFollowingParameters.BtcUsdtBaseline,
+            BacktestEvaluationOptions.DailyCrypto(),
+            [window]);
+
+        Assert.Equal(window, result.Windows[0].Window);
+        Assert.Equal(20, result.Windows[0].PeriodCount);
+        Assert.Throws<ArgumentException>(() => WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            dataset.Bars,
+            TrendFollowingParameters.BtcUsdtBaseline,
+            BacktestEvaluationOptions.DailyCrypto(),
+            [new WalkForwardWindow(1, 0, 60, 170, 20)]));
+    }
+
     private static CloseBar[] Bars(params decimal[] prices) =>
         prices.Select((price, index) => new CloseBar(
                 BtcUsdt,
