@@ -30,7 +30,9 @@ vazamento de evidência.
 
 Um resultado `PASS` comprova somente o cenário local determinístico coberto
 pelo teste: decisões da estratégia comparadas com observações do Paper,
-stale/recovery e divergências controladas. Ele não comprova dataset real,
+stale/recovery e divergências controladas. O `PaperShadowSession` executa
+decisões contra o `PaperExchange` determinístico e converte fills em
+observações redigidas. Ele não comprova dataset real,
 reconciliação autenticada da Testnet, entrega de alertas externos, RPO/RTO de
 produção ou autorização de Canary/Live. Esses gates permanecem separados e
 fail-closed.

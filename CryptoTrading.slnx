@@ -9,6 +9,7 @@
     <Project Path="src/CryptoTrading.Persistence/CryptoTrading.Persistence.csproj" />
     <Project Path="src/CryptoTrading.Reconciliation/CryptoTrading.Reconciliation.csproj" />
     <Project Path="src/CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
+    <Project Path="src/CryptoTrading.Shadow/CryptoTrading.Shadow.csproj" />
     <Project Path="src/CryptoTrading.Worker/CryptoTrading.Worker.csproj" />
   </Folder>
   <Folder Name="/tools/">
@@ -24,5 +25,6 @@
     <Project Path="tests/CryptoTrading.Observability.Tests/CryptoTrading.Observability.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Worker.Tests/CryptoTrading.Worker.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Reconciliation.Tests/CryptoTrading.Reconciliation.Tests.csproj" />
+    <Project Path="tests/CryptoTrading.Shadow.Tests/CryptoTrading.Shadow.Tests.csproj" />
   </Folder>
 </Solution>
