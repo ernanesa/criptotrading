@@ -31,7 +31,7 @@ internal sealed class ReconciliationStartupHostedService(
             result.ObservedAtUtc,
             result.IsHealthy,
             result.Events.Count,
-            result.Events.OfType<ReconciliationMismatch>().Count(),
+            result.MismatchCount,
             result.UnknownTradeIds.Count,
             result.OpenOrderCount), cancellationToken).ConfigureAwait(false);
         if (result.IsHealthy)
