@@ -81,14 +81,28 @@ external integration evidence.
 
 ## User Data Stream (read-only event ingestion)
 
-`BinanceUserDataStreamClient` consumes an already-provisioned `listenKey` over
-the allowlisted Testnet/Demo WebSocket host. It parses `executionReport` and
+`BinanceUserDataStreamClient` consumes a `listenKey` over the allowlisted
+Testnet/Demo WebSocket host. It parses `executionReport` and
 `outboundAccountPosition`, quarantines malformed/unknown events, and reconnects
-with bounded exponential backoff. The client deliberately does not create,
-renew or close listen keys and does not expose order, transfer or withdrawal
-operations; key lifecycle remains an explicitly authorized integration boundary.
+with bounded exponential backoff. The separate
+`BinanceUserDataStreamLifecycleClient` can create, renew and close only the
+stream key through the restricted `v3/userDataStream` endpoint; it does not
+expose order, transfer, withdrawal, margin or futures operations.
+
+Register the lifecycle adapter only in an explicitly authenticated local
+process:
 
 ```csharp
+services.AddBinanceUserDataStreamLifecycleClient(options =>
+{
+    options.Environment = BinanceEnvironment.Testnet;
+    options.ApiKey = configuration["BINANCE_API_KEY"] ?? string.Empty;
+});
+```
+
+```csharp
+var lifecycle = serviceProvider.GetRequiredService<IBinanceUserDataStreamLifecycle>();
+var listenKey = await lifecycle.CreateListenKeyAsync(stoppingToken);
 var stream = new BinanceUserDataStreamClient(new BinanceUserDataStreamOptions
 {
     Environment = BinanceEnvironment.Testnet,
@@ -99,8 +113,10 @@ await foreach (var userEvent in stream.ReadAsync(listenKey, stoppingToken))
 {
     // Persist execution/account events before updating read models.
 }
+await lifecycle.CloseListenKeyAsync(listenKey, stoppingToken);
 ```
 
-The parser and transport are covered with fake WebSocket tests. These tests do
-not prove connectivity to Binance or replace the pending authenticated Testnet
-reconciliation gate.
+The parser, transport and lifecycle HTTP verbs are covered with fake tests.
+These tests do not prove connectivity to Binance or replace the pending
+authenticated Testnet reconciliation gate. Keepalive scheduling, durable event
+projection and snapshot-plus-delta recovery remain downstream responsibilities.

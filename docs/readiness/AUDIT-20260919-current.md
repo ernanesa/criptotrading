@@ -47,8 +47,9 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   nenhum canal externo é presumido.
 - A camada Binance possui ingestão de User Data Stream read-only para
   `executionReport` e `outboundAccountPosition`, com parser, reconnect e
-  backoff testáveis; criação/renovação de `listenKey` e conectividade Testnet
-  real continuam deliberadamente pendentes.
+  backoff testáveis. O lifecycle REST de criação/renovação/fechamento do
+  `listenKey` também possui cliente restrito e testes fake; conectividade
+  Testnet real e projeção durável dos eventos continuam pendentes.
 - O Worker possui uma reconciliação autenticada read-only opt-in no startup,
   condicionada a PostgreSQL local e `NO_TRADE`; sem credenciais novas ela falha
   antes de qualquer chamada. A execução contra a conta Testnet ainda não foi
