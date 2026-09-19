@@ -32,6 +32,15 @@ public sealed class WorkerRuntimeOptions
 
     public int MaxOutboxAttempts { get; set; } = 5;
 
+    /// <summary>Runs one authenticated, read-only account reconciliation at startup.</summary>
+    public bool ReconciliationEnabled { get; set; }
+
+    public string ReconciliationAccount { get; set; } = "exchange-wallet";
+
+    public string ReconciliationSymbols { get; set; } = "BTCUSDT";
+
+    public int ReconciliationMaxSnapshotAgeSeconds { get; set; } = 30;
+
     public void Validate()
     {
         if (!string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase))
@@ -62,6 +71,36 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_MAX_OUTBOX_ATTEMPTS must be between 1 and 100."]);
+        }
+
+        if (ReconciliationEnabled && !NoTrade)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_ENABLED requires WORKER_NO_TRADE=true."]);
+        }
+
+        if (ReconciliationEnabled && !PersistenceEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_ENABLED requires WORKER_PERSISTENCE_ENABLED=true."]);
+        }
+
+        if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationAccount))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_ACCOUNT is required when reconciliation is enabled."]);
+        }
+
+        if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationSymbols))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_SYMBOLS is required when reconciliation is enabled."]);
+        }
+
+        if (ReconciliationMaxSnapshotAgeSeconds is < 1 or > 86_400)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS must be between 1 and 86400."]);
         }
 
         if (PersistenceEnabled && string.IsNullOrWhiteSpace(PostgresConnectionString))
