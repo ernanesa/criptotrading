@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `a5b3f62`
+**Commit de código auditado:** `8f202f8`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 204 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 205 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 4 testes, incluindo vínculo atômico journal/ledger/trade, migration 005, persistência idempotente e rejeição de símbolo conflitante |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
@@ -39,6 +39,9 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - O Worker Shadow local persistiu relatório JSONL redigido e publicou alertas
   deduplicados de divergência, stale e recovery; canais externos ainda não
   foram configurados.
+- O Worker possui um sink JSONL local opt-in para alertas redigidos,
+  `WORKER_ALERT_FILE_DIRECTORY`; o sink em memória continua sendo o padrão e
+  nenhum canal externo é presumido.
 - O Worker possui uma reconciliação autenticada read-only opt-in no startup,
   condicionada a PostgreSQL local e `NO_TRADE`; sem credenciais novas ela falha
   antes de qualquer chamada. A execução contra a conta Testnet ainda não foi
