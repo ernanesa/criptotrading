@@ -21,6 +21,7 @@ execução limpa.
 O registry atual em `CryptoTrading.Domain.Research` é process-local e deliberadamente não lê rede, credenciais ou
 dados de mercado. A migration 011 e `IExperimentGovernanceStore` já fornecem o
 store PostgreSQL append-only para preregistration, trials e auditorias; o
-manifesto de evidência redigido e a leitura/reconstrução completa continuam
-como próxima fatia. A governança não autoriza promoção: RiskPolicy, dataset real,
+manifesto de evidência redigido continua como próxima fatia; a leitura do
+snapshot já recompõe preregistration, trials, contagem de acessos e estado de
+contaminação após restart. A governança não autoriza promoção: RiskPolicy, dataset real,
 aprovação humana e decisão Go/No-Go continuam pendentes.

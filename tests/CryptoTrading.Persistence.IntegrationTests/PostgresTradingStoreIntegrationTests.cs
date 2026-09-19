@@ -452,6 +452,16 @@ public sealed class PostgresTradingStoreIntegrationTests
             registration.ExperimentId, "reviewer", "manual contamination drill", "holdout-v2",
             registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1")));
 
+        await using var restartedStore = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var snapshot = await restartedStore.ReadExperimentGovernanceSnapshotAsync(registration.ExperimentId);
+        Assert.NotNull(snapshot);
+        Assert.Equal(registration.PreregistrationSha256, snapshot!.Preregistration.PreregistrationSha256);
+        Assert.Single(snapshot.Trials);
+        Assert.Equal(1, snapshot.HoldoutAccessCount);
+        Assert.True(snapshot.HoldoutContaminated);
+        Assert.Equal("holdout-v2", snapshot.ReplacementHoldoutVersion);
+        Assert.Equal("manual contamination drill", snapshot.ContaminationReason);
+
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
         await using var delete = new NpgsqlCommand(
