@@ -118,5 +118,8 @@ locais; são segredos distintos.
 - A migration 005 adiciona a evidência append-only de trade IDs conhecidos para
   reconciliação; ela não autoriza submit/cancel e não deve ser preenchida sem
   vínculo durável ao journal.
+- O snapshot autenticado pagina trades por `fromId`, com limite configurável e
+  falha fechada quando a paginação não termina; IDs repetidos entre páginas são
+  deduplicados antes da reconciliação.
 - A senha do PostgreSQL continua sendo local e separada das credenciais da
   Binance.
