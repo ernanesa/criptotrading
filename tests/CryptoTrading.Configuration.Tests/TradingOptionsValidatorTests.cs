@@ -62,6 +62,23 @@ public sealed class TradingOptionsValidatorTests
     }
 
     [Fact]
+    public void ValidationFailuresNeverEchoCredentialValues()
+    {
+        const string apiKey = "test-key-that-must-not-leak";
+        const string apiSecret = "test-secret-that-must-not-leak";
+        var options = ValidOptions();
+        options.Environment = "PRODUCTION";
+        options.Binance.ApiKey = apiKey;
+        options.Binance.ApiSecret = apiSecret;
+
+        var result = new TradingOptionsValidator().Validate(Options.DefaultName, options);
+        var failures = string.Join(Environment.NewLine, result.Failures ?? []);
+
+        Assert.DoesNotContain(apiKey, failures, StringComparison.Ordinal);
+        Assert.DoesNotContain(apiSecret, failures, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProductionBinanceEndpointIsRejected()
     {
         var options = ValidOptions();
