@@ -77,6 +77,24 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
+    public async Task LocalOnlyAssetIsReconciledAgainstZeroExchangeBalance()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(Now, [new ReconciliationBalance("BTC", 1m, 0m)], []),
+            new Dictionary<string, decimal> { ["BTC"] = 1m, ["USDT"] = 25m },
+            control,
+            new InMemoryReconciliationEventSink());
+
+        var result = await service.ReconcileAsync();
+
+        Assert.False(result.IsHealthy);
+        var usdtMismatch = Assert.IsType<ReconciliationMismatch>(result.Events.Single(item => item is ReconciliationMismatch mismatch && mismatch.Asset == "USDT"));
+        Assert.Equal(-25m, usdtMismatch.Delta);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
     public async Task RepeatedDriftUsesIdempotentSafeModeCommand()
     {
         var control = CreateControl();
@@ -169,6 +187,9 @@ public sealed class AccountReconciliationServiceTests
     {
         public Task<decimal> GetBalanceAsync(AccountId account, string asset, CancellationToken cancellationToken = default) =>
             Task.FromResult(balances.GetValueOrDefault(asset));
+
+        public Task<IReadOnlySet<string>> GetAssetsAsync(AccountId account, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlySet<string>>(balances.Keys.ToHashSet(StringComparer.Ordinal));
     }
 
     private sealed class FakeKnownTradeReader(IReadOnlySet<long> ids) : IKnownTradeReader

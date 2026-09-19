@@ -49,6 +49,9 @@ internal sealed class PostgresLocalBalanceReader(PostgresTradingStore store) : I
 {
     public async Task<decimal> GetBalanceAsync(AccountId account, string asset, CancellationToken cancellationToken = default) =>
         (await store.GetBalanceAsync(account, new Asset(asset), cancellationToken).ConfigureAwait(false)).Amount;
+
+    public Task<IReadOnlySet<string>> GetAssetsAsync(AccountId account, CancellationToken cancellationToken = default) =>
+        store.GetAssetsAsync(account, cancellationToken);
 }
 
 internal sealed class PostgresKnownTradeReader(PostgresTradingStore store) : IKnownTradeReader
