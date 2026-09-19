@@ -29,6 +29,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   integração dedicado; o backup/restore isolado foi executado nesta auditoria.
 - O Paper chaos/soak foi executado sem rede, PostgreSQL, credenciais ou ordens.
 - O probe autenticado permanece read-only e falha fechado sem credenciais.
+- O avaliador local `ShadowDriftEvaluator` calcula divergência, stale e recovery
+  de observações redigidas sem qualquer capacidade de submissão de ordem.
 
 ## Gates que continuam pendentes
 
