@@ -23,6 +23,10 @@ public static class RiskReasonCodes
     public const string KillSwitchActive = "KILL_SWITCH_NO_NEW_ENTRIES";
     public const string WithdrawalsDisabled = "WITHDRAWALS_DISABLED";
     public const string InvalidRequest = "INVALID_REQUEST";
+    public const string MarketRiskDataUnavailable = "MARKET_RISK_DATA_UNAVAILABLE";
+    public const string SlippageLimit = "SLIPPAGE_LIMIT";
+    public const string VolatilityLimit = "VOLATILITY_LIMIT";
+    public const string LiquidityLimit = "LIQUIDITY_LIMIT";
 }
 
 /// <summary>Immutable, versioned hard limits. Values are decimal quote-currency notional.</summary>
@@ -35,7 +39,10 @@ public sealed record RiskPolicy
         decimal maxDailyLoss,
         decimal maxDrawdown,
         TimeSpan maxMarketDataAge,
-        bool withdrawalsEnabled = false)
+        bool withdrawalsEnabled = false,
+        decimal? maxSlippageBps = null,
+        decimal? maxVolatilityBps = null,
+        decimal? minLiquidityNotional = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
         if (version.Length > 100)
@@ -52,6 +59,10 @@ public sealed record RiskPolicy
             throw new ArgumentOutOfRangeException(nameof(maxMarketDataAge), "Market data age must be positive.");
         }
 
+        ValidateOptionalNonNegative(maxSlippageBps, nameof(maxSlippageBps));
+        ValidateOptionalNonNegative(maxVolatilityBps, nameof(maxVolatilityBps));
+        ValidateOptionalNonNegative(minLiquidityNotional, nameof(minLiquidityNotional));
+
         Version = version.Trim();
         MaxOrderNotional = maxOrderNotional;
         MaxExposureNotional = maxExposureNotional;
@@ -59,6 +70,9 @@ public sealed record RiskPolicy
         MaxDrawdown = maxDrawdown;
         MaxMarketDataAge = maxMarketDataAge;
         WithdrawalsEnabled = withdrawalsEnabled;
+        MaxSlippageBps = maxSlippageBps;
+        MaxVolatilityBps = maxVolatilityBps;
+        MinLiquidityNotional = minLiquidityNotional;
     }
 
     public string Version { get; }
@@ -76,11 +90,68 @@ public sealed record RiskPolicy
     /// <remarks>Production policies must keep this false. It is explicit to make unsafe configuration visible.</remarks>
     public bool WithdrawalsEnabled { get; }
 
+    /// <summary>Maximum expected execution slippage in basis points, when configured.</summary>
+    public decimal? MaxSlippageBps { get; }
+
+    /// <summary>Maximum observed volatility in basis points, when configured.</summary>
+    public decimal? MaxVolatilityBps { get; }
+
+    /// <summary>Minimum available quote-currency liquidity, when configured.</summary>
+    public decimal? MinLiquidityNotional { get; }
+
     private static void ValidatePositive(decimal value, string parameterName)
     {
         if (value <= 0m)
         {
             throw new ArgumentOutOfRangeException(parameterName, "Risk limits must be greater than zero.");
+        }
+    }
+
+    private static void ValidateOptionalNonNegative(decimal? value, string parameterName)
+    {
+        if (value is < 0m)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, "Optional market-risk limits cannot be negative.");
+        }
+    }
+}
+
+/// <summary>Point-in-time, locally derived market-risk inputs consumed by the pure evaluator.</summary>
+public sealed record MarketRiskSnapshot
+{
+    public MarketRiskSnapshot(
+        decimal expectedSlippageBps,
+        decimal volatilityBps,
+        decimal availableLiquidityNotional,
+        DateTimeOffset observedAt,
+        bool isComplete = true)
+    {
+        ValidateNonNegative(expectedSlippageBps, nameof(expectedSlippageBps));
+        ValidateNonNegative(volatilityBps, nameof(volatilityBps));
+        ValidateNonNegative(availableLiquidityNotional, nameof(availableLiquidityNotional));
+        if (observedAt.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Market-risk timestamps must be UTC.", nameof(observedAt));
+        }
+
+        ExpectedSlippageBps = expectedSlippageBps;
+        VolatilityBps = volatilityBps;
+        AvailableLiquidityNotional = availableLiquidityNotional;
+        ObservedAt = observedAt;
+        IsComplete = isComplete;
+    }
+
+    public decimal ExpectedSlippageBps { get; }
+    public decimal VolatilityBps { get; }
+    public decimal AvailableLiquidityNotional { get; }
+    public DateTimeOffset ObservedAt { get; }
+    public bool IsComplete { get; }
+
+    private static void ValidateNonNegative(decimal value, string parameterName)
+    {
+        if (value < 0m)
+        {
+            throw new ArgumentOutOfRangeException(parameterName, "Market-risk values cannot be negative.");
         }
     }
 }
@@ -96,7 +167,8 @@ public sealed record RiskEvaluationRequest
         DateTimeOffset marketDataAt,
         DateTimeOffset evaluatedAt,
         bool emergencyStopActive = false,
-        bool withdrawalRequested = false)
+        bool withdrawalRequested = false,
+        MarketRiskSnapshot? marketRisk = null)
     {
         ValidateNonNegative(requestedTargetNotional, nameof(requestedTargetNotional));
         ValidateNonNegative(currentExposureNotional, nameof(currentExposureNotional));
@@ -115,6 +187,7 @@ public sealed record RiskEvaluationRequest
         EvaluatedAt = evaluatedAt;
         EmergencyStopActive = emergencyStopActive;
         WithdrawalRequested = withdrawalRequested;
+        MarketRisk = marketRisk;
     }
 
     public decimal RequestedTargetNotional { get; }
@@ -125,6 +198,7 @@ public sealed record RiskEvaluationRequest
     public DateTimeOffset EvaluatedAt { get; }
     public bool EmergencyStopActive { get; }
     public bool WithdrawalRequested { get; }
+    public MarketRiskSnapshot? MarketRisk { get; }
 
     private static void ValidateNonNegative(decimal value, string parameterName)
     {
@@ -184,8 +258,44 @@ public static class RiskEvaluator
             return BlockNewExposure(request, policy, RiskReasonCodes.MarketDataStale);
         }
 
+        var marketRiskConfigured = policy.MaxSlippageBps.HasValue ||
+            policy.MaxVolatilityBps.HasValue ||
+            policy.MinLiquidityNotional.HasValue;
+        if (marketRiskConfigured && (request.MarketRisk is null || !request.MarketRisk.IsComplete))
+        {
+            return BlockNewExposure(request, policy, RiskReasonCodes.MarketRiskDataUnavailable);
+        }
+
+        var marketRisk = request.MarketRisk;
+        if (marketRisk is not null)
+        {
+            if (policy.MaxSlippageBps is { } maxSlippage && marketRisk.ExpectedSlippageBps > maxSlippage)
+            {
+                return BlockNewExposure(request, policy, RiskReasonCodes.SlippageLimit);
+            }
+
+            if (policy.MaxVolatilityBps is { } maxVolatility && marketRisk.VolatilityBps > maxVolatility)
+            {
+                return BlockNewExposure(request, policy, RiskReasonCodes.VolatilityLimit);
+            }
+
+            if (policy.MinLiquidityNotional is { } minimumLiquidity &&
+                marketRisk.AvailableLiquidityNotional < minimumLiquidity)
+            {
+                return BlockNewExposure(request, policy, RiskReasonCodes.LiquidityLimit);
+            }
+        }
+
         var authorized = Math.Min(requested, policy.MaxOrderNotional);
         authorized = Math.Min(authorized, policy.MaxExposureNotional);
+        if (marketRisk is not null && policy.MinLiquidityNotional is not null)
+        {
+            authorized = Math.Min(authorized, marketRisk.AvailableLiquidityNotional);
+            if (requested > marketRisk.AvailableLiquidityNotional)
+            {
+                reasons.Add(RiskReasonCodes.LiquidityLimit);
+            }
+        }
         if (authorized > requested)
         {
             throw new InvalidOperationException("Risk evaluator cannot increase a target.");
