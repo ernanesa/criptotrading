@@ -1,6 +1,9 @@
 // Test fixtures are public for xUnit discovery and are instantiated by the test adapter.
 #pragma warning disable CA1515
 #pragma warning disable CA1812
+using System.Text;
+using System.Text.Json;
+
 namespace CryptoTrading.Shadow.Tests;
 
 public sealed class PostReleaseReportTests
@@ -78,6 +81,95 @@ public sealed class PostReleaseReportTests
         {
             Metrics = valid.Metrics with { ReliabilityErrorCount = -1 },
         }));
+    }
+
+    [Xunit.Fact]
+    [Xunit.Trait("Category", "ReleaseEvidence")]
+    public void WritesImmutableRedactedReportAndTraceabilityManifest()
+    {
+        using var temporary = new TemporaryDirectory();
+        var input = CreateInput();
+        var generatedAt = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+
+        var bundle = PostReleaseEvidenceWriter.Write(
+            temporary.Path,
+            input,
+            ["AC-RELEASE-REPORT-01", "docs/readiness/traceability-20260919.yaml", "33eaf73"],
+            generatedAt);
+
+        Xunit.Assert.True(File.Exists(bundle.ReportPath));
+        Xunit.Assert.True(File.Exists(bundle.ManifestPath));
+        Xunit.Assert.Equal(bundle.Report.Sha256, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(File.ReadAllText(bundle.ReportPath)))));
+        Xunit.Assert.Equal(bundle.ManifestSha256, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(File.ReadAllText(bundle.ManifestPath)))));
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(bundle.ManifestPath));
+        Xunit.Assert.Equal(PostReleaseEvidenceWriter.ManifestSchemaVersion, manifest.RootElement.GetProperty("schema_version").GetString());
+        Xunit.Assert.False(manifest.RootElement.GetProperty("promotion_authorized").GetBoolean());
+        Xunit.Assert.Equal(bundle.Report.Sha256, manifest.RootElement.GetProperty("artifact_sha256").GetString());
+        Xunit.Assert.Equal("33eaf73", manifest.RootElement.GetProperty("traceability_references")[0].GetString());
+        AssertUserOnlyFileMode(bundle.ReportPath);
+        AssertUserOnlyFileMode(bundle.ManifestPath);
+
+        var repeated = PostReleaseEvidenceWriter.Write(
+            temporary.Path,
+            input,
+            ["33eaf73", "AC-RELEASE-REPORT-01", "docs/readiness/traceability-20260919.yaml"],
+            generatedAt);
+        Xunit.Assert.Equal(bundle.Report.Sha256, repeated.Report.Sha256);
+        Xunit.Assert.Equal(bundle.ManifestSha256, repeated.ManifestSha256);
+    }
+
+    [Xunit.Fact]
+    [Xunit.Trait("Category", "ReleaseEvidence")]
+    public void RejectsUnsafeOrConflictingEvidenceBundle()
+    {
+        using var temporary = new TemporaryDirectory();
+        var input = CreateInput();
+        var generatedAt = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseEvidenceWriter.Write(
+            temporary.Path,
+            input with { ReportId = "../unsafe" },
+            ["AC-RELEASE-REPORT-01"],
+            generatedAt));
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseEvidenceWriter.Write(
+            temporary.Path,
+            input,
+            ["api_key must never be recorded"],
+            generatedAt));
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseEvidenceWriter.Write(
+            temporary.Path,
+            input,
+            ["AC-RELEASE-REPORT-01"],
+            generatedAt.ToOffset(TimeSpan.FromHours(-3))));
+
+        PostReleaseEvidenceWriter.Write(temporary.Path, input, ["AC-RELEASE-REPORT-01"], generatedAt);
+        Xunit.Assert.Throws<IOException>(() => PostReleaseEvidenceWriter.Write(
+            temporary.Path,
+            input,
+            ["AC-RELEASE-REPORT-01"],
+            generatedAt.AddMinutes(1)));
+    }
+
+    private static void AssertUserOnlyFileMode(string path)
+    {
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            Xunit.Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+        }
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cryptotrading-release-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
     }
 
     private static PostReleaseReportInput CreateInput() => new()

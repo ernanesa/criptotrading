@@ -32,5 +32,35 @@ permissões locais da política de evidências (`0600`) e ser anexado ao manifes
 de rastreabilidade. Um relatório `Go` não substitui a aprovação humana nem os
 gates de Testnet, OOS, Shadow, alertas e RPO/RTO de produção.
 
+## Bundle de evidência e rastreabilidade
+
+Para persistir o relatório de forma integrada ao fluxo local, use
+`PostReleaseEvidenceWriter.Write`. Ele cria dois arquivos imutáveis no diretório
+informado:
+
+- `<report-id>.json`: o JSON canônico redigido do relatório;
+- `<report-id>.manifest.json`: manifesto sidecar com o SHA-256 do relatório,
+  versão do schema, decisão, referências de rastreabilidade e
+  `promotion_authorized: false`.
+
+```csharp
+var bundle = PostReleaseEvidenceWriter.Write(
+    "artifacts/release",
+    input,
+    [
+        "AC-RELEASE-REPORT-01",
+        "docs/readiness/traceability-20260919.yaml",
+        "<commit-audited>",
+    ],
+    generatedAtUtc: clock.GetUtcNow());
+```
+
+O escritor ordena e valida as referências, rejeita IDs de arquivo inseguros e
+metadados com aparência de credencial, exige timestamp UTC e aplica `0600` em
+Unix. Uma segunda gravação com o mesmo conteúdo é idempotente; qualquer
+tentativa de alterar uma evidência existente falha fechado. A existência do
+manifesto não aprova uma promoção e não substitui o `validate-readiness.sh` nem
+as aprovações humanas.
+
 Os testes do contrato estão em
 `tests/CryptoTrading.Shadow.Tests/PostReleaseReportTests.cs`.
