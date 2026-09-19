@@ -26,6 +26,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ExecutionMode = builder.Configuration["WORKER_EXECUTION_MODE"] ?? "PAPER";
         options.NoTrade = builder.Configuration.GetValue("WORKER_NO_TRADE", true);
         options.ShadowEnabled = builder.Configuration.GetValue("WORKER_SHADOW_ENABLED", false);
+        options.ShadowReportDirectory = builder.Configuration["WORKER_SHADOW_REPORT_DIRECTORY"] ?? "artifacts/shadow";
         options.PollIntervalMilliseconds = builder.Configuration.GetValue("WORKER_POLL_INTERVAL_MS", 1_000);
         options.BatchSize = builder.Configuration.GetValue("WORKER_OUTBOX_BATCH_SIZE", 25);
         options.LeaseSeconds = builder.Configuration.GetValue("WORKER_OUTBOX_LEASE_SECONDS", 30);
@@ -45,6 +46,12 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
     }, "Worker runtime configuration is invalid.")
     .ValidateOnStart();
 builder.Services.AddSingleton<IPaperExchange, PaperExchange>();
+builder.Services.AddSingleton<CryptoTrading.Observability.InMemoryTradingAlertSink>();
+builder.Services.AddSingleton<CryptoTrading.Observability.ITradingAlertSink>(serviceProvider =>
+    serviceProvider.GetRequiredService<CryptoTrading.Observability.InMemoryTradingAlertSink>());
+builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher>();
+builder.Services.AddSingleton<CryptoTrading.Shadow.ShadowReportWriter>(serviceProvider =>
+    new CryptoTrading.Shadow.ShadowReportWriter(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ShadowReportDirectory));
 builder.Services.AddSingleton<IOutboxMessageExecutor, PaperOutboxMessageExecutor>();
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
