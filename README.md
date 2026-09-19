@@ -29,6 +29,7 @@ uma nova chave Testnet. A integração pública pode ser verificada com
 nenhum teste autenticado deve ocorrer com segredo enviado pelo chat.
 
 O procedimento do bootstrap local está em [`docs/local-development.md`](docs/local-development.md).
+O acompanhamento das tarefas está em [`docs/implementation-checklist.md`](docs/implementation-checklist.md).
 
 ## Princípios
 
