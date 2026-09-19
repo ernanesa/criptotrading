@@ -1,6 +1,4 @@
-using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
-using CryptoTrading.Persistence;
 using Xunit;
 
 namespace CryptoTrading.Worker.Tests;
