@@ -14,6 +14,7 @@
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj" />
+    <Project Path="tools/CryptoTrading.PublicKlinesRecorder/CryptoTrading.PublicKlinesRecorder.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj" />

@@ -32,7 +32,7 @@ public sealed class BinanceSpotMarketClientTests
 
         Assert.Single(result);
         Assert.Equal(60500m, result[0].Close);
-        Assert.Equal("/api/klines?symbol=BTCUSDT&interval=1d&limit=100&startTime=0&endTime=172800000", handler.Request!.RequestUri!.PathAndQuery);
+        Assert.Equal("/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=100&startTime=0&endTime=172800000", handler.Request!.RequestUri!.PathAndQuery);
     }
 
     [Theory]
