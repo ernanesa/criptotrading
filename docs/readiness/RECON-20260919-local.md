@@ -18,7 +18,7 @@
 
 ## Estado ambíguo e decisão
 
-Não houve ordem real, cancelamento, credencial privada ou consulta autenticada neste snapshot. Portanto não há autorização para inferir paridade com a exchange. A decisão é `No-New-Entries` para qualquer modo que possa emitir ordem; Paper continua permitido.
+Não houve ordem real, cancelamento, credencial privada ou consulta autenticada neste snapshot. Portanto não há autorização para inferir paridade com a exchange. A decisão é `No-New-Entries` para qualquer modo que possa emitir ordem; Paper continua permitido. Snapshots read-only antigos ou com timestamp futuro agora falham fechado e ativam `SafeMode` (`STALE_SNAPSHOT`).
 
 ## Próxima evidência necessária
 
