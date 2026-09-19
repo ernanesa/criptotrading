@@ -17,6 +17,9 @@ public sealed class PersistenceMigrationsTests
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
+        Assert.Equal(
+            ["001", "001", "002", "002", "003", "003"],
+            migrations.Select(static migration => migration.Version));
     }
 
     [Fact]

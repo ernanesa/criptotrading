@@ -72,7 +72,10 @@ Execute a fixture a partir da raiz do repositório:
 
 Ela gera uma senha efêmera em memória, sobe o Compose em uma porta local de
 teste, verifica `pg_isready`, aplica migrations, grava e consulta o ledger,
-exercita deduplicação do outbox e valida o ciclo lease → falha transitória →
-retry → processed. Ao terminar, executa `docker compose down` sem `--volumes` e
-verifica que o volume nomeado continua presente. A senha deve continuar fora
-dos arquivos versionados e não é exibida pelo script.
+exercita deduplicação do outbox e valida os ciclos lease → falha transitória →
+retry → processed e lease expirado → reinício do store → recuperação. A
+segunda etapa confirma que somente o worker que reassumiu o lease pode marcar a
+mensagem como processada, evitando confirmação por um processo antigo. Ao
+terminar, executa `docker compose down` sem `--volumes` e verifica que o volume
+nomeado continua presente. A senha deve continuar fora dos arquivos
+versionados e não é exibida pelo script.
