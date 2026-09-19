@@ -79,6 +79,9 @@ após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
   somente após o evento correspondente estar no journal; a tabela
   `reconciliation_known_trades` é append-only e serve ao reader da
   reconciliação. IDs ausentes continuam sendo divergência fail-closed.
+- `AppendJournalEntryWithKnownTradeAsync` deve ser usado quando o fill externo
+  e o lançamento contábil forem confirmados juntos: journal, postings, projeção
+  de saldo e `trade_id` são gravados na mesma transação serializável.
 
 ## Ativação pelo Worker
 
@@ -116,8 +119,8 @@ locais; são segredos distintos.
 - A migration 003 adiciona `lease_owner` para impedir que um worker finalize a
   mensagem de outro worker.
 - A migration 005 adiciona a evidência append-only de trade IDs conhecidos para
-  reconciliação; ela não autoriza submit/cancel e não deve ser preenchida sem
-  vínculo durável ao journal.
+  reconciliação; ela não autoriza submit/cancel e o método atômico deve ser
+  preferido para criar o vínculo durável ao journal.
 - O snapshot autenticado pagina trades por `fromId`, com limite configurável e
   falha fechada quando a paginação não termina; IDs repetidos entre páginas são
   deduplicados antes da reconciliação.
