@@ -7,6 +7,17 @@ Procedimento para provar recuperação sem capital e sem chaves privadas.
 Validar migrations, journal/ledger append-only, outbox lease/retry,
 deduplicação e reconstrução após reinício do PostgreSQL/Worker.
 
+## Reconstrução determinística local
+
+`LedgerReconstructor.Rebuild` reconstitui a projeção somente a partir das
+entradas do journal, ordenadas por `OccurredAt` e `LedgerEntryId`. O resultado
+registra quantidade de entradas, último timestamp e duração do rebuild; essa
+última medida é a evidência local de RTO do componente de projeção. O journal
+permanece imutável e duplicatas de uma mesma entrada não geram efeito duplicado.
+
+Isso não substitui a medição operacional completa de RPO/RTO do PostgreSQL,
+backup, restore e alertas externos.
+
 ## Passos
 
 1. Executar `./scripts/test-postgres-integration.sh` e guardar saída redigida.
