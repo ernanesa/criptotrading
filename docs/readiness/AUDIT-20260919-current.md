@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `0859bed`
+**Commit de código auditado:** `4e2cdad`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -39,7 +39,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Reconciliation mismatch accounting | `dotnet test` Reconciliation + Worker | PASS — `MismatchCount` inclui divergências de saldo e open orders em startup, periodicidade e reconnect; 11 + 24 testes |
 | Reconciliation alert delivery | `dotnet test` Worker | PASS — divergência não saudável publica alerta crítico redigido e saudável não publica; startup, periodicidade e reconnect integrados; 26 testes Worker |
 | Alert delivery retry | `dotnet test` Observability + Worker | PASS — backoff exponencial limitado, cancelamento não repetido, falha final propagada e wrapper registrado no Worker; 13 + 24 testes |
-| Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 53 testes |
+| Testnet public boundary | `./scripts/test-binance-testnet-public.sh` | PASS — ping, server time, exchangeInfo BTCUSDT e klines BTCUSDT/1d públicos, sem credenciais; cliente fake coberto por 56 testes Binance |
+| Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 56 testes |
 
 | OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
 | Quality gate de dataset externo | `dotnet test` Backtesting | PASS — 3 testes rejeitam look-ahead, sequência duplicada e tempo não monotônico; sem rede/credenciais |
