@@ -89,7 +89,7 @@ public sealed class PaperOutboxMessageExecutor(
     {
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
-        return new SubmitOrderCommand(
+        var command = new SubmitOrderCommand(
             new OrderId(ReadGuid(root, "orderId")),
             new ClientOrderId(ReadString(root, "clientOrderId")),
             new Symbol(ReadString(root, "symbol")),
@@ -102,6 +102,28 @@ public sealed class PaperOutboxMessageExecutor(
             new IdempotencyKey(ReadString(root, "idempotencyKey")),
             ReadString(root, "policyVersion"),
             ReadValue(root, "createdAtUtc").GetDateTimeOffset());
+
+        if (command.Quantity.Value <= 0m)
+        {
+            throw new JsonException("Property 'quantity' must be greater than zero.");
+        }
+
+        if (command.AuthorizedNotional <= 0m)
+        {
+            throw new JsonException("Property 'authorizedNotional' must be greater than zero.");
+        }
+
+        if (command.Quantity.Value * command.ReferencePrice.Value != command.AuthorizedNotional)
+        {
+            throw new JsonException("quantity multiplied by referencePrice must equal authorizedNotional.");
+        }
+
+        if (command.CreatedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new JsonException("Property 'createdAtUtc' must be a UTC timestamp.");
+        }
+
+        return command;
     }
 
     private static string ReadString(JsonElement root, string property) => ReadValue(root, property).GetString()
@@ -114,9 +136,29 @@ public sealed class PaperOutboxMessageExecutor(
     private static T ReadEnum<T>(JsonElement root, string property) where T : struct, Enum
     {
         var value = ReadValue(root, property);
-        return value.ValueKind == JsonValueKind.String
-            ? Enum.Parse<T>(value.GetString()!, ignoreCase: true)
-            : (T)Enum.ToObject(typeof(T), value.GetInt32());
+        T parsed;
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            if (!Enum.TryParse(value.GetString(), ignoreCase: true, out parsed))
+            {
+                throw new JsonException($"Property '{property}' contains an unknown enum value.");
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var numericValue))
+        {
+            parsed = (T)Enum.ToObject(typeof(T), numericValue);
+        }
+        else
+        {
+            throw new JsonException($"Property '{property}' must be a string or integer enum value.");
+        }
+
+        if (!Enum.IsDefined(parsed))
+        {
+            throw new JsonException($"Property '{property}' contains an undefined enum value.");
+        }
+
+        return parsed;
     }
 
     private static JsonElement ReadValue(JsonElement root, string property)

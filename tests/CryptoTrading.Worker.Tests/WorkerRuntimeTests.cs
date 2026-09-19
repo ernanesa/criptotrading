@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
@@ -180,6 +181,36 @@ public sealed class WorkerRuntimeTests
         Assert.Equal(1, exchange.SubmitCalls);
     }
 
+    [Fact]
+    public async Task PaperExecutorRejectsUndefinedEnumValues()
+    {
+        var command = NewCommand();
+        var payload = JsonNode.Parse(JsonSerializer.Serialize(command))!.AsObject();
+        payload["Side"] = 99;
+        var message = MessageForPayload(command, payload.ToJsonString());
+        var executor = new PaperOutboxMessageExecutor(
+            new PaperExchange(),
+            Options.Create(new WorkerRuntimeOptions { NoTrade = false }),
+            NullLogger<PaperOutboxMessageExecutor>.Instance);
+
+        await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message));
+    }
+
+    [Fact]
+    public async Task PaperExecutorRejectsInconsistentAuthorizedNotional()
+    {
+        var command = NewCommand();
+        var payload = JsonNode.Parse(JsonSerializer.Serialize(command))!.AsObject();
+        payload["AuthorizedNotional"] = 101m;
+        var message = MessageForPayload(command, payload.ToJsonString());
+        var executor = new PaperOutboxMessageExecutor(
+            new PaperExchange(),
+            Options.Create(new WorkerRuntimeOptions { NoTrade = false }),
+            NullLogger<PaperOutboxMessageExecutor>.Instance);
+
+        await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message));
+    }
+
     private static SubmitOrderCommand NewCommand() => new(
         OrderId.New(),
         ClientOrderId.New(),
@@ -200,6 +231,17 @@ public sealed class WorkerRuntimeTests
         command.CorrelationId,
         command.IdempotencyKey,
         JsonSerializer.Serialize(command),
+        command.CreatedAtUtc,
+        1,
+        command.CreatedAtUtc.AddMinutes(1),
+        "test-worker");
+
+    private static LeasedOutboxMessage MessageForPayload(SubmitOrderCommand command, string payload) => new(
+        Guid.NewGuid(),
+        OrderExecutionPipeline.SubmitOrderMessageType,
+        command.CorrelationId,
+        command.IdempotencyKey,
+        payload,
         command.CreatedAtUtc,
         1,
         command.CreatedAtUtc.AddMinutes(1),
