@@ -77,7 +77,7 @@ itens em andamento ou bloqueados.
 - [x] Cobrir fees e slippage explícitos na baseline.
 - [x] Implementar slice determinístico com equity, retorno líquido, fees, turnover, drawdown e Sharpe parametrizado.
 - [x] Adicionar contratos de janelas out-of-sample/walk-forward e matriz de sensibilidade.
-- [ ] Executar validação OOS com dataset versionado e comparar casos de sensibilidade.
+- [x] Executar validação OOS com dataset sintético versionado e comparar janelas walk-forward; sensibilidade de execução permanece pendente.
 - [ ] Evoluir o simulador para spread, latência, partial fills, rejeições, limites e impacto de mercado.
 - [ ] Implementar Monte Carlo e stress tests depois de validar o modelo de execução.
 
@@ -128,6 +128,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | PostgreSQL integration | Migrations, ledger, outbox lease/retry/idempotência via Compose com senha efêmera; teste reproduzível | `scripts/test-postgres-integration.sh`, `tests/CryptoTrading.Persistence.IntegrationTests` | `f7b073a` | Codex |
 | 2026-09-19 | Crash recovery | Lease expirado recuperado por novo store após reinício; owner antigo não consegue confirmar e não há segunda entrega após processamento | `tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs`, `docs/postgres-local.md` | `4843123` | Codex |
 | 2026-09-19 | Submissão ambígua | Timeout consulta `clientOrderId` antes de retry; sem duplicação no dispatcher PAPER | `src/CryptoTrading.Worker`, testes Worker | `9b89445` | Codex |
+| 2026-09-19 | Validação OOS | Dataset sintético BTCUSDT v1.0.0 com SHA-256 e métricas exclusivamente OOS; 24 testes Backtesting | `src/CryptoTrading.Backtesting/OutOfSampleEvaluation.cs`, `docs/trend-following-baseline.md` | `946bc87` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
