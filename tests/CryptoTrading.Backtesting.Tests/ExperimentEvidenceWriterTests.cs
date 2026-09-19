@@ -63,6 +63,8 @@ public sealed class ExperimentEvidenceWriterTests
         HoldoutAccessCount = 1,
         HoldoutContaminated = false,
         Decision = "Rejected",
+        BenchmarkNetReturns = new Dictionary<string, decimal> { ["NO_TRADE/cash"] = 0m, ["buy-and-hold"] = 0.2m },
+        BenchmarkComparisonFingerprint = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
         SourceVersions = new Dictionary<string, string> { ["strategy"] = "trend/v1", ["dataset"] = "synthetic/v1" },
         TraceabilityReferences = ["docs/experiment-governance.md", "AC-RESEARCH-01"],
     };

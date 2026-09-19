@@ -13,6 +13,8 @@ public sealed record ExperimentEvidenceInput
     public required int HoldoutAccessCount { get; init; }
     public required bool HoldoutContaminated { get; init; }
     public required string Decision { get; init; }
+    public required IReadOnlyDictionary<string, decimal> BenchmarkNetReturns { get; init; }
+    public required string BenchmarkComparisonFingerprint { get; init; }
     public required IReadOnlyDictionary<string, string> SourceVersions { get; init; }
     public required IReadOnlyCollection<string> TraceabilityReferences { get; init; }
 }
@@ -49,6 +51,7 @@ public static class ExperimentEvidenceWriter
         EnsureUtc(generatedAtUtc);
         ValidateId(input.ExperimentId);
         ValidateSha(input.PreregistrationSha256, nameof(input.PreregistrationSha256));
+        ValidateSha(input.BenchmarkComparisonFingerprint, nameof(input.BenchmarkComparisonFingerprint));
         if (input.TrialBudget < 1 || input.TrialBudget > 1_000_000 || input.TrialCount < 0 || input.TrialCount > input.TrialBudget)
         {
             throw new ArgumentOutOfRangeException(nameof(input), "Trial count must be within the preregistered budget.");
@@ -57,6 +60,13 @@ public static class ExperimentEvidenceWriter
         if (input.HoldoutAccessCount < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(input), "Holdout access count cannot be negative.");
+        }
+
+        ArgumentNullException.ThrowIfNull(input.BenchmarkNetReturns);
+        if (!input.BenchmarkNetReturns.ContainsKey("NO_TRADE/cash") ||
+            !input.BenchmarkNetReturns.ContainsKey("buy-and-hold"))
+        {
+            throw new ArgumentException("Both NO_TRADE/cash and buy-and-hold benchmarks are required.", nameof(input));
         }
 
         var decision = Required(input.Decision, nameof(input.Decision));
@@ -82,6 +92,9 @@ public static class ExperimentEvidenceWriter
             holdout_access_count = input.HoldoutAccessCount,
             holdout_contaminated = input.HoldoutContaminated,
             decision,
+            benchmark_net_returns = input.BenchmarkNetReturns.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
+            benchmark_comparison_fingerprint = input.BenchmarkComparisonFingerprint.ToUpperInvariant(),
             source_versions = input.SourceVersions.OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
         }, JsonOptions);
