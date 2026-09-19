@@ -18,6 +18,15 @@ deduplicação e reconstrução após reinício do PostgreSQL/Worker.
 5. Comparar snapshot reconstruído com o ledger esperado e executar a
    reconciliação read-only.
 
+Para validar o ciclo físico de backup sem tocar no volume da aplicação, execute:
+
+```bash
+./scripts/test-postgres-backup-restore.sh
+```
+
+O script usa um projeto, volume, banco de restauração e arquivo temporários
+gerados pelo próprio processo; ao finalizar, remove somente esses recursos.
+
 ## Critérios de aprovação
 
 - nenhum evento financeiro duplicado;
