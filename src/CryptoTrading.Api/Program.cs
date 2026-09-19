@@ -1,4 +1,5 @@
 using CryptoTrading.Configuration;
+using CryptoTrading.Domain.Risk;
 using CryptoTrading.Observability;
 using CryptoTrading.Persistence;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -17,6 +18,8 @@ builder.Logging.AddJsonConsole(options =>
 });
 builder.Configuration.AddLocalDotEnv();
 builder.Services.AddTradingConfiguration(builder.Configuration);
+builder.Services.AddSingleton<IOperationalControl>(_ =>
+    new InMemoryOperationalControl(new DenyApiOperationalControlResetAuthorizer()));
 builder.Services.AddOptions<TradingOptions>().ValidateOnStart();
 builder.Services.AddHealthChecks().AddCheck<TradingReadinessCheck>("trading-configuration", tags: ["ready"]);
 var postgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"];
@@ -78,6 +81,20 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 app.MapGet("/metrics", () => Results.Ok(TradingTelemetry.Snapshot()))
     .WithName("GetMetrics");
 
+app.MapGet("/operational/status", (IOperationalControl operationalControl) =>
+    Results.Ok(new
+    {
+        source = "api-process",
+        mode = operationalControl.Snapshot.Mode.ToString(),
+        blocksNewEntries = operationalControl.Snapshot.BlocksNewEntries,
+        revision = operationalControl.Snapshot.Revision,
+        changedAtUtc = operationalControl.Snapshot.ChangedAtUtc,
+        changedBy = operationalControl.Snapshot.ChangedBy,
+        reason = operationalControl.Snapshot.Reason,
+        mutatingEndpointsEnabled = false
+    }))
+    .WithName("GetOperationalStatus");
+
 app.Run();
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The health check is created through dependency injection.")]
@@ -106,4 +123,12 @@ internal static partial class ApiLog
 {
     [LoggerMessage(LogLevel.Information, "HTTP request completed with status {StatusCode} in {DurationMilliseconds} ms")]
     public static partial void RequestCompleted(ILogger logger, int statusCode, double durationMilliseconds);
+}
+
+internal sealed class DenyApiOperationalControlResetAuthorizer : IOperationalControlResetAuthorizer
+{
+    public bool IsAuthorized(
+        OperationalControlSnapshot current,
+        OperationalControlCommand resetCommand,
+        OperationalControlResetAuthorization authorization) => false;
 }
