@@ -41,4 +41,50 @@ public sealed class ReconciliationReportWriterTests
             0,
             0)).AsTask());
     }
+
+    [Fact]
+    public async Task RejectsHealthyReportThatContainsUnresolvedMismatch()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-reconciliation-invalid-{Guid.NewGuid():N}");
+        using var writer = new ReconciliationReportWriter(directory);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => writer.AppendAsync(new ReconciliationRunReport(
+            "run-healthy-with-drift",
+            new DateTimeOffset(2026, 9, 19, 16, 0, 0, TimeSpan.Zero),
+            true,
+            1,
+            1,
+            0)).AsTask());
+    }
+
+    [Fact]
+    public async Task RejectsNonReadOnlyExecutionModeBeforeWritingEvidence()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-reconciliation-mode-{Guid.NewGuid():N}");
+        using var writer = new ReconciliationReportWriter(directory);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => writer.AppendAsync(new ReconciliationRunReport(
+            "run-mutating-mode",
+            new DateTimeOffset(2026, 9, 19, 16, 0, 0, TimeSpan.Zero),
+            false,
+            1,
+            1,
+            0,
+            ExecutionMode: "LIVE")).AsTask());
+    }
+
+    [Fact]
+    public async Task RejectsUnhealthyReportWithoutAnAuditEvent()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-reconciliation-no-event-{Guid.NewGuid():N}");
+        using var writer = new ReconciliationReportWriter(directory);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => writer.AppendAsync(new ReconciliationRunReport(
+            "run-no-event",
+            new DateTimeOffset(2026, 9, 19, 16, 0, 0, TimeSpan.Zero),
+            false,
+            0,
+            0,
+            0)).AsTask());
+    }
 }
