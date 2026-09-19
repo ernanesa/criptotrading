@@ -49,6 +49,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         var replayed = await store.AppendJournalEntryAsync(ledger);
         Assert.Equal(ledgerId, replayed.Id);
         Assert.Equal(100m, (await store.GetBalanceAsync(new AccountId("integration-cash"), usdt)).Amount);
+        Assert.Contains("USDT", await store.GetAssetsAsync(new AccountId("integration-cash")));
 
         var orderId = OrderId.New();
         var commandKey = IdempotencyKey.New();
