@@ -36,7 +36,7 @@ itens em andamento ou bloqueados.
 - [x] Registrar o store no Worker sob flag explícita e aplicar migrations sob flag explícita.
 - [x] Implementar dispatcher PAPER com lease, retry, logs sem payload e default `NO_TRADE`.
 - [x] Implementar readiness real para banco e dependências.
-- [x] Validar restart, crash recovery de leases e idempotência durável; reconstrução completa de estado permanece pendente.
+- [x] Validar restart, crash recovery de leases, idempotência durável e reconstrução determinística local; RPO/RTO físico completo permanece pendente.
 
 ## Fase 3 — Binance read-only e market data
 
@@ -143,7 +143,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | DTOs autenticados | Validação fail-closed de account, balances, open orders e trades antes de reconciliação; 40 testes Binance | `src/CryptoTrading.Exchange.Binance/BinanceAuthenticatedResponseValidator.cs` | `ecd4b93`, `b7559b9` | Codex |
 | 2026-09-19 | Retry read-only | Cliente autenticado usa backoff limitado e `Retry-After` para 429/408/5xx, sem expor corpo ou assinatura | `src/CryptoTrading.Exchange.Binance/BinanceSpotAccountClient.cs` | `c5fc668` | Codex |
 | 2026-09-19 | Alert delivery local | Envelope operacional UTC com owner/ação/runbook, deduplicação, retry após falha e métricas; sink em memória cobre somente drills locais | `src/CryptoTrading.Observability/TradingAlerts.cs`, `tests/CryptoTrading.Observability.Tests/TradingAlertDispatcherTests.cs` | `bdc9acd` | Codex |
-| 2026-09-19 | Reconstrução de ledger | `LedgerReconstructor` recompõe a projeção a partir do journal em ordem determinística e captura duração local do rebuild; RPO/RTO operacional completo permanece pendente | `src/CryptoTrading.Domain/Accounting/LedgerReconstruction.cs`, `tests/CryptoTrading.Domain.Tests/LedgerReconstructionTests.cs`, `docs/recovery-drill.md` | `db1521f` | Codex |
+| 2026-09-19 | Reconstrução de ledger | `LedgerReconstructor` recompõe a projeção a partir do journal em ordem determinística; runner dedicado produz relatório redigido com 3 testes aprovados; RPO/RTO PostgreSQL completo permanece pendente | `src/CryptoTrading.Domain/Accounting/LedgerReconstruction.cs`, `tests/CryptoTrading.Domain.Tests/LedgerReconstructionTests.cs`, `scripts/test-ledger-recovery.sh`, `docs/recovery-drill.md` | `db1521f` + validação local | Codex |
 | 2026-09-19 | Shadow drift evaluator/runner | Avaliador e runner conectam decisões da estratégia a observações redigidas por sequência, timestamp e fingerprint; não enviam ordens e não substituem soak Shadow real | `src/CryptoTrading.Backtesting/ShadowDrift.cs`, `tests/CryptoTrading.Backtesting.Tests/ShadowDriftTests.cs` | `4b09eed`, `5cb5a86` | Codex |
 | 2026-09-19 | Shadow soak local | 64 observações sintéticas, divergência/stale/recovery controlados; runner repete 3 janelas por padrão, agrega resumos e falha fechado em qualquer erro ou credencial presente | `scripts/test-shadow-soak.sh`, `tests/CryptoTrading.Backtesting.Tests/ShadowSoakTests.cs`, `docs/shadow-soak.md` | `4b9966c`, `9192644` + validação 3x | Codex |
 | 2026-09-19 | Paper Shadow adapter | `PaperShadowSession` executa decisões da estratégia no `PaperExchange`, aplica ticks e converte fills em observações Shadow sem rede ou credenciais | `src/CryptoTrading.Shadow/PaperShadowSession.cs`, `tests/CryptoTrading.Shadow.Tests/PaperShadowSessionTests.cs` | `51b5a2d` | Codex |

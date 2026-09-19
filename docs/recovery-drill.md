@@ -52,6 +52,17 @@ mesma chave de idempotência na recuperação e prova que há 64 side effects pa
 variáveis `BINANCE_API_KEY` e `BINANCE_API_SECRET` do ambiente do teste; não há
 rede, PostgreSQL, credencial ou dinheiro real envolvido.
 
+Para executar a reconstrução determinística do ledger e produzir uma evidência
+redigida, execute:
+
+```bash
+./scripts/test-ledger-recovery.sh
+```
+
+O runner seleciona somente `Category=RecoveryDrill`, recusa credenciais
+Binance, não acessa rede ou PostgreSQL e grava o relatório em
+`artifacts/recovery/`. Qualquer falha do teste faz o comando falhar fechado.
+
 ## Critérios de aprovação
 
 - nenhum evento financeiro duplicado;
@@ -61,4 +72,5 @@ rede, PostgreSQL, credencial ou dinheiro real envolvido.
 - logs contêm correlation id e não contêm segredos;
 - resultado associado ao commit, migration version e dataset hash.
 
-O drill permanece pendente até haver uma execução capturada em ambiente local.
+O drill físico de PostgreSQL/RPO/RTO permanece separado; a execução local
+determinística de reconstrução é evidenciada pelo relatório gerado acima.
