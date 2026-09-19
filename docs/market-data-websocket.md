@@ -81,13 +81,29 @@ external integration evidence.
 
 ## User Data Stream (read-only event ingestion)
 
-`BinanceUserDataStreamClient` consumes a `listenKey` over the allowlisted
-Testnet/Demo WebSocket host. It parses `executionReport` and
-`outboundAccountPosition`, quarantines malformed/unknown events, and reconnects
-with bounded exponential backoff. The separate
-`BinanceUserDataStreamLifecycleClient` can create, renew and close only the
-stream key through the restricted `v3/userDataStream` endpoint; it does not
-expose order, transfer, withdrawal, margin or futures operations.
+The Worker uses `BinanceUserDataStreamApiClient`, the modern Spot WebSocket API
+with HMAC `userDataStream.subscribe.signature` over the allowlisted Testnet or
+Demo endpoint. It parses nested `executionReport` and
+`outboundAccountPosition` events, preserves `subscriptionId`, recognizes
+`eventStreamTerminated`/`serverShutdown`, quarantines malformed events and
+reconnects with bounded backoff; control envelopes retain `subscriptionId`. The legacy `listenKey` adapter below remains
+available only as a compatibility/test fixture and is not wired into the
+Worker.
+
+Enable the authenticated consumer only in a local, read-only process with
+`WORKER_ACCOUNT_STREAM_ENABLED=true`, `WORKER_PERSISTENCE_ENABLED=true`,
+`WORKER_APPLY_MIGRATIONS=true` and `WORKER_NO_TRADE=true`. The service starts
+after migrations (and optional reconciliation), persists an append-only event
+envelope, and enters SafeMode on stream termination or storage failure.
+
+```text
+BINANCE_API_KEY=<restricted-testnet-key>
+BINANCE_API_SECRET=<restricted-testnet-secret>
+BINANCE_USER_STREAM_WS_API_BASE_URL=wss://ws-api.testnet.binance.vision/ws-api/v3
+```
+
+The credentials are loaded from the local environment only; never commit them
+or place them in logs, fixtures or CI variables.
 
 Register the lifecycle adapter only in an explicitly authenticated local
 process:

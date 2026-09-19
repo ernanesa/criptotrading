@@ -38,6 +38,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.MaxOutboxAttempts = builder.Configuration.GetValue("WORKER_MAX_OUTBOX_ATTEMPTS", 5);
         options.ReconciliationEnabled = builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false);
         options.RiskPolicyRequired = builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false);
+        options.AccountStreamEnabled = builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
@@ -76,9 +77,14 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         ?? throw new InvalidOperationException("POSTGRES_CONNECTION_STRING is required when persistence is enabled."));
     _ = builder.Services.AddSingleton<IRiskPolicyStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IAccountStreamEventStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
 }
+// Hosted services are started in registration order. Migrations must complete
+// before reconciliation or account-stream persistence can be used.
+builder.Services.AddHostedService<PersistenceMigrationHostedService>();
 if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
 {
     _ = builder.Services.AddSingleton<ReconciliationReportWriter>(serviceProvider =>
@@ -115,10 +121,34 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
     });
     builder.Services.AddHostedService<ReconciliationStartupHostedService>();
 }
-builder.Services.AddHostedService<PersistenceMigrationHostedService>();
 if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
 {
     builder.Services.AddHostedService<RiskPolicyStartupHostedService>();
+}
+if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
+{
+    if (!builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
+    {
+        _ = builder.Services.AddSingleton<IOperationalControl>(_ => new InMemoryOperationalControl(new DenyOperationalControlResetAuthorizer()));
+    }
+
+    _ = builder.Services.AddSingleton<IBinanceUserDataStreamClient>(_ => new BinanceUserDataStreamApiClient(
+        new BinanceUserDataStreamApiOptions
+        {
+            Environment = string.Equals(builder.Configuration["TRADING_ENVIRONMENT"], "DEMO", StringComparison.OrdinalIgnoreCase)
+                ? BinanceEnvironment.Demo
+                : BinanceEnvironment.Testnet,
+            ApiKey = builder.Configuration["BINANCE_API_KEY"] ?? string.Empty,
+            ApiSecret = builder.Configuration["BINANCE_API_SECRET"] ?? string.Empty,
+            WebSocketApiBaseAddress = Uri.TryCreate(builder.Configuration["BINANCE_USER_STREAM_WS_API_BASE_URL"], UriKind.Absolute, out var wsBaseAddress)
+                ? wsBaseAddress
+                : null,
+            MaxReconnectAttempts = 10
+        }));
+}
+if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
+{
+    builder.Services.AddHostedService<AccountStreamHostedService>();
 }
 builder.Services.AddHostedService<OutboxDispatcher>();
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();

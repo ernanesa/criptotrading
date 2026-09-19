@@ -38,6 +38,9 @@ public sealed class WorkerRuntimeOptions
     /// <summary>Requires an approved, active RiskPolicy in PostgreSQL before startup.</summary>
     public bool RiskPolicyRequired { get; set; }
 
+    /// <summary>Enables the authenticated account-event stream with durable local persistence.</summary>
+    public bool AccountStreamEnabled { get; set; }
+
     public string ReconciliationAccount { get; set; } = "exchange-wallet";
 
     public string ReconciliationSymbols { get; set; } = "BTCUSDT";
@@ -97,6 +100,24 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RISK_POLICY_REQUIRED requires WORKER_PERSISTENCE_ENABLED=true."]);
+        }
+
+        if (AccountStreamEnabled && !NoTrade)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_NO_TRADE=true."]);
+        }
+
+        if (AccountStreamEnabled && !PersistenceEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_PERSISTENCE_ENABLED=true."]);
+        }
+
+        if (AccountStreamEnabled && !ApplyMigrations)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_APPLY_MIGRATIONS=true."]);
         }
 
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationAccount))
