@@ -64,6 +64,11 @@ balances, payloads e segredos não são gravados.
 Sem credenciais, a configuração deve permanecer desabilitada; o startup não
 faz chamadas autenticadas por padrão.
 
+Para persistir alertas operacionais locais redigidos, defina
+`WORKER_ALERT_FILE_DIRECTORY=artifacts/alerts`. Cada alerta será acrescentado
+ao arquivo diário `alerts-YYYYMMDD.jsonl`; o valor vazio mantém o sink em
+memória. Esse canal não substitui webhook/on-call externo.
+
 ## Evidência mínima de incidente
 
 Registrar UTC, commit, versão do dataset, `correlationId`, reason code, estado
