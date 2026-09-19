@@ -11,6 +11,7 @@ internal sealed class PeriodicReconciliationHostedService(
     IOptions<WorkerRuntimeOptions> options,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reportWriter,
+    CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     IOperationalControl operationalControl,
     ILogger<PeriodicReconciliationHostedService> logger) : BackgroundService
 {
@@ -35,6 +36,7 @@ internal sealed class PeriodicReconciliationHostedService(
                     result.MismatchCount,
                     result.UnknownTradeIds.Count,
                     result.OpenOrderCount), stoppingToken).ConfigureAwait(false);
+                _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, stoppingToken).ConfigureAwait(false);
 
                 if (result.IsHealthy)
                 {

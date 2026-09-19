@@ -25,6 +25,7 @@ internal sealed class AccountStreamHostedService(
     IOperationalControl operationalControl,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reconciliationReportWriter,
+    CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     ILogger<AccountStreamHostedService> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -94,6 +95,7 @@ internal sealed class AccountStreamHostedService(
             result.MismatchCount,
             result.UnknownTradeIds.Count,
             result.OpenOrderCount), cancellationToken).ConfigureAwait(false);
+        _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
         if (result.IsHealthy)
         {
             ReconciliationStartupLog.Healthy(logger, result.CorrelationId.ToString(), result.Events.Count, reportPath);

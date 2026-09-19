@@ -16,6 +16,7 @@ internal sealed class ReconciliationStartupHostedService(
     IOptions<WorkerRuntimeOptions> options,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reportWriter,
+    CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     ILogger<ReconciliationStartupHostedService> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -34,6 +35,7 @@ internal sealed class ReconciliationStartupHostedService(
             result.MismatchCount,
             result.UnknownTradeIds.Count,
             result.OpenOrderCount), cancellationToken).ConfigureAwait(false);
+        _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
         if (result.IsHealthy)
         {
             ReconciliationStartupLog.Healthy(logger, result.CorrelationId.ToString(), result.Events.Count, reportPath);
