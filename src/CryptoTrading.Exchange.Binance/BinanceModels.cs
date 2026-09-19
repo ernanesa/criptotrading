@@ -16,4 +16,22 @@ public sealed record BinanceSymbolInfo(
     [property: JsonPropertyName("baseAsset")] string BaseAsset,
     [property: JsonPropertyName("quoteAsset")] string QuoteAsset,
     [property: JsonPropertyName("baseAssetPrecision")] int BaseAssetPrecision,
-    [property: JsonPropertyName("quoteAssetPrecision")] int QuoteAssetPrecision);
+    [property: JsonPropertyName("quoteAssetPrecision")] int QuoteAssetPrecision,
+    [property: JsonPropertyName("filters")] IReadOnlyList<BinanceSymbolFilter>? Filters = null);
+
+/// <summary>
+/// The filter payload is intentionally represented as strings. Binance sends decimal
+/// quantities as JSON strings and converting them through floating point would make
+/// exact tick/step validation unsafe.
+/// </summary>
+public sealed record BinanceSymbolFilter(
+    [property: JsonPropertyName("filterType")] string FilterType,
+    [property: JsonPropertyName("minPrice")] string? MinPrice = null,
+    [property: JsonPropertyName("maxPrice")] string? MaxPrice = null,
+    [property: JsonPropertyName("tickSize")] string? TickSize = null,
+    [property: JsonPropertyName("minQty")] string? MinQty = null,
+    [property: JsonPropertyName("maxQty")] string? MaxQty = null,
+    [property: JsonPropertyName("stepSize")] string? StepSize = null,
+    [property: JsonPropertyName("minNotional")] string? MinNotional = null,
+    [property: JsonPropertyName("applyToMarket")] bool? ApplyToMarket = null,
+    [property: JsonPropertyName("avgPriceMins")] int? AveragePriceMinutes = null);
