@@ -1,5 +1,4 @@
 using System.Net.WebSockets;
-using System.Text.Json;
 
 namespace CryptoTrading.Exchange.Binance;
 

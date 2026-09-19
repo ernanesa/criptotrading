@@ -29,7 +29,7 @@ itens em andamento ou bloqueados.
 ## Fase 2 — Persistência financeira local
 
 - [x] Adicionar PostgreSQL 18 ao Docker Compose, com volume nomeado, bind local e healthcheck.
-- [ ] Criar migrations e política de backup local.
+- [x] Criar migrations SQL versionadas, rollback explícito e política de backup local.
 - [~] Implementar journal imutável e ledger de saldos, fees, posições e PnL (contrato/in-memory concluído; persistência ainda pendente).
 - [ ] Implementar outbox/inbox com lease, retry e deduplicação.
 - [ ] Implementar readiness real para banco e dependências.
@@ -41,7 +41,7 @@ itens em andamento ou bloqueados.
 - [x] Validar ambiente, endpoint e permissões fail-closed.
 - [ ] Implementar rate limits, retry, backoff e clock drift.
 - [ ] Implementar `exchangeInfo`, filtros e precisão por símbolo.
-- [ ] Implementar trades/candles via WebSocket e reconexão.
+- [x] Implementar trades/candles via WebSocket e reconexão pública resiliente.
 - [ ] Implementar order book local, gap detection e resync.
 - [ ] Implementar recorder/replay de dados selecionados.
 
@@ -76,7 +76,7 @@ itens em andamento ou bloqueados.
 ## Fase 7 — Shadow, observabilidade e operação
 
 - [ ] Implementar Strategy Health e estado `NO_TRADE`.
-- [ ] Instrumentar logs, métricas e traces OpenTelemetry.
+- [x] Instrumentar logs JSON, correlação, métricas e `ActivitySource` local.
 - [ ] Criar alertas, redaction, dashboards e runbooks.
 - [ ] Criar threat model.
 - [ ] Executar backup/restore, chaos e soak test em shadow.
@@ -102,6 +102,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Contabilidade | Journal/ledger in-memory com idempotência, balanceamento e atomicidade; 15 testes aprovados | `src/CryptoTrading.Domain/Accounting`, testes de domínio | `50cba3b` | Codex |
 | 2026-09-19 | Configuração | `.env` carregado localmente e validação Testnet fail-closed; 5 testes aprovados | `src/CryptoTrading.Configuration` | `9a11432` | Codex |
 | 2026-09-19 | Binance read-only | Cliente REST público com testes fake; 7 testes aprovados | `src/CryptoTrading.Exchange.Binance` | `9f5243f` | Codex |
+| 2026-09-19 | Persistência SQL | Migrations journal/ledger/outbox, guards append-only e rollback documentado; 2 testes aprovados | `src/CryptoTrading.Persistence`, `docs/persistence-migrations.md` | `fa97f71` | Codex |
+| 2026-09-19 | Market data | Streams públicos trade/kline com parsing, fragmentação, reconnect/backoff; 10 testes aprovados | `src/CryptoTrading.Exchange.Binance`, `docs/market-data-websocket.md` | `49a3abc` | Codex |
+| 2026-09-19 | Observabilidade | Logs JSON, correlação, métricas, `/metrics`, health e redaction; 5 testes aprovados | `src/CryptoTrading.Observability`, `docs/observability-local.md` | `8948360` | Codex |
 
 ## Bloqueios e decisões
 

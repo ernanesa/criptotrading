@@ -1,4 +1,3 @@
-using CryptoTrading.Persistence;
 using Xunit;
 
 namespace CryptoTrading.Persistence.Tests;
