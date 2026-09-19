@@ -32,5 +32,10 @@ antes do backtest ainda é obrigatório validar disponibilidade/ordenação com
 `MarketDataQualityGate`, versionar o dataset, separar treino/OOS e produzir o
 bundle experimental com benchmarks.
 
+Para transformar o journal em barras consumíveis pelo backtest, use
+`PublicKlineDatasetLoader.Load(...)`. Ele exige eventos `kline-rest`, confere
+que o `closeTimeUtc` do payload coincide com o envelope, preserva o fingerprint
+do replay e executa o quality gate antes de devolver `ClosedBarEnvelope`.
+
 O tool recusa diretórios não vazios para impedir duplicação silenciosa ou
 mistura de datasets de versões diferentes.

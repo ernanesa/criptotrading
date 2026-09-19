@@ -61,6 +61,45 @@ public sealed class MarketDataQualityGateTests
             MarketDataQualityGate.ValidateClosedBars(dataset.Metadata, nonMonotonicTime, "BTCUSDT"));
     }
 
+    [Fact]
+    public async Task LoadsPublicKlineJournalIntoVersionedQualityGatedDataset()
+    {
+        using var directory = new TemporaryDirectory();
+        using var recorder = new MarketDataRecorder(directory.Path);
+        var first = DateTimeOffset.UnixEpoch.AddDays(1);
+        await recorder.AppendAsync(first, first.AddMinutes(1), "kline-rest", "rest:klines:1d", "BTCUSDT",
+            new { closeTimeUtc = first, close = 100m });
+        var second = first.AddDays(1);
+        await recorder.AppendAsync(second, second.AddMinutes(1), "kline-rest", "rest:klines:1d", "BTCUSDT",
+            new { closeTimeUtc = second, close = 101m });
+
+        var replay = await recorder.ReadReplayAsync();
+        var loaded = PublicKlineDatasetLoader.Load(
+            replay,
+            "btc-testnet-1d",
+            "2026-09-19",
+            "binance-testnet-public",
+            "btcusdt",
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(2, loaded.Records.Count);
+        Assert.Equal(2, loaded.Quality.BarCount);
+        Assert.Equal(replay.DatasetChecksum, loaded.Metadata.ContentHash);
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cryptotrading-kline-loader-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
     private static ClosedBarEnvelope Envelope(long sequence, decimal price, DateTimeOffset availableAtUtc) =>
         new(
             sequence,
