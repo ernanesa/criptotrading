@@ -60,7 +60,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
             query.Add($"endTime={endTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)}");
         }
 
-        using var response = await httpClient.GetAsync(new Uri($"klines?{string.Join('&', query)}", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await httpClient.GetAsync(new Uri($"v3/klines?{string.Join('&', query)}", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "klines", cancellationToken).ConfigureAwait(false);
         using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(contentStream, cancellationToken: cancellationToken).ConfigureAwait(false);
