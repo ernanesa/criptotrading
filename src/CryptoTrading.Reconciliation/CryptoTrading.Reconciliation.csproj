@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <RootNamespace>CryptoTrading.Reconciliation</RootNamespace>
+    <AssemblyName>CryptoTrading.Reconciliation</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <ProjectReference Include="../CryptoTrading.Exchange.Binance/CryptoTrading.Exchange.Binance.csproj" />
+  </ItemGroup>
+</Project>
