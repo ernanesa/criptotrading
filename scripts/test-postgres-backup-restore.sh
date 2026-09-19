@@ -10,6 +10,8 @@ postgres_user="cryptotrading"
 postgres_port=$((55000 + ($$ % 1000)))
 volume_name="cryptotrading-backup-$$"
 backup_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.dump")"
+checksum_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.sha256")"
+corrupt_backup_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.corrupt")"
 report_dir="$repo_root/artifacts/recovery"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_file="$report_dir/postgres-rpo-rto-$run_stamp-$$.md"
@@ -19,6 +21,7 @@ compose=(docker compose --project-name "$compose_project" --file "$repo_root/com
 cleanup() {
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -f -- "$backup_file"
+    rm -f -- "$checksum_file" "$corrupt_backup_file"
 }
 trap cleanup EXIT
 
@@ -55,6 +58,18 @@ drill_started_ns="$(now_ns)"
 backup_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_dump -U "$postgres_user" -d "$postgres_db" --format=custom > "$backup_file"
 backup_finished_ns="$(now_ns)"
+backup_sha256="$(sha256sum "$backup_file" | awk '{print $1}')"
+printf '%s  %s\n' "$backup_sha256" "$backup_file" > "$checksum_file"
+sha256sum --check "$checksum_file" >/dev/null
+
+# A corrupted artifact must be rejected before any restore attempt. This is a
+# local tamper-detection probe; the source dump remains untouched.
+cp -- "$backup_file" "$corrupt_backup_file"
+printf 'x' | dd of="$corrupt_backup_file" bs=1 seek=0 conv=notrunc status=none
+if sha256sum --check <(printf '%s  %s\n' "$backup_sha256" "$corrupt_backup_file") >/dev/null 2>&1; then
+    echo "Corrupted backup unexpectedly passed checksum validation." >&2
+    exit 1
+fi
 "${compose[@]}" exec -T postgres createdb -U "$postgres_user" cryptotrading_restore
 restore_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_restore -U "$postgres_user" --dbname=cryptotrading_restore < "$backup_file"
@@ -80,6 +95,8 @@ cat > "$report_file" <<EOF
 - Scope: ephemeral local PostgreSQL backup/restore only.
 - Environment: local Docker Compose; no Binance credentials, exchange calls, or application volume targeted.
 - Backup artifact size: ${backup_bytes} bytes.
+- Backup SHA-256: ${backup_sha256} (verified before restore).
+- Corruption probe: altered copy rejected by SHA-256 verification before restore.
 - Backup duration: ${backup_ms} ms.
 - Restore duration (RTO probe): ${restore_ms} ms.
 - Verification duration: ${verify_ms} ms.

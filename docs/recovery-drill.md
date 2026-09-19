@@ -40,6 +40,9 @@ gerados pelo próprio processo; ao finalizar, remove somente esses recursos.
 Além da verificação do marcador, ele mede duração de backup, restore (RTO do
 drill), verificação e tempo total. O relatório redigido é gravado em
 `artifacts/recovery/postgres-rpo-rto-<timestamp>-<pid>.md` com permissão `600`.
+Antes do restore, o dump recebe SHA-256 e o checksum é verificado; uma cópia
+adulterada é testada e rejeitada sem ser restaurada. O checksum do artefato
+válido e o resultado do probe de corrupção ficam registrados no relatório.
 O resultado de RPO é limitado ao marcador confirmado antes do dump: zero linhas
 perdidas neste cenário determinístico não constitui garantia de RPO de produção.
 
@@ -67,6 +70,19 @@ redigida, execute:
 O runner seleciona somente `Category=RecoveryDrill`, recusa credenciais
 Binance, não acessa rede ou PostgreSQL e grava o relatório em
 `artifacts/recovery/`. Qualquer falha do teste faz o comando falhar fechado.
+
+Para executar o gate composto dos componentes locais de recuperação, execute:
+
+```bash
+./scripts/test-full-recovery-drill.sh
+```
+
+Esse runner executa os drills de ledger, persistência/restart e
+backup/restore em sequência, agrega apenas status e duração em
+`artifacts/recovery/full-recovery-<timestamp>-<pid>.md` e não copia stdout ou
+stderr dos filhos para o relatório. O gate composto continua limitado às
+fixtures locais; não prova RPO/RTO de produção, recuperação autenticada da
+exchange ou estado ausente dos fixtures.
 
 ## Critérios de aprovação
 
