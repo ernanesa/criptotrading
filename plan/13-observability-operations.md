@@ -36,6 +36,8 @@ Campos mínimos do audit event: `event_id`, `event_type`, `schema_version`, `occ
 - rate-limit usage/retry-after e outbox/inbox lag;
 - reconciliation age, unknown order, balance drift e audit write failure.
 
+Métricas usam labels bounded; order IDs, clientOrderIds, correlation IDs e outros identificadores de alta cardinalidade ficam em logs/traces/audit, não em labels. Nomes e atributos adotam OpenTelemetry Semantic Conventions versionadas quando aplicáveis.
+
 ## Alert severities
 
 - `INFO`: operação normal relevante.
@@ -49,6 +51,8 @@ Campos mínimos do audit event: `event_id`, `event_type`, `schema_version`, `occ
 - Market data stale: zero novas entradas enquanto acima de threshold.
 - Reconciliation mismatch não explicado: zero operação nova.
 - Critical alert delivery: alvo < 1 min quando canal permitir.
+
+Cada SLO declara SLI, janela, fórmula, fonte, exclusions, error budget, owner e ação ao consumir budget. Disponibilidade do processo não compensa violação de correção financeira. SLIs prioritários: financial-state trust, market-data freshness, reconciliation age, order-intent durability, audit durability e alert delivery.
 
 ## Dashboards
 
@@ -64,6 +68,8 @@ Campos mínimos do audit event: `event_id`, `event_type`, `schema_version`, `occ
 Blue/green ou rolling simples só depois de haver mais de uma instância segura. Em single-node, usar release versionada + backup + rollback rápido. Nunca reiniciar durante ordem crítica sem reconciliar no startup.
 
 Exporters e alerting devem ser decididos por ambiente: OTLP Collector, Prometheus-compatible metrics, Loki/structured logs e Tempo/traces ou equivalentes. Alertas precisam de regra, janela, deduplicação, routing, ownership, escalation, ação sugerida e teste de entrega.
+
+Synthetic probes verificam market-data freshness, endpoint read-only, persistência do journal, alert delivery e readiness sem enviar ordem live. Tail/adaptive sampling preserva traces falhos, lentos, retried e financeiramente relevantes; audit events e erros nunca dependem de sampling.
 
 ## Incident management
 

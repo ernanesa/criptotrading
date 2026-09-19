@@ -1,13 +1,16 @@
 # Plano mestre do CryptoTrading
 
-**Estado:** planejamento inicial  
-**Data-base:** 2026-09-01  
-**Produto:** plataforma autônoma de trading algorítmico de criptomoedas  
-**Exchange inicial:** Binance Spot  
-**Backend-alvo:** .NET 11 + C# 15  
-**Frontend-alvo:** React + TypeScript + Vite 8+
+- **Estado:** planning baseline revisada; sem implementação
+- **Data-base:** 2026-09-19
+- **Produto:** plataforma autônoma de trading algorítmico de criptomoedas
+- **Exchange inicial:** Binance Spot
+- **Backend-alvo:** .NET 11 + C# 15
+- **Frontend-alvo:** React + TypeScript + Vite 8+
+- **Ambiente inicial:** máquina local + Docker Compose; nenhuma infraestrutura AWS no escopo ativo
 
 Este diretório é a fonte de verdade do planejamento. Mudanças relevantes de produto, risco ou arquitetura devem atualizar estes documentos e, quando forem decisões arquiteturais, o registro de ADRs.
+
+As decisões de runtime e ambiente são vinculantes: a implementação começa em .NET 11/C# 15, com SDK exato fixado, e opera inicialmente nesta máquina. Cloud permanece apenas como opção futura até nova decisão de produto.
 
 ## Product Goal
 
@@ -52,6 +55,7 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [28 - Autonomia, autoaprendizado e resiliência](28-autonomy-continuous-learning.md)
 - [29 - Research Plane: RAG híbrido e GraphRAG](29-research-rag.md)
 - [30 - Rastreabilidade e entrega assistida por agentes](30-traceability-and-agent-delivery.md)
+- [Manifesto inicial de rastreabilidade](traceability.yaml)
 
 ## Templates
 
@@ -62,6 +66,17 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [Incident](templates/incident.md)
 - [Task](templates/task.md)
 - [Universe Policy](templates/universe-policy.md)
+- [Risk Policy](templates/risk-policy.md)
+- [Promotion Readiness Matrix](templates/promotion-readiness-matrix.md)
+- [Canary Plan](templates/canary-plan.md)
+- [Dataset Card](templates/dataset-card.md)
+- [Model Card](templates/model-card.md)
+- [Runbook](templates/runbook.md)
+- [Release Evidence](templates/release-evidence.md)
+- [Threat Model](templates/threat-model.md)
+- [Reconciliation Report](templates/reconciliation-report.md)
+- [Trading Incident](templates/trading-incident.md)
+- [Traceability Manifest](templates/traceability-manifest.yaml)
 
 ## Regras de governança
 
@@ -81,15 +96,14 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 4. OMS e reconciliação.
 5. Risk Engine independente.
 6. Backtest reproduzível com custos.
-7. Uma estratégia baseline simples completamente especificada e validada antes de combinar estratégias.
+7. Uma única estratégia baseline Trend Following completamente especificada e validada antes de qualquer combinação de estratégias.
 8. Paper e shadow trading.
-9. Regime Detection, seleção e alocação bounded somente após a baseline.
-10. Strategy Health, `NO_TRADE` e redução/desativação automáticas.
-11. Adaptive execution inicial (market vs passive limit conforme contexto).
-12. Dashboard React realtime com decision trace.
-13. SafeMode, self-healing, restore e recuperação/reconciliação automáticos.
-14. Live canary com capital mínimo, somente após aprovação explícita.
-15. Operação Spot sem intervenção humana rotineira.
-16. Observabilidade, backups, runbooks, RAG de Research Plane e rastreabilidade.
+9. Strategy Health, `NO_TRADE` e redução/desativação automáticas para a baseline.
+10. Execução determinística inicial com política explícita de market versus passive limit.
+11. Dashboard React realtime com decision trace.
+12. SafeMode, self-healing, restore e recuperação/reconciliação automáticos.
+13. Live canary com capital mínimo, somente após aprovação explícita.
+14. Operação Spot da baseline sem intervenção humana rotineira.
+15. Observabilidade, backups, runbooks, RAG de Research Plane e rastreabilidade.
 
-Futures, funding/basis, market making e qualquer arbitragem estão fora do escopo deste produto. Continuous learning avançado, contextual bandits live, multi-exchange e FIX/SBE avançado só podem ser reconsiderados por decisão de escopo posterior, após a baseline Spot estar comprovada.
+Multi-strategy, Regime Detection adaptativo, alocação dinâmica, contextual bandits e continuous learning ficam após o R1.0. Futures, funding/basis, market making, arbitragem, multi-exchange e FIX/SBE avançado são opções exploratórias sem compromisso de roadmap; só entram por nova decisão de produto após a baseline Spot estar comprovada.

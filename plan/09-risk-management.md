@@ -81,7 +81,7 @@ Kill switch não depende de Strategy Engine saudável.
 
 ## Limites iniciais
 
-Valores percentuais definitivos NÃO serão hardcoded neste documento. Antes do canary, criar uma Risk Policy aprovada com limites derivados de backtests/stress e capital utilizado. Para canary, limites devem ser substancialmente menores que o planejado para live normal.
+Valores percentuais definitivos NÃO serão hardcoded neste documento. Antes de paper com decisão acionável, preencher e aprovar `templates/risk-policy.md`; antes de canary, preencher `templates/promotion-readiness-matrix.md` e `templates/canary-plan.md`. Cada artefato define valores, validade, evidência e aprovador. Canary usa envelope numericamente menor que live normal; “menor” sem valor e unidade não é gate válido.
 
 ## RiskPolicy versionada
 
@@ -96,6 +96,14 @@ Cada policy deve persistir versão, ambiente, capital de referência, autor/apro
 - fallback `NO_TRADE`, bloqueio de novas entradas e comportamento de redução/saída.
 
 Nenhum learner, selector ou operador não autorizado pode aumentar hard limits ou remover um breaker. A policy deve ser avaliada antes de cada ordem e sua versão deve acompanhar a decisão e o audit event.
+
+## Valuation e estado financeiro
+
+Limites de exposição, drawdown e daily loss declaram moeda de referência, valuation source, timestamp/freshness e comportamento quando o preço não é confiável. Fees em ativo diferente, stablecoin depeg, depósito/retirada externa, dust e reconciliation adjustment entram no cálculo. Estado financeiro incerto resulta em `NO_NEW_ENTRIES`/`SafeMode`, não em estimativa otimista.
+
+## Kill switch e rollback
+
+O kill switch deve possuir caminho independente de Strategy e, quando viável, da UI principal. Sua policy define autenticação/step-up, escopo, tratamento de ordens em voo, cancelamento, comportamento de posições, acknowledgement, reset e teste periódico. Rollback de software/modelo não pode ignorar ordens abertas nem assumir que a versão anterior continua adequada ao regime atual; fallback seguro pode ser `NO_TRADE`.
 
 ## Risk of ruin
 

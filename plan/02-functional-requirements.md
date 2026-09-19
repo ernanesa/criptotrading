@@ -7,6 +7,9 @@
 - **RF-004** Auditar quem/o quê/quando para mudanças de configuração e risco.
 - **RF-005** Permitir feature flags para capacidades experimentais.
 - **RF-006** Separar segredos de configurações normais.
+- **RF-007** Exigir MFA/WebAuthn e step-up para ações CANARY/LIVE, RiskPolicy, credenciais e reset de kill switch.
+- **RF-008** Revogar sessões e impedir replay de comandos administrativos críticos.
+- **RF-009** Restringir o control plane por rede/allowlist/VPN conforme ambiente.
 
 ## Market data
 - **RF-010** Consultar `exchangeInfo` e filtros da Binance.
@@ -35,6 +38,13 @@
 - **RF-040** Centralizar netting de intenções para evitar estratégias comprando e vendendo entre si.
 - **RF-041** Configurar Self-Trade Prevention quando aplicável.
 - **RF-042** Reconciliar estado interno x Binance no startup e periodicamente.
+- **RF-043** Persistir order intent, RiskDecision, policy/config version e idempotency key antes do submit.
+- **RF-044** Manter ledger append-only por ativo para principal, proceeds, fees, rebates e ajustes.
+- **RF-045** Registrar balances `free/locked/total`, fills e fees com os timestamps e IDs externos.
+- **RF-046** Calcular position, cost basis e PnL como projeções internas reconciliáveis.
+- **RF-047** Tratar depósitos, retiradas, conversões, dust e trades externos ao bot.
+- **RF-048** Aplicar compensating entry para ajuste financeiro; nunca apagar ou reescrever histórico reconciliado.
+- **RF-049** Classificar cada evento quanto a durabilidade, ordering, overflow e recovery.
 
 ## Strategy Engine
 - **RF-050** Registrar estratégias por interface/plugin estável.
@@ -95,6 +105,13 @@
 - **RF-110** Detectar lookahead e leakage por testes automáticos.
 - **RF-111** Comparar com buy-and-hold e benchmarks relevantes.
 - **RF-112** Persistir experimentos e resultados.
+- **RF-113** Pré-registrar hipótese, família de experimento, search space e trial budget.
+- **RF-114** Manter holdout final bloqueado e auditar cada acesso.
+- **RF-115** Invalidar/versionar holdout contaminado e registrar motivo.
+- **RF-116** Reportar intervalos de confiança/incerteza e limite inferior conservador para métricas de promoção.
+- **RF-117** Executar ablations e comparar `NO_TRADE/cash`, buy-and-hold e benchmark econômico relevante.
+- **RF-118** Definir fórmula, frequência, annualization, risk-free rate e unidade de cada métrica.
+- **RF-119** Reutilizar Strategy, Portfolio, Risk, filtros e arredondamento entre backtest, paper, shadow e live.
 
 ## Analytics
 - **RF-120** Calcular PnL bruto e líquido.
@@ -119,7 +136,11 @@
 - **RF-141** Alertar erros críticos, drawdown, reconciliação e disconnects.
 - **RF-142** Backup e restauração testados.
 - **RF-143** Suportar deployment ARM64 e AMD64.
-- **RF-144** Suportar configuração AWS, Oracle Cloud e VPS sem alteração de domínio.
+- **RF-144** Se um hosting externo for futuramente aprovado, permitir sua configuração por adapters sem alterar o domínio; este requisito é condicional e não faz parte do deployment inicial.
+- **RF-145** Executar synthetic probes e testes periódicos de alert delivery e kill switch.
+- **RF-146** Disponibilizar kill switch fora do processo de Strategy e caminho operacional quando UI/API estiver indisponível.
+- **RF-147** Tratar ordens em voo e estado ambíguo durante kill switch, rollback e deploy.
+- **RF-148** Fornecer bootstrap, health checks, backup/restore e smoke test reproduzíveis do ambiente local sem credenciais cloud.
 
 ## Autonomia e aprendizado contínuo
 - **RF-150** Executar continuamente o ciclo perceber → classificar → selecionar → alocar → arriscar → executar → aprender sem intervenção humana rotineira.
@@ -145,3 +166,9 @@
 - **RF-170** Entrar automaticamente em `SafeMode` quando estado financeiro, market data ou integridade operacional não puderem ser confiados.
 - **RF-171** Recuperar conexões/processos automaticamente e reconciliar estado antes de liberar novas entradas.
 - **RF-172** Suportar arquitetura primary/standby futura com fencing/leader election para impedir dupla execução.
+- **RF-173** Definir exploration budget por estratégia/ativo/regime/janela e impedir sua ampliação pelo learner.
+- **RF-174** Executar off-policy evaluation e shadow comparison pareado antes de exploração com capital.
+- **RF-175** Detectar training-serving skew e versionar o pipeline de features usado em treino e inferência.
+- **RF-176** Tratar delayed feedback e influência das próprias ordens no dado/resultado.
+- **RF-177** Impedir mudança simultânea não identificável de modelo, dados, execution policy e RiskPolicy.
+- **RF-178** Permitir fallback para `NO_TRADE` quando champion anterior não for seguro para o contexto atual.

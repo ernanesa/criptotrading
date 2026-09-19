@@ -10,7 +10,7 @@ IDs são estáveis e não devem ser reutilizados. Mudanças de requisito criam `
 
 Convenção:
 
-- `E-XXX`: epic;
+- `E-XX`: epic;
 - `US-XXX`: user story;
 - `AC-XXX`: acceptance criterion;
 - `TASK-US-XXX-NN`: task da história;
@@ -36,7 +36,7 @@ Nenhum agente publica, altera risco/credenciais ou executa integração externa 
 
 ## Validator e evidência
 
-O validator deve detectar:
+O manifesto canônico é `traceability.yaml` e segue `templates/traceability-manifest.yaml`; intervalos como `US-001..012` não são referências válidas. O validator deve detectar:
 
 - IDs duplicados ou órfãos;
 - AC sem história;
@@ -44,7 +44,11 @@ O validator deve detectar:
 - requisito crítico sem AC/evidência;
 - task sem comando ou resultado esperado;
 - fonte superseded ainda usada como autoridade ativa;
-- sprint sem item e evidência vinculados.
+- sprint sem item e evidência vinculados;
+- IDs fora da convenção ou referências a intervalos implícitos;
+- dependências cíclicas;
+- artefato crítico obrigatório ausente ou incompleto;
+- gate com threshold/período sem `RiskPolicy`, `PromotionReadinessMatrix` ou `CanaryPlan` vinculado.
 
 Um item só pode ser Done com AC, boundary alterado ou motivo explícito de não aplicabilidade, teste/comando, resultado observado, revisão, documentação/migração e risco residual/rollback.
 
@@ -59,4 +63,4 @@ Antes de paper/shadow/canary, devem estar concluídos e evidenciados:
 5. lineage de strategy/data/config/model;
 6. backup/restore e RPO/RTO medidos.
 
-US-170 e US-180..182 são pré-requisitos da Research/Live Platform, mesmo permanecendo agrupados em épicos posteriores por compatibilidade histórica.
+US-013, US-014, US-015, US-024, US-044, US-054, US-113, US-114, US-130, US-134, US-180, US-181 e US-182 são pré-requisitos do canary. Continuous learning — US-170, US-171, US-172, US-173, US-174, US-175, US-176 e US-177 — permanece pós-R1.0.

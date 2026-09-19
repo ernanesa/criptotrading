@@ -36,6 +36,7 @@ SQLite é a fonte local do índice:
 - `embeddings`: vetor local indexado por `source_hash + model_name`;
 - `entities` e `edges`: relações de requisitos, histórias, tarefas, código, testes e decisões;
 - `summaries`: escopo, hash da fonte, texto, modelo e data.
+- `traceability.yaml` e artefatos RiskPolicy/Promotion/Canary: relações normativas e gates, preservando status e validade.
 
 Não adicionar vector database hospedado ao MVP. O sistema deve continuar útil somente com FTS5 quando o provedor local de embeddings estiver indisponível.
 
@@ -46,6 +47,7 @@ Não adicionar vector database hospedado ao MVP. O sistema deve continuar útil 
 - preservar metadados do pai quando um contrato for dividido;
 - extrair IDs, links, símbolos, rotas e marcadores de supersession;
 - criar relações `CONTAINS`, `IMPLEMENTED_BY`, `AFFECTS`, `DOCUMENTED_BY`, `CONSTRAINS` e `SUPERSEDES`;
+- criar relações `SATISFIES`, `VALIDATED_BY`, `EVIDENCED_BY`, `GATES` e `APPROVED_BY` somente quando declaradas no manifesto/artefato;
 - invalidar somente chunks, summaries e embeddings afetados;
 - quando houver código, extrair símbolos com Roslyn/C# e TypeScript AST, sem inferir relações que não tenham evidência.
 
@@ -87,3 +89,5 @@ O Research Plane terá um conjunto fixo de avaliação com casos de fonte canôn
 Métricas mínimas: recall da fonte canônica, precisão do context pack, coverage de citações, taxa de fonte stale, taxa de claims sem evidência, tokens por tarefa, cache hit e falsos positivos.
 
 Nenhum agente pode publicar, alterar limites de risco, modificar credenciais, enviar ordens ou alterar sistemas externos sem aprovação explícita e fora deste pipeline de retrieval.
+
+O índice deve sinalizar story/AC/task órfão, gate expirado, threshold sem unidade, artefato `Approved` com campo obrigatório vazio e conflito entre Markdown e `traceability.yaml`; ele não corrige automaticamente a fonte canônica.

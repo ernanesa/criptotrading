@@ -6,7 +6,7 @@ O backlog abaixo é inicial e ordenado por dependência/risco. IDs são estávei
 
 Cada história deve ser expandida antes do Sprint para `TASK-US-XXX-NN` e, quando necessário, `SUBTASK-TASK-US-XXX-NN-NN`. Cada task aponta para AC, boundary, teste, comando e `EVIDENCE-<id>-<date>`. As linhas `Tasks:` existentes são sementes de decomposição, não evidência de implementação.
 
-O caminho crítico do MVP é: foundation/CI → journal/correlation → exchange read-only → OMS/reconciliation → RiskPolicy/kill switch → SafeMode/restore → paper/backtest → baseline BTC/USDT → shadow/Testnet. `US-170` e `US-180..182` são pré-requisitos de Research/Live, apesar de permanecerem agrupados em épicos históricos posteriores.
+O caminho crítico do MVP é: governance/CI → runtime local reproduzível → journal/ledger/durabilidade → exchange read-only → OMS/reconciliation → RiskPolicy/kill switch → SafeMode/restore → paper/backtest → baseline Trend BTC/USDT → shadow/Testnet → canary readiness. Multi-strategy, Regime Detection adaptativo, continuous learning e hosting cloud não pertencem ao caminho crítico do R1.0.
 
 ### MVP task registry inicial
 
@@ -15,6 +15,9 @@ O caminho crítico do MVP é: foundation/CI → journal/correlation → exchange
 | `TASK-US-001-01` | US-001 | repo/manifestos/CI mínimos sem código de trading |
 | `TASK-US-003-01` | US-003 | matriz DEV/PAPER/TESTNET/DEMO/PRODUCTION e banner |
 | `TASK-US-012-01` | US-012 | journal/event envelope versionado |
+| `TASK-US-013-01` | US-013 | ledger multi-commodity, fee e movimentação |
+| `TASK-US-014-01` | US-014 | outbox/inbox e política de perda por classe de evento |
+| `TASK-US-015-01` | US-015 | manifesto e validator de rastreabilidade |
 | `TASK-US-020-01` | US-020 | exchangeInfo/filtros/limites snapshotados |
 | `TASK-US-030-01` | US-030 | user-data WS moderno + lifecycle/reconnect |
 | `TASK-US-032-01` | US-032 | persist-before-submit + dedupe/query-before-retry |
@@ -25,9 +28,11 @@ O caminho crítico do MVP é: foundation/CI → journal/correlation → exchange
 | `TASK-US-051-01` | US-051 | simulador/backtest com custos e fills |
 | `TASK-US-061-01` | US-061 | baseline BTC/USDT com Strategy Spec completa |
 | `TASK-US-090-01` | US-090 | paper/shadow/Testnet evidence sem mock em integração |
+| `TASK-US-124-01` | US-124 | ambiente local completo, reproduzível e sem dependência cloud |
 | `TASK-US-130-01` | US-130 | readiness matrix, restore drill e aprovação explícita |
+| `TASK-US-134-01` | US-134 | canary plan, abort/rollback e release evidence |
 
-## EPIC E00 - Governance & Bootstrap
+## EPIC E-00 - Governance & Bootstrap
 
 ### US-001 Como desenvolvedor, quero estrutura de repositório e regras para evoluir com segurança.
 Tasks: solution skeleton; editorconfig; gitignore; global.json; Node/pnpm pinning; contribution guide; CI skeleton.
@@ -38,7 +43,7 @@ Tasks: templates; labels; milestones; ADR policy.
 ### US-003 Como operador, quero ambientes explicitamente separados.
 Tasks: environment model; config hierarchy; visible environment banner.
 
-## EPIC E01 - Platform Foundation
+## EPIC E-01 - Platform Foundation
 
 ### US-010 Quero modular boundaries para impedir acoplamento entre Strategy/Risk/Execution.
 Tasks: projects/modules; architecture tests; DI composition root.
@@ -49,7 +54,16 @@ Tasks: IClock; monotonic timing; correlation/causation IDs; client order ID gene
 ### US-012 Quero journal de eventos críticos.
 Tasks: event contracts; persistence schema; correlation queries.
 
-## EPIC E02 - Binance Reference & Market Data
+### US-013 Quero ledger financeiro multi-commodity para reconstruir balances, fees e PnL.
+Tasks: double-entry postings imutáveis; free/locked; fee asset; cost basis; valuation; compensating entries; reconciliação.
+
+### US-014 Quero semântica de entrega durável por classe de evento.
+Tasks: event criticality; transactional outbox/inbox; dedupe; poison handling; Channel overflow policies; crash recovery.
+
+### US-015 Quero rastreabilidade validável por máquina.
+Tasks: manifest schema; ID/link validator; orphan/duplicate/superseded checks; evidence report.
+
+## EPIC E-02 - Binance Reference & Market Data
 
 ### US-020 Quero consultar símbolos/filtros dinamicamente.
 Tasks: exchangeInfo adapter; caching/versioning; filter tests.
@@ -63,7 +77,10 @@ Tasks: snapshot+diff algorithm; sequence validation; gap/resync tests.
 ### US-023 Quero gravar/reproduzir market data.
 Tasks: recorder; Parquet schema; replay clock.
 
-## EPIC E03 - Account & OMS
+### US-024 Quero datasets temporais e snapshots de universo reconstruíveis.
+Tasks: event/exchange/receive/process time; raw immutable; exchangeInfo/listing/delisting snapshots; corrections/quarantine.
+
+## EPIC E-03 - Account & OMS
 
 ### US-030 Quero User Data Stream moderno.
 Tasks: WS API auth/subscription; event mapping; reconnect/reconcile.
@@ -77,7 +94,7 @@ Tasks: clientOrderId; command dedup; lookup-before-retry.
 ### US-033 Quero reconciliação automática.
 Tasks: startup; periodic; mismatch policy; alert/block.
 
-## EPIC E04 - Risk Engine
+## EPIC E-04 - Risk Engine
 
 ### US-040 Quero políticas de risco versionadas.
 Tasks: model; persistence; audit; validation.
@@ -91,7 +108,10 @@ Tasks: daily loss; DD; spread; liquidity; stale data; exchange/clock health.
 ### US-043 Quero kill switch independente.
 Tasks: command; cancel policy; UI/API; integration test.
 
-## EPIC E05 - Research Data & Backtesting
+### US-044 Quero RiskPolicy e PromotionReadinessMatrix aprováveis e versionadas.
+Tasks: templates; thresholds; validity; approvals; abort/rollback; evidence links.
+
+## EPIC E-05 - Research Data & Backtesting
 
 ### US-050 Quero datasets reproduzíveis.
 Tasks: importer; data QA; hash/version; Parquet partitioning.
@@ -105,13 +125,18 @@ Tasks: equity; DD; Sharpe/Sortino/Calmar; expectancy; attribution.
 ### US-053 Quero validation framework.
 Tasks: temporal split; walk-forward; sensitivity; Monte Carlo; PBO/DSR research.
 
-## EPIC E06 - Strategy SDK & Baselines
+### US-054 Quero governança contra seleção e múltiplos testes.
+Tasks: preregistration; experiment family/trial budget; locked holdout; contamination policy; confidence intervals; ablations.
+
+## EPIC E-06 - Strategy SDK & Baseline
 
 ### US-060 Quero contrato de Strategy sem acesso à exchange.
 Tasks: AlphaSignal; context; lifecycle; strategy registry.
 
 ### US-061 Quero Trend Following baseline.
 Tasks: spec; implementation; tests; backtest.
+
+As histórias US-062, US-063 e US-064 são pós-R1.0 e só entram após US-061 atravessar o pipeline completo.
 
 ### US-062 Quero Momentum/Breakout baselines.
 Tasks: specs; implementations; tests; validation.
@@ -122,7 +147,7 @@ Tasks: z-score/VWAP variants; regime guard; costs.
 ### US-064 Quero Adaptive Grid baseline.
 Tasks: grid planner; inventory cap; volatility spacing; simulation.
 
-## EPIC E07 - Regime, Portfolio & Autonomous Multi-Strategy
+## EPIC E-07 - Regime, Portfolio & Autonomous Multi-Strategy (pós-R1.0)
 
 ### US-070 Quero detectar regimes explicáveis.
 Tasks: trend/volatility/liquidity/correlation features; classifier; confidence; transition hysteresis; tests.
@@ -145,7 +170,7 @@ Tasks: regime matrix bootstrap; expected-net-utility scorer; risk/cost/uncertain
 ### US-076 Quero alocação dinâmica entre estratégias.
 Tasks: multi-strategy budget allocator; rebalancing rules; capacity constraints; simulation; audit.
 
-## EPIC E08 - Execution Quality
+## EPIC E-08 - Execution Quality
 
 ### US-080 Quero estimar edge líquido antes de ordenar.
 Tasks: fees/spread/slippage estimator; threshold policy.
@@ -159,7 +184,7 @@ Tasks: arrival price; implementation shortfall; expected vs realized slippage.
 ### US-083 Quero adaptive execution.
 Tasks: execution context; tactic scorer; maker/taker choice; urgency/liquidity/edge decay model; bounded adaptive selection.
 
-## EPIC E09 - Paper, Shadow & Canary
+## EPIC E-09 - Paper, Shadow & Canary
 
 ### US-090 Quero paper trading com mercado real.
 Tasks: simulator; virtual balances; same risk/execution interfaces.
@@ -173,7 +198,7 @@ Tasks: tiny capital policy; reduced symbols; stricter limits; rollback.
 ### US-093 Quero operação autônoma prolongada em shadow.
 Tasks: unattended soak test; forced failure scenarios; regime transitions; automatic strategy switching; recovery metrics.
 
-## EPIC E10 - Web Dashboard
+## EPIC E-10 - Web Dashboard
 
 ### US-100 Quero shell React type-safe.
 Tasks: Vite; Router; Query; auth shell; generated API types.
@@ -190,10 +215,10 @@ Tasks: experiments; metrics; equity/DD; parameter sensitivity.
 ### US-104 Quero autonomy dashboard.
 Tasks: current regime; candidate strategies; scores; allocations; health; drift; champion/challenger; decision trace.
 
-## EPIC E11 - Security & Observability
+## EPIC E-11 - Security & Observability
 
 ### US-110 Quero secret management por ambiente.
-Tasks: SSM adapter; local/VPS adapter; redaction tests.
+Tasks: local secret provider; file permissions/Docker secrets; redaction tests; provider cloud somente se aprovado futuramente.
 
 ### US-111 Quero OTel end-to-end.
 Tasks: tracing; metrics; logs; dashboards; alerts.
@@ -201,10 +226,25 @@ Tasks: tracing; metrics; logs; dashboards; alerts.
 ### US-112 Quero secure supply chain.
 Tasks: scanners; dependency updates; SBOM; branch rules.
 
-## EPIC E12 - Deployment & Portability
+### US-113 Quero threat model e controle administrativo forte.
+Tasks: trust boundaries; misuse cases; MFA/WebAuthn; session/revocation; network restriction; step-up; replay protection.
+
+### US-114 Quero SLOs e alertas testáveis por jornada crítica.
+Tasks: SLIs/error budgets; bounded labels; synthetic probes; ownership/escalation; alert delivery tests.
+
+## EPIC E-12 - Runtime local & portabilidade futura
 
 ### US-120 Quero containers multi-arch.
-Tasks: Dockerfiles; buildx; ARM Oracle smoke test.
+Tasks: Dockerfiles; buildx; smoke test amd64 local; ARM smoke test em runner/emulação compatível quando disponível.
+
+### US-124 Quero o ambiente inicial completo nesta máquina local.
+Tasks: Compose profiles; PostgreSQL; volumes; OTel/local dashboards; health checks; resource budgets; backup/restore; bootstrap e smoke test sem credencial cloud.
+
+**Critério:** `AC-LOCAL-01` e `AC-LOCAL-02`. Esta história pertence ao foundation e precede qualquer iniciativa de hosting externo.
+
+### Itens futuros não comprometidos
+
+As histórias abaixo ficam em estado `Deferred/Option`, fora do roadmap R0.x/R1.0. Só podem ser refinadas após decisão explícita de produto e ADR específico.
 
 ### US-121 Quero laboratório AWS.
 Tasks: IaC; EC2; IAM; VPC; S3; CloudWatch; SSM; Budget alarms.
@@ -212,7 +252,10 @@ Tasks: IaC; EC2; IAM; VPC; S3; CloudWatch; SSM; Budget alarms.
 ### US-122 Quero deploy Oracle/VPS portátil.
 Tasks: compose profile; volumes; reverse proxy; backups; migration runbook.
 
-## EPIC E13 - Live Spot 1.0
+### US-123 Quero laboratório AWS com custo limitado e teardown verificável.
+Tasks: eligibility/account-plan check; low budget; prohibited-costly-services list; TTL; cost estimate; teardown evidence.
+
+## EPIC E-13 - Live Spot 1.0
 
 ### US-130 Quero readiness gate live.
 Tasks: checklist; strategy evidence; keys; risk policy; restore drill.
@@ -224,18 +267,21 @@ Tasks: canary observation window; incident review; scale rules.
 Tasks: reliability; execution quality; strategy performance; autonomy metrics; backlog update.
 
 ### US-133 Quero Spot 1.0 operar sem intervenção rotineira.
-Tasks: autonomous regime/selection/allocation; safe fallback; recovery; soak period; intervention-rate KPI.
+Tasks: baseline no-trade; safe fallback; recovery; soak period/volume; intervention-rate KPI. Multi-strategy não é requisito.
 
-## EPIC E14 - Futures & Hedging (pós-1.0)
+### US-134 Quero canary governado por plano e evidência de release.
+Tasks: canary envelope; abort criteria; rollback; in-flight orders; approvals; observation report.
+
+## EPIC E-14 - Futures & Hedging (opção exploratória)
 US-140 Futures adapter; US-141 leverage/margin/liquidation risk; US-142 shorts; US-143 hedging; US-144 funding/basis.
 
-## EPIC E15 - Market Neutral & Arbitrage (pós-1.0)
+## EPIC E-15 - Market Neutral & Arbitrage (opção exploratória)
 US-150 pairs/stat-arb; US-151 triangular arb; US-152 multi-exchange adapter; US-153 XEMM/cross-exchange.
 
-## EPIC E16 - Market Making Advanced (pós-1.0)
+## EPIC E-16 - Market Making Advanced (opção exploratória)
 US-160 L3 order-book simulator; US-161 inventory-aware MM; US-162 Avellaneda-Stoikov research; US-163 adverse-selection controls.
 
-## EPIC E17 - Continuous Learning & Adaptive Allocation
+## EPIC E-17 - Continuous Learning & Adaptive Allocation (pós-R1.0)
 
 ### US-170 Quero Model/Strategy Registry com lineage completo.
 Tasks: schema; model/data/code/config versions; status lifecycle; reproducibility query.
@@ -261,7 +307,7 @@ Tasks: parameter envelopes; optimizer/retrainer; automatic validation; promotion
 ### US-177 Quero slow learning loop automatizado.
 Tasks: scheduled/triggered training; validation DAG; shadow/canary orchestration; evidence persistence.
 
-## EPIC E18 - Self-Healing & High Availability
+## EPIC E-18 - Self-Healing & High Availability
 
 ### US-180 Quero SafeMode automático.
 Tasks: financial-state trust gate; no-new-entry; reconcile; recovery policy; tests.

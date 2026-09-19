@@ -10,10 +10,12 @@ Hypothesis → Strategy Spec → Data QA → Backtest → Validation → Out-of-
 
 O primeiro experimento é BTC/USDT com uma única baseline simples e uma `UniversePolicy` explícita. A expansão para até 20 ativos exige snapshot point-in-time do universo, capacidade, liquidez e churn budget; não pode usar seleção futura ou survivorship implícito.
 
+Antes de executar busca de parâmetros, registrar hipótese econômica, `experiment_family_id`, variantes planejadas, search space, trial budget, métricas primárias e critérios de rejeição. O holdout final fica bloqueado; cada acesso é auditado. Se houver contaminação, criar nova versão temporal e registrar o motivo — nunca reutilizar o mesmo holdout como se continuasse intocado.
+
 ## Backtest fidelity levels
 
 ### L1 Candle
-Rápido para pesquisa inicial. Conservative intrabar assumptions.
+Rápido para pesquisa inicial. A Strategy Spec declara a regra conservadora para ambiguidade intrabar; se stop e target puderem ocorrer no mesmo candle, usar pior sequência plausível ou rejeitar a conclusão até fidelidade maior.
 
 ### L2 Trade/quote
 Spread e execução mais realistas.
@@ -33,6 +35,8 @@ Sempre modelar:
 - funding/borrow futuramente;
 - partial fills quando relevante;
 - market impact para tamanhos relevantes.
+- ativo da comissão, rebates e conversão da fee para a moeda de relatório;
+- arredondamento, filtros, saldo disponível e min notional após partial fill.
 
 ## Data splits
 
@@ -47,6 +51,8 @@ Registrar número de experimentos/tentativas. Avaliar:
 - Deflated Sharpe Ratio;
 - multiple-testing/selection bias;
 - minimum track-record considerations.
+- número total de trials/variantes da família, incluindo resultados descartados;
+- holdout access count e experimentos de ablação.
 
 ## Walk-forward
 
@@ -68,7 +74,7 @@ Uma estratégia robusta deve apresentar região de parâmetros aceitável, não 
 
 ## Metrics
 
-PnL líquido, CAGR/return, max DD, Sharpe, Sortino, Calmar, profit factor, expectancy, payoff, win rate, MAE, MFE, turnover, fees, slippage, exposure, time-under-water e benchmark delta.
+PnL líquido, CAGR/return, max DD, Sharpe, Sortino, Calmar, profit factor, expectancy, payoff, win rate, MAE, MFE, turnover, fees, slippage, exposure, time-under-water, capacity/fill ratio e benchmark delta. Cada métrica declara fórmula, sampling frequency, annualization, risk-free rate, unidade e intervalo de confiança/incerteza. Gates usam também limite inferior conservador, não apenas estimativa pontual.
 
 ## Experiment Registry
 
@@ -84,8 +90,19 @@ Cada execução persiste:
 - metrics;
 - artefatos/resultados;
 - decisão: rejected/continue/promote.
+- experiment family, trial number/budget e preregistration timestamp;
+- holdout access/contamination status;
+- container/dependency lock hashes e metric-definition version.
 
 O relatório deve separar PnL bruto, fees, spread, slippage, market impact, latência e PnL líquido, além de registrar benchmark, universo efetivo, número de tentativas e motivo de seleção. Nenhum resultado positivo somente in-sample é promoção.
+
+## Paridade com produção
+
+Backtest, paper, shadow e live reutilizam Strategy, Portfolio, RiskPolicy, filtros, arredondamento e OMS. Apenas clock, market-data source e execution/exchange adapter variam. Um parity suite compara sinais, targets e risk decisions sobre o mesmo replay; divergência exige causa e ADR.
+
+## Benchmarks e ablations
+
+Toda estratégia compara contra `NO_TRADE/cash`, buy-and-hold quando economicamente adequado e baseline simples. Componentes adicionais passam por ablation para demonstrar contribuição líquida após custos. Escolha do benchmark acontece antes de observar o holdout.
 
 ## Promotion gates iniciais
 

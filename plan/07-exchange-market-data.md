@@ -58,6 +58,8 @@ O contrato deve distinguir REST, WebSocket API, market streams e FIX, incluindo 
 
 `CANCEL_ONLY`, `EXPIRED_IN_MATCH`, `TRADE_PREVENTION`, `REPLACED`, `expiryReason` e novas variantes de enum devem ser preservados por um mapper extensível, não descartados como erro desconhecido.
 
+OMS não presume ordem causal entre resposta de submit e User Data Stream: fill/ack pode chegar antes da resposta do comando. Cancel-replace, amend, order lists, STP e SOR podem produzir resultado parcial/ambíguo; cada leg/result é persistido e reconciliado. Comissões preservam ativo e quantidade efetivos.
+
 ## User Data Stream
 
 Conta, ordens e fills devem ser eventos prioritários. O fluxo deve declarar autenticação/subscrição (`session.logon`, `userDataStream.subscribe` ou `.subscribe.signature`), `subscriptionId`, `eventStreamTerminated`, `serverShutdown`, ping/pong, rotação de sessão de 24h, resubscribe e reconciliação após reconnect. Falha no stream aciona reconciliação. Nunca esperar apenas polling periódico para descobrir fills.
@@ -81,6 +83,8 @@ Executar:
 - sob demanda pelo operador.
 
 Mismatch não explicado bloqueia novas entradas até resolução.
+
+Reconciliação cobre balances `free/locked`, open/all orders no recorte suportado, trades/fills, fees, order lists e ledger/projeções locais. Binance Spot é autoridade externa desses fatos; `Position` e PnL são derivados internos e não devem ser consultados como entidade canônica da exchange.
 
 ## Política de doubles
 

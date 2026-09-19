@@ -4,12 +4,16 @@
 
 Uma estratégia é uma hipótese testável, não uma promessa. Cada uma precisa de `Strategy Spec`, regime-alvo, custos esperados, failure modes e gates de promoção.
 
-A plataforma não depende de uma única estratégia. O `Autonomy Orchestrator` escolhe, combina ou rejeita automaticamente estratégias previamente validadas segundo contexto, utilidade esperada, risco, custos, incerteza e Strategy Health.
+No longo prazo, a plataforma não dependerá de uma única estratégia. O R1.0 prova primeiro uma baseline; depois, o `Autonomy Orchestrator` poderá escolher, combinar ou rejeitar automaticamente estratégias previamente validadas segundo contexto, utilidade esperada, risco, custos, incerteza e Strategy Health.
 
-## Tier A - Implementar antes do 1.0
+## Tier A - Obrigatória para o 1.0
 
 ### Trend Following
 Captura movimentos persistentes; variantes EMA/Donchian/volatility-adjusted. Evitar empilhar indicadores redundantes.
+
+Nenhuma outra estratégia é requisito do 1.0. O objetivo é provar uma cadeia completa de dados, pesquisa, risco, execução, reconciliação e operação com uma baseline simples.
+
+## Tier B - Pós-1.0, após a baseline comprovada
 
 ### Momentum
 Time-series momentum com filtros de volatilidade/liquidez.
@@ -23,7 +27,9 @@ Z-score/VWAP/Bollinger, podendo incorporar microestrutura. Só habilitada em reg
 ### Adaptive Grid
 Arithmetic/geometric/dynamic spacing guiado por volatilidade e regime; limites rígidos de inventário/capital.
 
-## Tier B - Pós-1.0
+Cada estratégia Tier B entra isoladamente como challenger, com spec, experimento, paper/shadow e decisão de promoção próprios. Multi-strategy só começa quando ao menos duas estratégias forem aprovadas independentemente.
+
+## Tier C - Opções exploratórias sem compromisso
 
 ### Adaptive DCA
 Time/price/signal/volatility adjusted com hard cap de exposição. Nunca DCA infinito.
@@ -55,7 +61,7 @@ Ciclos dentro de uma exchange com cálculo líquido completo e execução atômi
 ### Cross-Exchange Arbitrage / XEMM
 Somente após adapter multi-exchange, capital pré-posicionado e infraestrutura adequada.
 
-## Tier C - Pesquisa avançada
+## Tier D - Pesquisa avançada
 
 - ensemble de alphas;
 - mixture of experts por regime;

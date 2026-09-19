@@ -1,14 +1,16 @@
 # 26 - Referências pesquisadas
 
-Data de revisão: 2026-09-18.
+Data de revisão: 2026-09-19.
 
 ## Processo
 - Scrum Guide 2020: https://scrumguides.org/
 
 ## .NET / C#
 - .NET 11 overview: https://learn.microsoft.com/dotnet/core/whats-new/dotnet-11/overview
-- .NET 11 Preview 7: https://devblogs.microsoft.com/dotnet/dotnet-11-preview-7/
 - C# 15: https://learn.microsoft.com/dotnet/csharp/whats-new/csharp-15
+- .NET support policy e releases go-live: https://dotnet.microsoft.com/platform/support/policy/dotnet-core
+
+Baseline verificada em 2026-09-18: .NET 11 RC1 é go-live, com GA esperada para novembro/2026; C# 15 continua preview. A implementação usa versões exatas pinadas e revalida essas páginas em cada upgrade.
 
 ## Frontend
 - React versions: https://react.dev/versions
@@ -38,17 +40,23 @@ Data de revisão: 2026-09-18.
 ## Quant research
 - Bailey et al., Probability of Backtest Overfitting: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253
 - Bailey & López de Prado, Deflated Sharpe Ratio: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2460551
-- López de Prado & Porcu, DSR unified framework (2026): https://papers.ssrn.com/
+- Bailey et al., effects of backtest overfitting: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2308659
+- Novy-Marx, Backtesting Strategies Based on Multiple Signals: https://www.nber.org/papers/w21329
 
 ## Observability / Security / Data
 - OpenTelemetry .NET: https://opentelemetry.io/docs/languages/dotnet/
-- OWASP ASVS 5.0: https://owasp.org/www-project-application-security-verification-standard/
+- OpenTelemetry Semantic Conventions: https://opentelemetry.io/docs/concepts/semantic-conventions/
+- OWASP ASVS 5.0: https://owasp.org/projects/asvs
+- SLSA specification: https://slsa.dev/spec/
+- NIST AI Risk Management Framework: https://www.nist.gov/itl/ai-risk-management-framework
 - PostgreSQL releases: https://www.postgresql.org/docs/release/
 
-## AWS
+## Cloud futura, fora do escopo ativo
 - AWS Free Tier: https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier.html
+- AWS Free Tier plans: https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/free-tier-plans.html
+- AWS VPC/Public IPv4 pricing: https://aws.amazon.com/vpc/pricing/
 - Systems Manager Parameter Store: https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html
 
 ## Política de atualização
 
-Antes de implementar integração externa, confirmar documentação oficial novamente. Binance, .NET previews, cloud pricing e bibliotecas frontend mudam rapidamente; este arquivo registra baseline, não congela versões eternamente.
+Antes de implementar integração externa, confirmar documentação oficial novamente. Binance, .NET previews e bibliotecas frontend mudam rapidamente; cloud pricing só deve ser pesquisado se uma iniciativa futura de cloud for explicitamente aprovada. Este arquivo registra baseline, não congela versões eternamente.

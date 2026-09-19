@@ -28,3 +28,12 @@
 - **Strategy Health:** avaliação operacional/estatística contínua de estratégia.
 - **STP:** Self-Trade Prevention.
 - **Walk-forward:** validação temporal repetida usando apenas passado para decidir o próximo período.
+- **Account Ledger:** ledger multi-commodity de dupla entrada, append-only, do qual balances, fees, cost basis e PnL podem ser reconstruídos.
+- **Compensating entry:** lançamento novo que corrige um fato anterior sem apagar ou reescrever o histórico.
+- **Persist-before-submit:** intent, RiskDecision, versão de policy/config e idempotency key tornam-se duráveis antes do side effect na exchange.
+- **PromotionReadinessMatrix:** matriz versionada de thresholds, resultados, evidências e aprovações para mudança de estágio.
+- **CanaryPlan:** envelope de capital, duração/volume, abort, rollback e observação para exposição real limitada.
+- **Experiment family:** conjunto completo de variantes/trials relacionados usado para medir multiple testing e selection bias.
+- **Locked holdout:** período final não usado para tuning; acessos e contaminação são auditados.
+- **Training-serving skew:** diferença entre dados/features/transforms de treino e os usados na inferência operacional.
+- **Off-policy evaluation:** avaliação de uma política candidata a partir de dados produzidos por outra política, com hipóteses e limitações explícitas.

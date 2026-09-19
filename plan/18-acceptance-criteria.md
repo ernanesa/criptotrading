@@ -51,7 +51,15 @@ A UI mostra persistentemente `DEV/PAPER/SHADOW/CANARY/LIVE`; CANARY/LIVE não po
 Nenhum secret aparece no repo, image history, logs de teste ou telemetry; chave Binance live não possui withdrawal permission.
 
 ## AC-PORT-01
-A release do Worker/API possui imagens `linux/amd64` e `linux/arm64` e smoke tests no target ARM antes da migração Oracle.
+A release do Worker/API possui imagens `linux/amd64` e `linux/arm64`; o target nativo da máquina local passa por smoke test e o target alternativo passa por runner/emulação antes de qualquer migração futura que o exija.
+
+## AC-LOCAL-01 Bootstrap local reproduzível
+
+**Given** uma máquina local compatível com as dependências documentadas, **when** o bootstrap e o perfil DEV/PAPER são executados, **then** Worker, API, Web, PostgreSQL e telemetria necessária ficam saudáveis via Docker Compose, com persistência em volumes, migrations aplicadas, smoke tests verdes e nenhuma credencial ou API de cloud exigida.
+
+## AC-LOCAL-02 Isolamento e capacidade local
+
+**Given** trading runtime e workload de research/telemetria na mesma máquina, **when** budgets de CPU, memória, disco, I/O ou retenção são atingidos, **then** profiles/limits impedem degradação silenciosa do hot path, a condição fica observável e workloads não críticos podem ser pausados sem comprometer ledger, OMS ou reconciliação.
 
 ## AC-OPS-01
 Alert de reconciliação/disconnect crítico contém ambiente, exchange, symbol/account scope, timestamp, correlation ID e ação sugerida.
@@ -84,6 +92,22 @@ Alert de reconciliação/disconnect crítico contém ambiente, exchange, symbol/
 
 **Given** uma decisão, ordem, fill, reconciliação ou intervenção, **when** o evento é persistido, **then** existe audit event append-only com schema/version, correlation/causation, policy/config version, hash e retenção/ACL; sampling de trace não pode removê-lo.
 
+## AC-LEDGER-01 Ledger por ativo
+
+**Given** fill com comissão em qualquer ativo, **when** ele é aplicado, **then** postings imutáveis registram principal, proceeds e fee com quantidade, ativo, valuation source/time e vínculo a order/trade IDs; position e PnL podem ser reconstruídos.
+
+## AC-LEDGER-02 Ajuste reconciliável
+
+**Given** depósito, retirada, conversão, trade externo ou mismatch confirmado, **when** o estado é reconciliado, **then** um evento/lançamento compensatório explica a diferença sem apagar ou reescrever o histórico.
+
+## AC-DURABILITY-01 Persist-before-submit
+
+**Given** uma ordem autorizada, **when** o adapter pode enviá-la, **then** OrderIntent, RiskDecision, policy/config version, idempotency key e outbox record já estão duráveis; crash em qualquer boundary é recuperável sem submit cego.
+
+## AC-DURABILITY-02 Backpressure
+
+**Given** saturação de fila, **when** a capacidade é excedida, **then** eventos financeiros nunca são descartados; a policy por classe é aplicada, a condição é observável e novas entradas são bloqueadas quando a integridade estiver incerta.
+
 ## AC-RAG-01 Research Plane
 
 **Given** uma consulta de planejamento ou implementação, **when** o RAG retorna contexto, **then** aplica autoridade/versão/status/frescor, cita path/linha/hash, mostra conflitos/supersession e confirma contra o commit atual antes de recomendar mudança.
@@ -92,9 +116,33 @@ Alert de reconciliação/disconnect crítico contém ambiente, exchange, symbol/
 
 **Given** uma história crítica, **when** ela é marcada Done, **then** há links Goal/Epic/US/AC/TASK/SUBTASK/Code/Test/Evidence, comando executado, saída observada, review, risco residual e rollback.
 
+## AC-RESEARCH-01 Preregistration e holdout
+
+**Given** um experimento que pode influenciar promoção, **when** ele começa, **then** hypothesis, experiment family, search space, trial budget, métricas, benchmarks e rejeição estão registrados antes do resultado; acessos/contaminação do holdout são auditados.
+
+## AC-PARITY-01 Research/production parity
+
+**Given** mesmo dataset, config e seed, **when** o replay executa em backtest, paper e shadow, **then** Strategy, Portfolio, Risk, filtros e arredondamento geram resultados equivalentes dentro da tolerância versionada ou registram divergência explicada por ADR.
+
+## AC-SEC-02 Administração crítica
+
+**Given** ação CANARY/LIVE, mudança de RiskPolicy/credencial ou reset de kill switch, **when** solicitada, **then** MFA/step-up, autorização, anti-replay e audit event são exigidos; sessão revogada não é aceita.
+
+## AC-KILL-02 Caminho independente
+
+**Given** UI/API ou Strategy indisponível e uma ordem em voo, **when** o kill switch é ativado pelo caminho operacional aprovado, **then** novas exposições são bloqueadas, a ordem é tratada conforme policy e o resultado é reconciliado/auditado.
+
+## AC-DATA-01 Temporalidade e correção
+
+**Given** dado de mercado/reference data, **when** ingerido ou corrigido, **then** event/exchange/receive/ingestion times, schema/source version e checksum são preservados; correção cria versão `supersedes` e não altera dataset já usado.
+
+## AC-AWS-01 Guardrail de custo
+
+**Given** uma iniciativa AWS futura explicitamente aprovada, **when** qualquer recurso pago puder ser criado, **then** eligibility/account plan/region/pricing, budget baixo, TTL, owner, estimativa e teardown estão aprovados; sem essa aprovação, nenhum recurso ou credencial AWS faz parte do ambiente.
+
 ## Critério para release canary
 
-- todos os ACs críticos anteriores;
+- todos os ACs críticos vinculados explicitamente na `PromotionReadinessMatrix`;
 - restore drill concluído;
 - kill switch exercitado;
 - estratégia possui report assinado/versionado;
@@ -102,3 +150,6 @@ Alert de reconciliação/disconnect crítico contém ambiente, exchange, symbol/
 - chave sem saques;
 - monitoramento e canal de alerta ativos;
 - nenhuma vulnerabilidade crítica aberta.
+- `RiskPolicy`, `PromotionReadinessMatrix`, `CanaryPlan`, `ThreatModel`, `ReconciliationReport` e `ReleaseEvidence` completos e aprovados;
+- período, volume, regimes observados e tolerâncias possuem valores/unidades, não placeholders;
+- ordem em voo, abort, rollback e fallback `NO_TRADE` foram ensaiados.

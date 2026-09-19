@@ -21,10 +21,14 @@
 - Risk Engine independente;
 - Execution Engine;
 - reconciliação com exchange;
+- ledger financeiro append-only por ativo e PnL reconstruível;
+- persist-before-submit e entrega at-least-once/idempotente para eventos críticos;
 - circuit breakers e kill switch;
 - modos paper, shadow, canary e live.
 
 ### Autonomy Plane
+
+O R1.0 implementa somente o subconjunto A2 para uma baseline. Seleção multi-strategy, Regime Detection adaptativo, alocação dinâmica e A5 são requisitos evolutivos pós-R1.0, não condição para o primeiro live estável.
 - operação 24x7 sem intervenção humana em decisões rotineiras;
 - classificação automática de contexto/regime com confiança;
 - seleção e deselegibilidade automática de estratégias previamente validadas;
@@ -52,8 +56,10 @@
 - PostgreSQL para dados transacionais e configuração;
 - Parquet para grandes datasets históricos;
 - DuckDB para consulta analítica local sobre Parquet;
-- armazenamento de objetos compatível com S3 quando aplicável;
+- filesystem/volumes locais como armazenamento inicial; adapter compatível com object storage somente em iniciativa futura aprovada;
 - Redis apenas quando houver caso medido para cache/coordenação.
+- raw/normalized/research layers com temporalidade, lineage, quarantine e supersession;
+- snapshots históricos de exchangeInfo, filtros, listings/delistings e universo.
 
 ## Personas funcionais
 
@@ -72,7 +78,7 @@ No início, as três personas representam a mesma pessoa, mas as responsabilidad
 
 Idea → Spec → Unit Tests → Historical Backtest → Out-of-Sample → Walk-Forward → Monte Carlo/Stress → Paper → Shadow/Challenger → Canary → Champion/Live.
 
-Cada transição gera evidência persistida e pode ser bloqueada por critérios objetivos. Promoção automática é permitida apenas para candidatos previamente autorizados e dentro de envelopes de risco imutáveis pelo learner.
+Cada transição gera evidência persistida e pode ser bloqueada por critérios objetivos. `RiskPolicy`, `PromotionReadinessMatrix` e, para capital real, `CanaryPlan` definem threshold, unidade, janela, aprovação, validade, abort e rollback. Promoção automática é permitida apenas para candidatos previamente autorizados e dentro de envelopes imutáveis pelo learner.
 
 ## Trading modes
 

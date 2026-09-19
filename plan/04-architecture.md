@@ -53,6 +53,8 @@ Responsável por:
 
 O Orchestrator não aumenta hard risk limits e não envia ordens.
 
+No R1.0 há uma única baseline elegível; o Orchestrator funciona como policy/eligibility gate determinístico e pode resultar em `NO_TRADE`. Ranking e alocação multi-strategy só são ativados após R1.0.
+
 ## Learning Control Plane
 
 Treino/retraining/optimization não acontece no hot path. O fluxo é:
@@ -74,6 +76,7 @@ Model/Strategy Registry guarda lineage completo. Aprendizado online rápido pode
 - `Risk`: limites e protections.
 - `Execution`: algoritmos de execução e selection de tática.
 - `Orders`: OMS/state machine/reconciliation.
+- `Accounting`: ledger por ativo, balances, fees, cost basis, valuation e PnL.
 - `Learning`: drift, model registry, champion-challenger e promotion policy.
 - `Research`: datasets, experiments, validation.
 - `Backtesting`: event simulation.
@@ -110,6 +113,19 @@ Essa separação impede que ruído de curto prazo provoque mutações grandes em
 
 Começar com `System.Threading.Channels`, tipos imutáveis/readonly e backpressure explícito. Kafka/RabbitMQ só entram se processos realmente precisarem de broker distribuído.
 
+### Durabilidade por classe de evento
+
+| Classe | Exemplos | Política |
+|---|---|---|
+| Efêmera/coalescível | tick intermediário, book ticker substituído | pode coalescer/descartar apenas com métrica, freshness gate e política explícita |
+| Recalculável | candle, feature, snapshot analítico | pode reconstruir da fonte versionada; persistência assíncrona controlada |
+| Decisão auditável | signal, target, Strategy Health, seleção | journal append-only antes de acionar o próximo side effect crítico |
+| Financeira crítica | order intent, risk decision, submit, ack, fill, cancel, reconciliation, manual intervention | nunca descartar; persistência durável, dedupe e recovery obrigatórios |
+
+`Channel` não é armazenamento durável. Comandos financeiros usam persist-before-submit e transactional outbox/inbox ou garantia equivalente. A semântica assumida é at-least-once com consumidores idempotentes; o sistema não promete exactly-once distribuído.
+
+Cada canal declara capacidade, política de overflow, ownership, ordering key, timeout, retry, poison handling e comportamento de shutdown. Saturação de canal financeiro bloqueia novas entradas e pode acionar `SafeMode`.
+
 ## Persistência
 
 Não adotar Event Sourcing integral no MVP. Manter:
@@ -121,9 +137,17 @@ Não adotar Event Sourcing integral no MVP. Manter:
 
 Isso fornece replay e auditabilidade sem transformar cada CRUD em evento.
 
+O boundary transacional mínimo associa `OrderIntent`, `RiskDecision`, idempotency key e outbox record antes do envio à exchange. Crash entre persistência, publicação, submit e acknowledgement possui cenários explícitos de recuperação e reconciliação.
+
 ## Consistência
 
 A exchange é autoridade externa para ordens/fills/saldos. Estado local é otimizado para decisão, mas divergências levam à reconciliação e, quando necessário, ao bloqueio de novas entradas ou `SafeMode`.
+
+Autoridade externa não significa sobrescrever o histórico local: correções financeiras são lançamentos compensatórios auditáveis. A exchange não fornece uma posição Spot canônica; posição, cost basis e PnL são projeções internas derivadas de ledger, fills, fees e valuation.
+
+## Paridade research/paper/live
+
+Strategy, Portfolio, RiskPolicy, filtros, arredondamento, OMS e regras de execução devem reutilizar o mesmo código entre backtest, paper, shadow e live. Variam apenas clock, data source e exchange/execution adapter. Divergência intencional exige ADR, teste e attribution report.
 
 ## Resiliência
 
@@ -139,4 +163,4 @@ A exchange é autoridade externa para ordens/fills/saldos. Estado local é otimi
 
 ## Deployment portability
 
-Toda lógica de negócio roda em containers Linux multi-arch. AWS/Oracle/Hostinger são destinos de infraestrutura, não dependências do domínio.
+Toda lógica de negócio roda inicialmente nesta máquina por containers Linux e Docker Compose. Imagens multi-arch preservam portabilidade, mas AWS/Oracle/Hostinger são apenas destinos futuros possíveis, não fazem parte do ambiente ativo nem são dependências do domínio.
