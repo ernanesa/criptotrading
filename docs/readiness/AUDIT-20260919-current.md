@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `8f202f8`
+**Commit de código auditado:** `34705af`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 205 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 208 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 4 testes, incluindo vínculo atômico journal/ledger/trade, migration 005, persistência idempotente e rejeição de símbolo conflitante |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
@@ -42,6 +42,10 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - O Worker possui um sink JSONL local opt-in para alertas redigidos,
   `WORKER_ALERT_FILE_DIRECTORY`; o sink em memória continua sendo o padrão e
   nenhum canal externo é presumido.
+- A camada Binance possui ingestão de User Data Stream read-only para
+  `executionReport` e `outboundAccountPosition`, com parser, reconnect e
+  backoff testáveis; criação/renovação de `listenKey` e conectividade Testnet
+  real continuam deliberadamente pendentes.
 - O Worker possui uma reconciliação autenticada read-only opt-in no startup,
   condicionada a PostgreSQL local e `NO_TRADE`; sem credenciais novas ela falha
   antes de qualquer chamada. A execução contra a conta Testnet ainda não foi

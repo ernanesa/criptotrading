@@ -78,3 +78,29 @@ market-data integrity event.
 The transport is injectable through `IBinanceWebSocketTransport`, so parser,
 reconnect and cancellation behavior can be tested without treating fixtures as
 external integration evidence.
+
+## User Data Stream (read-only event ingestion)
+
+`BinanceUserDataStreamClient` consumes an already-provisioned `listenKey` over
+the allowlisted Testnet/Demo WebSocket host. It parses `executionReport` and
+`outboundAccountPosition`, quarantines malformed/unknown events, and reconnects
+with bounded exponential backoff. The client deliberately does not create,
+renew or close listen keys and does not expose order, transfer or withdrawal
+operations; key lifecycle remains an explicitly authorized integration boundary.
+
+```csharp
+var stream = new BinanceUserDataStreamClient(new BinanceUserDataStreamOptions
+{
+    Environment = BinanceEnvironment.Testnet,
+    MaxReconnectAttempts = 10
+});
+
+await foreach (var userEvent in stream.ReadAsync(listenKey, stoppingToken))
+{
+    // Persist execution/account events before updating read models.
+}
+```
+
+The parser and transport are covered with fake WebSocket tests. These tests do
+not prove connectivity to Binance or replace the pending authenticated Testnet
+reconciliation gate.
