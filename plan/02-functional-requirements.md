@@ -172,3 +172,4 @@
 - **RF-176** Tratar delayed feedback e influência das próprias ordens no dado/resultado.
 - **RF-177** Impedir mudança simultânea não identificável de modelo, dados, execution policy e RiskPolicy.
 - **RF-178** Permitir fallback para `NO_TRADE` quando champion anterior não for seguro para o contexto atual.
+- **RF-179** Fornecer RAG/GraphRAG local no Research Plane com citações, autoridade, versão, frescor, detecção de conflito e confirmação contra o commit atual, sem acesso ao hot path, credenciais ou autorização de risco/ordem.

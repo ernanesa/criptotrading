@@ -1,21 +1,32 @@
-schema_version: 1
+schema_version: 2
 status: planning-baseline
 product_goal:
   id: GOAL-001
   source: plan/README.md
   statement: Safe, auditable and evidence-driven Binance Spot platform.
+
+defaults:
+  active_status: proposed
+  deferred_status: deferred_option
+  source: plan/17-backlog.md
+
 epics:
   - id: E-00
+    scope: active
     stories:
       - id: US-001
         task: TASK-US-001-01
         acceptance: [AC-TRACE-01]
+      - id: US-002
       - id: US-003
         task: TASK-US-003-01
         requirements: [RF-003, RF-006, RF-135]
         acceptance: [AC-ENV-01, AC-UI-01]
   - id: E-01
+    scope: active
     stories:
+      - id: US-010
+      - id: US-011
       - id: US-012
         task: TASK-US-012-01
         requirements: [RNF-040, RNF-041, RNF-042]
@@ -32,20 +43,35 @@ epics:
         task: TASK-US-015-01
         acceptance: [AC-TRACE-01]
   - id: E-02
+    scope: active
     stories:
       - id: US-020
         task: TASK-US-020-01
         requirements: [RF-010, RF-038, RF-039]
         acceptance: [AC-EXCHANGE-01]
+      - id: US-021
+        requirements: [RF-011, RF-014, RF-015, RF-017]
+        acceptance: [AC-MARKET-01]
+      - id: US-022
+        requirements: [RF-013, RF-015, RF-016]
+        acceptance: [AC-BOOK-01]
+      - id: US-023
+        requirements: [RF-019, RF-020]
+        acceptance: [AC-DATA-01, AC-BACKTEST-01]
       - id: US-024
+        task: TASK-US-024-01
         requirements: [RF-019, RF-020]
         acceptance: [AC-DATA-01, AC-UNIVERSE-01]
   - id: E-03
+    scope: active
     stories:
       - id: US-030
         task: TASK-US-030-01
         requirements: [RF-030, RF-031]
-        acceptance: [AC-RECON-01]
+        acceptance: [AC-USERDATA-01, AC-RECON-01]
+      - id: US-031
+        requirements: [RF-032, RF-033, RF-034, RF-035]
+        acceptance: [AC-OMS-02]
       - id: US-032
         task: TASK-US-032-01
         requirements: [RF-036, RF-037, RF-043]
@@ -55,19 +81,30 @@ epics:
         requirements: [RF-042]
         acceptance: [AC-RECON-01]
   - id: E-04
+    scope: active
     stories:
       - id: US-040
         task: TASK-US-040-01
         requirements: [RF-070, RF-071, RF-072, RF-073, RF-074, RF-075]
         acceptance: [AC-RISK-01, AC-RISK-02, AC-RISK-03]
+      - id: US-041
+        task: TASK-US-041-01
+        requirements: [RF-070, RF-071, RF-073]
+        acceptance: [AC-RISK-01, AC-EXCHANGE-01]
+      - id: US-042
+        task: TASK-US-042-01
+        requirements: [RF-074, RF-075, RF-076, RF-077, RF-078, RF-079, RF-080]
+        acceptance: [AC-RISK-02, AC-RISK-03]
       - id: US-043
         task: TASK-US-043-01
         requirements: [RF-081, RF-145, RF-146, RF-147]
         acceptance: [AC-KILL-01, AC-KILL-02]
       - id: US-044
-        acceptance: [AC-RISK-03]
+        task: TASK-US-044-01
+        acceptance: [AC-RISK-03, AC-VALIDATION-01, AC-TRACE-01]
         mandatory_artifacts: [RiskPolicy, PromotionReadinessMatrix]
   - id: E-05
+    scope: active
     stories:
       - id: US-050
         task: TASK-US-050-01
@@ -75,48 +112,205 @@ epics:
         acceptance: [AC-BACKTEST-01, AC-DATA-01, AC-UNIVERSE-01]
       - id: US-051
         task: TASK-US-051-01
-        requirements: [RF-102, RF-103, RF-104]
+        requirements: [RF-102, RF-103, RF-104, RF-119]
         acceptance: [AC-COST-01, AC-PARITY-01]
+      - id: US-052
+        task: TASK-US-052-01
+        requirements: [RF-118, RF-120, RF-121, RF-122, RF-123, RF-124]
+        acceptance: [AC-COST-01, AC-ANALYTICS-01]
+      - id: US-053
+        task: TASK-US-053-01
+        requirements: [RF-105, RF-106, RF-107, RF-108, RF-109, RF-110, RF-111]
+        acceptance: [AC-VALIDATION-01, AC-RESEARCH-01]
       - id: US-054
+        task: TASK-US-054-01
         requirements: [RF-113, RF-114, RF-115, RF-116, RF-117, RF-118, RF-119]
         acceptance: [AC-RESEARCH-01, AC-PARITY-01]
+      - id: US-055
+        task: TASK-US-055-01
+        requirements: [RF-179]
+        acceptance: [AC-RAG-01, AC-RAG-02]
   - id: E-06
+    scope: mixed
     stories:
+      - id: US-060
+        task: TASK-US-060-01
+        requirements: [RF-050, RF-053]
+        acceptance: [AC-STRATEGY-01]
       - id: US-061
         task: TASK-US-061-01
         requirements: [RF-050, RF-052, RF-053]
         acceptance: [AC-STRATEGY-01, AC-VALIDATION-01]
+      - id: US-073
+        task: TASK-US-073-01
+        requirements: [RF-056, RF-082]
+        acceptance: [AC-RISK-03]
+      - id: US-062
+        status: deferred_option
+      - id: US-063
+        status: deferred_option
+      - id: US-064
+        status: deferred_option
+  - id: E-07
+    status: deferred_option
+    stories:
+      - id: US-070
+        acceptance: [AC-REGIME-01]
+      - id: US-071
+      - id: US-072
+      - id: US-077
+      - id: US-074
+      - id: US-075
+      - id: US-076
+  - id: E-08
+    scope: mixed
+    stories:
+      - id: US-080
+        acceptance: [AC-COST-01, AC-RISK-03]
+      - id: US-081
+        acceptance: [AC-OMS-02, AC-OMS-03, AC-RISK-01]
+      - id: US-082
+        acceptance: [AC-COST-01]
+      - id: US-083
+        status: deferred_option
   - id: E-09
+    scope: active
     stories:
       - id: US-090
         task: TASK-US-090-01
-        acceptance: [AC-ENV-02, AC-PARITY-01]
+        acceptance: [AC-PARITY-01]
+      - id: US-091
+        acceptance: [AC-PARITY-01, AC-ENV-01]
       - id: US-092
         mandatory_artifacts: [CanaryPlan]
-  - id: E-11
+      - id: US-093
+        acceptance: [AC-PARITY-01, AC-OPS-01]
+      - id: US-094
+        task: TASK-US-094-01
+        acceptance: [AC-ENV-02, AC-OMS-01, AC-OMS-03, AC-RECON-01]
+  - id: E-10
+    scope: mixed
     stories:
+      - id: US-100
+        acceptance: [AC-SEC-02, AC-UI-01]
+      - id: US-101
+        acceptance: [AC-UI-01, AC-OPS-01]
+      - id: US-102
+        acceptance: [AC-KILL-01, AC-KILL-02, AC-SEC-02]
+      - id: US-103
+        acceptance: [AC-RESEARCH-01, AC-COST-01]
+      - id: US-104
+        status: deferred_option
+  - id: E-11
+    scope: active
+    stories:
+      - id: US-110
+        acceptance: [AC-SEC-01]
+      - id: US-111
+        acceptance: [AC-OPS-01, AC-AUDIT-01]
+      - id: US-112
       - id: US-113
         requirements: [RF-001, RF-002, RF-007, RF-008, RF-009]
         acceptance: [AC-SEC-01, AC-SEC-02]
       - id: US-114
         acceptance: [AC-OPS-01]
   - id: E-12
+    scope: mixed
     stories:
+      - id: US-120
+        requirements: [RF-143]
+        acceptance: [AC-PORT-01]
       - id: US-124
         task: TASK-US-124-01
         requirements: [RF-148, RNF-100, RNF-103]
         acceptance: [AC-LOCAL-01, AC-LOCAL-02]
+      - id: US-121
+        status: deferred_option
+      - id: US-122
+        status: deferred_option
       - id: US-123
         status: deferred_option
         acceptance: [AC-AWS-01]
   - id: E-13
+    scope: active
     stories:
       - id: US-130
         task: TASK-US-130-01
+        requirements: [RF-105, RF-106, RF-107, RF-108, RF-113, RF-114, RF-116, RF-117, RF-118, RF-119, RF-142, RF-145]
         acceptance: [AC-VALIDATION-01, AC-TRACE-01]
+      - id: US-131
+        requirements: [RF-080, RF-081, RF-147]
+        acceptance: [AC-KILL-02, AC-TRACE-01]
+        mandatory_artifacts: [CanaryPlan, ReleaseEvidence]
+      - id: US-132
+        requirements: [RF-120, RF-121, RF-122, RF-123, RF-124, RF-141]
+        acceptance: [AC-RELEASE-REPORT-01]
+        mandatory_artifacts: [ReleaseEvidence]
+      - id: US-133
+        requirements: [RF-150, RF-155, RF-157, RF-170, RF-171]
+        acceptance: [AC-AUTONOMY-01, AC-OPS-01, AC-TRACE-01]
       - id: US-134
         task: TASK-US-134-01
+        requirements: [RF-147]
+        acceptance: [AC-KILL-02, AC-TRACE-01]
         mandatory_artifacts: [CanaryPlan, ReleaseEvidence, ReconciliationReport]
+  - id: E-14
+    status: deferred_option
+    stories:
+      - id: US-140
+      - id: US-141
+      - id: US-142
+      - id: US-143
+      - id: US-144
+  - id: E-15
+    status: deferred_option
+    stories:
+      - id: US-150
+      - id: US-151
+      - id: US-152
+      - id: US-153
+  - id: E-16
+    status: deferred_option
+    stories:
+      - id: US-160
+      - id: US-161
+      - id: US-162
+      - id: US-163
+  - id: E-17
+    status: deferred_option
+    stories:
+      - id: US-170
+      - id: US-171
+      - id: US-172
+      - id: US-173
+      - id: US-174
+      - id: US-175
+      - id: US-176
+      - id: US-177
+  - id: E-18
+    scope: mixed
+    stories:
+      - id: US-180
+        task: TASK-US-180-01
+        requirements: [RF-170]
+        acceptance: [AC-RISK-02, AC-RECON-01, AC-AUDIT-01]
+      - id: US-181
+        task: TASK-US-181-01
+        requirements: [RF-171]
+        acceptance: [AC-DURABILITY-02, AC-OPS-01]
+      - id: US-182
+        task: TASK-US-182-01
+        requirements: [RF-142]
+        acceptance: [AC-LOCAL-01, AC-RECON-01, AC-TRACE-01]
+      - id: US-183
+        status: deferred_option
+        requirements: [RF-172]
+
+coverage_policy:
+  every_backlog_epic_must_be_listed: true
+  every_backlog_story_must_be_listed: true
+  deferred_items_must_have_status: deferred_option
+  acceptance_without_story_is_forbidden: true
 
 validation_policy:
   planned_items_may_omit: [code, tests, evidence]
