@@ -35,6 +35,31 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void AlertWebhookRequiresExplicitAllowlistAndSafeTimeout()
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            AlertWebhookUrl = "https://alerts.example.test/hook"
+        }.Validate());
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            AlertWebhookAllowedHosts = "alerts.example.test"
+        }.Validate());
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            AlertWebhookUrl = "https://alerts.example.test/hook",
+            AlertWebhookAllowedHosts = "alerts.example.test",
+            AlertWebhookTimeoutSeconds = 121
+        }.Validate());
+
+        new WorkerRuntimeOptions
+        {
+            AlertWebhookUrl = "https://alerts.example.test/hook",
+            AlertWebhookAllowedHosts = "alerts.example.test"
+        }.Validate();
+    }
+
+    [Fact]
     public void ShadowDrillRequiresNoTradeMode()
     {
         Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions

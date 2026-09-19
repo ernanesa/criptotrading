@@ -10,7 +10,7 @@ public sealed class HttpWebhookTradingAlertSinkTests
     {
         using var handler = new RecordingHandler(HttpStatusCode.OK);
         using var client = new HttpClient(handler);
-        var sink = new HttpWebhookTradingAlertSink(client, new TradingAlertWebhookOptions());
+        using var sink = new HttpWebhookTradingAlertSink(client, new TradingAlertWebhookOptions());
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await sink.DeliverAsync(CreateAlert()).ConfigureAwait(true)).ConfigureAwait(true);
@@ -23,7 +23,7 @@ public sealed class HttpWebhookTradingAlertSinkTests
     {
         using var handler = new RecordingHandler(HttpStatusCode.Accepted);
         using var client = new HttpClient(handler);
-        var sink = new HttpWebhookTradingAlertSink(client, EnabledOptions());
+        using var sink = new HttpWebhookTradingAlertSink(client, EnabledOptions());
 
         await sink.DeliverAsync(CreateAlert()).ConfigureAwait(true);
 
@@ -63,7 +63,7 @@ public sealed class HttpWebhookTradingAlertSinkTests
     {
         using var handler = new RecordingHandler(HttpStatusCode.ServiceUnavailable);
         using var client = new HttpClient(handler);
-        var sink = new HttpWebhookTradingAlertSink(client, EnabledOptions());
+        using var sink = new HttpWebhookTradingAlertSink(client, EnabledOptions());
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(async () =>
             await sink.DeliverAsync(CreateAlert()).ConfigureAwait(true)).ConfigureAwait(true);
