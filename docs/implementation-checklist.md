@@ -52,7 +52,7 @@ itens em andamento ou bloqueados.
 
 - [x] Implementar máquina de estados de ordens e `clientOrderId` idempotente.
 - [ ] Garantir persist-before-submit e tratamento de timeout ambíguo.
-- [ ] Implementar reconciliação de balances, ordens, fills e fees.
+- [x] Implementar reconciliação read-only de saldos/fills com entrada em SafeMode em caso de drift.
 - [x] Implementar `RiskPolicy` versionada.
 - [x] Implementar limites de exposição, notional, daily loss e drawdown.
 - [x] Implementar controles de stale data e bloqueio de withdrawals.
@@ -83,7 +83,7 @@ itens em andamento ou bloqueados.
 
 ## Fase 7 — Shadow, observabilidade e operação
 
-- [ ] Implementar Strategy Health e estado `NO_TRADE`.
+- [x] Implementar Strategy Health, estados `Healthy`/`NoTrade`/`Blocked` e razões auditáveis.
 - [x] Instrumentar logs JSON, correlação, métricas e `ActivitySource` local.
 - [ ] Criar alertas, redaction, dashboards e runbooks.
 - [ ] Criar threat model.
@@ -128,7 +128,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | PostgreSQL integration | Migrations, ledger, outbox lease/retry/idempotência via Compose com senha efêmera; teste reproduzível | `scripts/test-postgres-integration.sh`, `tests/CryptoTrading.Persistence.IntegrationTests` | `f7b073a` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
-| 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 4 testes aprovados | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | Em andamento | Codex |
+| 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
+| 2026-09-19 | Reconciliação | Comparação de ledger com account/fills read-only e SafeMode em drift; 4 testes | `src/CryptoTrading.Reconciliation` | `eb12678` | Codex |
+| 2026-09-19 | Strategy Health | Healthy/NoTrade/Blocked, freshness, risco, reconciliação e kill switch | `src/CryptoTrading.Domain/Risk/StrategyHealth.cs` | Em andamento | Codex |
 
 ## Bloqueios e decisões
 

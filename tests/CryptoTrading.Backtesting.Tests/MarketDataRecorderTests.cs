@@ -1,4 +1,4 @@
-using CryptoTrading.Backtesting;
+using System.Globalization;
 using Xunit;
 
 namespace CryptoTrading.Backtesting.Tests;
@@ -11,17 +11,17 @@ public sealed class MarketDataRecorderTests
         var directory = CreateDirectory();
         try
         {
-            var recorder = new MarketDataRecorder(directory);
-            var received = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00");
+            using var recorder = new MarketDataRecorder(directory);
+            var received = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00", CultureInfo.InvariantCulture);
             await recorder.AppendAsync(
-                DateTimeOffset.Parse("2026-09-19T12:00:02+00:00"),
+                DateTimeOffset.Parse("2026-09-19T12:00:02+00:00", CultureInfo.InvariantCulture),
                 received,
                 "trade",
                 "btcusdt@trade",
                 "BTCUSDT",
                 new { price = 102.5m, quantity = 0.01m });
             await recorder.AppendAsync(
-                DateTimeOffset.Parse("2026-09-19T12:00:01+00:00"),
+                DateTimeOffset.Parse("2026-09-19T12:00:01+00:00", CultureInfo.InvariantCulture),
                 received.AddSeconds(1),
                 "trade",
                 "btcusdt@trade",
@@ -49,10 +49,10 @@ public sealed class MarketDataRecorderTests
         var directory = CreateDirectory();
         try
         {
-            var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00");
-            var first = new MarketDataRecorder(directory);
+            var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00", CultureInfo.InvariantCulture);
+            using var first = new MarketDataRecorder(directory);
             var firstRecord = await first.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { value = 1 });
-            var second = new MarketDataRecorder(directory);
+            using var second = new MarketDataRecorder(directory);
             var secondRecord = await second.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { value = 2 });
 
             Assert.Equal(0, firstRecord.Sequence);
@@ -70,8 +70,8 @@ public sealed class MarketDataRecorderTests
         var directory = CreateDirectory();
         try
         {
-            var recorder = new MarketDataRecorder(directory);
-            var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00");
+            using var recorder = new MarketDataRecorder(directory);
+            var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00", CultureInfo.InvariantCulture);
             await recorder.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { price = 100m });
             var path = Assert.Single(Directory.EnumerateFiles(directory, "*.jsonl"));
             var line = await File.ReadAllTextAsync(path);
@@ -94,8 +94,8 @@ public sealed class MarketDataRecorderTests
         var directory = CreateDirectory();
         try
         {
-            var recorder = new MarketDataRecorder(directory);
-            var oldTime = DateTimeOffset.Parse("2026-09-17T12:00:00+00:00");
+            using var recorder = new MarketDataRecorder(directory);
+            var oldTime = DateTimeOffset.Parse("2026-09-17T12:00:00+00:00", CultureInfo.InvariantCulture);
             await recorder.AppendAsync(oldTime, oldTime, "trade", "stream", "BTCUSDT", new { value = 1 });
             var oldPath = Assert.Single(Directory.EnumerateFiles(directory, "*.jsonl"));
             File.SetLastWriteTimeUtc(oldPath, DateTime.UtcNow.Subtract(TimeSpan.FromDays(3)));
@@ -105,7 +105,7 @@ public sealed class MarketDataRecorderTests
                 DateTimeOffset.UtcNow);
 
             Assert.Equal(1, result.FilesDeleted);
-            Assert.Equal(0, Directory.EnumerateFiles(directory, "*.jsonl").Count());
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.jsonl"));
         }
         finally
         {
