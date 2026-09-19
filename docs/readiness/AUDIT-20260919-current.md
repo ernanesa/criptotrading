@@ -31,6 +31,9 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - O probe autenticado permanece read-only e falha fechado sem credenciais.
 - O avaliador local `ShadowDriftEvaluator` calcula divergência, stale e recovery
   de observações redigidas sem qualquer capacidade de submissão de ordem.
+- O soak determinístico local foi executado com 64 observações, divergência
+  sintética, janelas stale e recovery; o relatório está em `artifacts/shadow/`
+  e não substitui o Shadow operacional com dados reais.
 
 ## Gates que continuam pendentes
 

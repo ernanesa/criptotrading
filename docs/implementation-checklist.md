@@ -87,7 +87,7 @@ itens em andamento ou bloqueados.
 - [x] Instrumentar logs JSON, correlação, métricas e `ActivitySource` local.
 - [x] Criar alertas, redaction, dashboards e runbooks (baseline local; alertas remotos ainda pendentes).
 - [x] Criar threat model local.
-- [~] Executar backup/restore, chaos e soak test em shadow; backup/restore e Paper chaos locais validados, shadow ainda pendente.
+- [~] Executar backup/restore, chaos e soak test em shadow; backup/restore, Paper chaos e soak Shadow determinístico local validados, Shadow operacional com dados reais ainda pendente.
 
 ## Fase 8 — Readiness e canary
 
