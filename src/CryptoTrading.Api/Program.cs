@@ -1,4 +1,9 @@
+using CryptoTrading.Configuration;
+
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddLocalDotEnv();
+builder.Services.AddTradingConfiguration(builder.Configuration);
+builder.Services.AddOptions<TradingOptions>().ValidateOnStart();
 
 builder.Services.AddOpenApi();
 
