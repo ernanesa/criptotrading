@@ -85,6 +85,55 @@ public sealed class PaperExchangeTests
         Assert.Equal(OrderStatus.Filled, exchange.GetOrder(request.ClientOrderId).Status);
     }
 
+    [Fact]
+    public void SubmissionLatencyDelaysExecutionUntilTheOrderIsEligible()
+    {
+        var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var clock = new ManualTimeProvider(start);
+        var exchange = new PaperExchange(new PaperExchangeOptions { SubmissionLatency = TimeSpan.FromSeconds(5) }, clock);
+        var request = BuyMarket("latency", 1m);
+        exchange.Submit(request, new IdempotencyKey("submit-latency"));
+
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, start.AddSeconds(4))));
+        var fills = exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, start.AddSeconds(5)));
+
+        Assert.Single(fills);
+        Assert.Equal(OrderStatus.Filled, exchange.GetOrder(request.ClientOrderId).Status);
+    }
+
+    [Fact]
+    public void SpreadLimitRejectsWithoutCreatingAFill()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var exchange = new PaperExchange(new PaperExchangeOptions { MaxSpreadRate = new(0.01m) }, clock);
+        var request = BuyMarket("spread-limit", 1m);
+        exchange.Submit(request, new IdempotencyKey("submit-spread"));
+
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 103m, 101m, clock.GetUtcNow())));
+
+        var order = exchange.GetOrder(request.ClientOrderId);
+        Assert.Equal(OrderStatus.Rejected, order.Status);
+        Assert.Equal(PaperRejectionReason.SpreadLimit, order.RejectionReason);
+        Assert.Empty(exchange.Fills);
+    }
+
+    [Fact]
+    public void QuantityAndNotionalBoundsRejectOrdersDeterministically()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var quantityExchange = new PaperExchange(new PaperExchangeOptions { MaxOrderQuantity = 1m }, clock);
+        var quantityRequest = BuyMarket("quantity-limit", 2m);
+        quantityExchange.Submit(quantityRequest, new IdempotencyKey("submit-quantity"));
+        quantityExchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, clock.GetUtcNow()));
+        Assert.Equal(PaperRejectionReason.QuantityLimit, quantityExchange.GetOrder(quantityRequest.ClientOrderId).RejectionReason);
+
+        var notionalExchange = new PaperExchange(new PaperExchangeOptions { MaxOrderNotional = 100m }, clock);
+        var notionalRequest = BuyMarket("notional-limit", 2m);
+        notionalExchange.Submit(notionalRequest, new IdempotencyKey("submit-notional"));
+        notionalExchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, clock.GetUtcNow()));
+        Assert.Equal(PaperRejectionReason.NotionalLimit, notionalExchange.GetOrder(notionalRequest.ClientOrderId).RejectionReason);
+    }
+
     private static PaperExchange NewExchange(DateTimeOffset start) =>
         new(new PaperExchangeOptions { FeeRate = new(0.001m), SlippageRate = new(0.01m) }, new ManualTimeProvider(start));
 

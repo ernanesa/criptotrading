@@ -13,6 +13,18 @@ public sealed record PaperExchangeOptions
 
     public int MaxStoredFills { get; init; } = 10_000;
 
+    /// <summary>Time between accepting a submit command and making the order executable.</summary>
+    public TimeSpan SubmissionLatency { get; init; } = TimeSpan.Zero;
+
+    /// <summary>Optional hard bound for a single order quantity.</summary>
+    public decimal? MaxOrderQuantity { get; init; }
+
+    /// <summary>Optional hard bound for a single order's reference notional.</summary>
+    public decimal? MaxOrderNotional { get; init; }
+
+    /// <summary>Reject a tick when its bid/ask spread exceeds this fraction of the midpoint.</summary>
+    public Percentage MaxSpreadRate { get; init; } = new(1m);
+
     public void Validate()
     {
         if (FeeRate.Value >= 1m)
@@ -34,7 +46,29 @@ public sealed record PaperExchangeOptions
         {
             throw new ArgumentOutOfRangeException(nameof(MaxStoredFills), "MaxStoredFills must be between 1 and 1,000,000.");
         }
+
+        if (SubmissionLatency < TimeSpan.Zero || SubmissionLatency > TimeSpan.FromDays(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(SubmissionLatency), "SubmissionLatency must be between zero and one day.");
+        }
+
+        if (MaxOrderQuantity is <= 0m or > 1_000_000_000m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxOrderQuantity), "MaxOrderQuantity must be positive when supplied.");
+        }
+
+        if (MaxOrderNotional is <= 0m or > 1_000_000_000_000m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MaxOrderNotional), "MaxOrderNotional must be positive when supplied.");
+        }
     }
+}
+
+public enum PaperRejectionReason
+{
+    QuantityLimit,
+    NotionalLimit,
+    SpreadLimit,
 }
 
 public sealed record PaperOrderRequest(
@@ -83,6 +117,9 @@ public sealed record PaperMarketTick
 
     public DateTimeOffset OccurredAtUtc { get; }
 
+    /// <summary>Relative bid/ask spread, measured against the quote midpoint.</summary>
+    public decimal SpreadRate => (Ask.Value - Bid.Value) / ((Ask.Value + Bid.Value) / 2m);
+
     /// <summary>Optional executable quantity on this tick; omitting it fills the remaining order quantity.</summary>
     public Quantity? AvailableQuantity { get; }
 }
@@ -110,7 +147,8 @@ public sealed record PaperOrderSnapshot(
     Price? LimitPrice,
     OrderStatus Status,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    PaperRejectionReason? RejectionReason = null);
 
 public sealed record PaperSubmitResult(PaperOrderSnapshot Order, bool AlreadyProcessed);
 
@@ -184,7 +222,7 @@ public sealed class PaperExchange : IPaperExchange
             request.Quantity, request.LimitPrice, idempotencyKey, now);
         order.TransitionTo(OrderStatus.Validated, new IdempotencyKey($"{idempotencyKey}-validated"), now);
         order.TransitionTo(OrderStatus.Submitted, new IdempotencyKey($"{idempotencyKey}-submitted"), now);
-        var state = new PaperOrderState(order);
+        var state = new PaperOrderState(order, now + options.SubmissionLatency);
         orders.Add(request.ClientOrderId, state);
         var snapshot = ToSnapshot(state);
         commands.Add(idempotencyKey, new CommandResult(CommandKind.Submit, Fingerprint(request), snapshot));
@@ -233,6 +271,30 @@ public sealed class PaperExchange : IPaperExchange
         {
             if (IsTerminal(state.Order.Status) || state.Remaining.Value <= 0m || !CanFill(state.Order, tick))
             {
+                continue;
+            }
+
+            if (tick.OccurredAtUtc < state.ExecutableAtUtc)
+            {
+                continue;
+            }
+
+            if (tick.SpreadRate > options.MaxSpreadRate.Value)
+            {
+                Reject(state, PaperRejectionReason.SpreadLimit, tick.OccurredAtUtc);
+                continue;
+            }
+
+            if (options.MaxOrderQuantity is { } maxQuantity && state.Order.Quantity.Value > maxQuantity)
+            {
+                Reject(state, PaperRejectionReason.QuantityLimit, tick.OccurredAtUtc);
+                continue;
+            }
+
+            var referencePriceForLimit = state.Order.Side == OrderSide.Buy ? tick.Ask.Value : tick.Bid.Value;
+            if (options.MaxOrderNotional is { } maxNotional && state.Order.Quantity.Value * referencePriceForLimit > maxNotional)
+            {
+                Reject(state, PaperRejectionReason.NotionalLimit, tick.OccurredAtUtc);
                 continue;
             }
 
@@ -325,11 +387,27 @@ public sealed class PaperExchange : IPaperExchange
 
     private static PaperOrderSnapshot ToSnapshot(PaperOrderState state) => new(state.Order.Id, state.Order.ClientOrderId,
         state.Order.Symbol, state.Order.Side, state.Order.Type, state.Order.Quantity, state.FilledQuantity,
-        state.Order.LimitPrice, state.Order.Status, state.Order.CreatedAtUtc, state.Order.UpdatedAtUtc);
+        state.Order.LimitPrice, state.Order.Status, state.Order.CreatedAtUtc, state.Order.UpdatedAtUtc,
+        state.RejectionReason);
 
-    private sealed class PaperOrderState(Order order)
+    private static void Reject(PaperOrderState state, PaperRejectionReason reason, DateTimeOffset occurredAtUtc)
+    {
+        if (state.Order.Status == OrderStatus.Submitted)
+        {
+            state.Order.TransitionTo(OrderStatus.Rejected,
+                new IdempotencyKey($"paper-reject-{state.Order.Id}-{reason}-{occurredAtUtc:O}"), occurredAtUtc);
+        }
+
+        state.RejectionReason = reason;
+    }
+
+    private sealed class PaperOrderState(Order order, DateTimeOffset executableAtUtc)
     {
         public Order Order { get; } = order;
+
+        public DateTimeOffset ExecutableAtUtc { get; } = executableAtUtc;
+
+        public PaperRejectionReason? RejectionReason { get; set; }
 
         public Quantity FilledQuantity { get; set; }
 
