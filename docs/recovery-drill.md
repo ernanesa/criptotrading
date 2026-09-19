@@ -27,6 +27,20 @@ Para validar o ciclo físico de backup sem tocar no volume da aplicação, execu
 O script usa um projeto, volume, banco de restauração e arquivo temporários
 gerados pelo próprio processo; ao finalizar, remove somente esses recursos.
 
+Para executar o drill determinístico de soak/chaos somente em memória, execute:
+
+```bash
+./scripts/test-paper-soak-chaos.sh
+```
+
+Esse cenário cria 64 mensagens Paper, tenta novamente entregas duplicadas,
+simula uma falha transitória antes da aceitação, uma queda do worker depois da
+aceitação e novos owners após a expiração do lease. O `PaperExchange` recebe a
+mesma chave de idempotência na recuperação e prova que há 64 side effects para
+64 ordens, apesar das falhas e reinícios simulados. O processo remove as
+variáveis `BINANCE_API_KEY` e `BINANCE_API_SECRET` do ambiente do teste; não há
+rede, PostgreSQL, credencial ou dinheiro real envolvido.
+
 ## Critérios de aprovação
 
 - nenhum evento financeiro duplicado;
