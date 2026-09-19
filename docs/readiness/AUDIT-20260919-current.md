@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `cf89005`
+**Commit de código auditado:** `e10f5de`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 190 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 195 aprovados, 0 falhas, 0 skips |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
@@ -38,6 +38,10 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 - O Worker Shadow local persistiu relatório JSONL redigido e publicou alertas
   deduplicados de divergência, stale e recovery; canais externos ainda não
   foram configurados.
+- O Worker possui uma reconciliação autenticada read-only opt-in no startup,
+  condicionada a PostgreSQL local e `NO_TRADE`; sem credenciais novas ela falha
+  antes de qualquer chamada. A execução contra a conta Testnet ainda não foi
+  realizada.
 
 ## Gates que continuam pendentes
 
