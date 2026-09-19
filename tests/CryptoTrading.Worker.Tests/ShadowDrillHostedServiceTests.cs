@@ -1,4 +1,5 @@
 using CryptoTrading.Exchange.Paper;
+using CryptoTrading.Backtesting;
 using CryptoTrading.Observability;
 using CryptoTrading.Shadow;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -48,5 +49,24 @@ public sealed class ShadowDrillHostedServiceTests
 
         Assert.False(Directory.Exists(directory));
         Assert.Empty(sink.Alerts);
+    }
+
+    [Fact]
+    public async Task PublishesDistinctAlertsForDriftStaleAndRecovery()
+    {
+        var sink = new InMemoryTradingAlertSink();
+        using var dispatcher = new TradingAlertDispatcher(sink);
+        var result = new ShadowRunResult(10, 2, 3, 1, 0.2m, 0.3m);
+
+        var published = await ShadowAlertPublisher.PublishAsync(
+            result,
+            dispatcher,
+            new DateTimeOffset(2026, 9, 19, 15, 0, 0, TimeSpan.Zero));
+
+        Assert.Equal(3, published);
+        Assert.Equal(3, sink.Alerts.Count);
+        Assert.Contains(sink.Alerts, alert => alert.Scope == "shadow/drift" && alert.Severity == TradingAlertSeverity.Critical);
+        Assert.Contains(sink.Alerts, alert => alert.Scope == "shadow/stale" && alert.Severity == TradingAlertSeverity.Warning);
+        Assert.Contains(sink.Alerts, alert => alert.Scope == "shadow/recovery" && alert.Severity == TradingAlertSeverity.Warning);
     }
 }

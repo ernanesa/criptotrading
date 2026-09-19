@@ -48,50 +48,7 @@ internal sealed class ShadowDrillHostedService(
             result.DivergenceCount,
             result.StaleCount,
             result.RecoveryCount), cancellationToken).ConfigureAwait(false);
-        if (result.DivergenceCount > 0)
-        {
-            await alertDispatcher.PublishAsync(new TradingAlert(
-                "LOCAL",
-                "PAPER",
-                "shadow/drift",
-                completedAt,
-                Guid.NewGuid().ToString("N"),
-                TradingAlertSeverity.Critical,
-                "ops",
-                "halt Shadow promotion and inspect the report",
-                "docs/shadow-soak.md",
-                $"shadow-divergence:{result.DivergenceCount}"), cancellationToken).ConfigureAwait(false);
-        }
-
-        if (result.StaleCount > 0)
-        {
-            await alertDispatcher.PublishAsync(new TradingAlert(
-                "LOCAL",
-                "PAPER",
-                "shadow/stale",
-                completedAt,
-                Guid.NewGuid().ToString("N"),
-                TradingAlertSeverity.Warning,
-                "ops",
-                "inspect stale-data windows before promotion",
-                "docs/shadow-soak.md",
-                $"shadow-stale:{result.StaleCount}"), cancellationToken).ConfigureAwait(false);
-        }
-
-        if (result.RecoveryCount > 0)
-        {
-            await alertDispatcher.PublishAsync(new TradingAlert(
-                "LOCAL",
-                "PAPER",
-                "shadow/recovery",
-                completedAt,
-                Guid.NewGuid().ToString("N"),
-                TradingAlertSeverity.Warning,
-                "ops",
-                "review recovery evidence before promotion",
-                "docs/recovery-drill.md",
-                $"shadow-recovery:{result.RecoveryCount}"), cancellationToken).ConfigureAwait(false);
-        }
+        _ = await ShadowAlertPublisher.PublishAsync(result, alertDispatcher, completedAt, cancellationToken).ConfigureAwait(false);
 
         ShadowDrillLog.Completed(logger, result.ObservationCount, result.DivergenceCount, result.StaleCount, result.RecoveryCount, reportPath);
     }
