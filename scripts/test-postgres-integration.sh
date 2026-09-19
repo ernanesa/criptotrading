@@ -4,6 +4,12 @@ set -Eeuo pipefail
 # Reproducible local persistence evidence. The generated password exists only in
 # this process; it is never written to a file, printed, or passed as a CLI arg.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+dotnet_command="dotnet"
+if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
+    dotnet_command="$repo_root/.tools/dotnet/dotnet"
+elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
+    dotnet_command="$DOTNET_ROOT/dotnet"
+fi
 compose_project="${COMPOSE_PROJECT_NAME:-cryptotrading-integration}"
 postgres_db="${POSTGRES_DB:-cryptotrading}"
 postgres_user="${POSTGRES_USER:-cryptotrading}"
@@ -53,7 +59,7 @@ done
 connection_string="Host=127.0.0.1;Port=$postgres_port;Database=$postgres_db;Username=$postgres_user;Password=$password"
 export POSTGRES_CONNECTION_STRING="$connection_string"
 
-dotnet test "$repo_root/tests/CryptoTrading.Persistence.IntegrationTests/CryptoTrading.Persistence.IntegrationTests.csproj" \
+"$dotnet_command" test "$repo_root/tests/CryptoTrading.Persistence.IntegrationTests/CryptoTrading.Persistence.IntegrationTests.csproj" \
     --filter 'FullyQualifiedName~PostgresTradingStoreIntegrationTests' \
     --logger 'console;verbosity=minimal'
 
