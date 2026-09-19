@@ -1395,6 +1395,8 @@ public static class PostgresServiceCollectionExtensions
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         services.AddSingleton(_ => new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)));
+        services.AddSingleton<ILocalOpenOrderStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddHealthChecks().AddCheck<PostgresHealthCheck>(
             "postgres",
             HealthStatus.Unhealthy,
