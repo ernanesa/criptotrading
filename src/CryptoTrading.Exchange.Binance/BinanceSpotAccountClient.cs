@@ -17,25 +17,29 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     private readonly BinanceAuthenticatedClientOptions options;
     private readonly IBinanceClockDriftEstimator clock;
     private readonly TimeProvider timeProvider;
+    private readonly BinanceRequestRetryPolicy retryPolicy;
 
     public BinanceSpotAccountClient(
         HttpClient httpClient,
         BinanceAuthenticatedClientOptions options,
         IBinanceClockDriftEstimator? clock = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        BinanceRequestRetryPolicy? retryPolicy = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.options.Validate();
         this.clock = clock ?? new BinanceClockDriftEstimator(timeProvider);
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.retryPolicy = retryPolicy ?? new BinanceRequestRetryPolicy();
     }
 
     public BinanceSpotAccountClient(
         HttpClient httpClient,
         IOptions<BinanceAuthenticatedClientOptions> options,
-        IBinanceClockDriftEstimator? clock = null)
-        : this(httpClient, options?.Value ?? throw new ArgumentNullException(nameof(options)), clock)
+        IBinanceClockDriftEstimator? clock = null,
+        BinanceRequestRetryPolicy? retryPolicy = null)
+        : this(httpClient, options?.Value ?? throw new ArgumentNullException(nameof(options)), clock, retryPolicy: retryPolicy)
     {
     }
 
@@ -120,19 +124,33 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         List<KeyValuePair<string, string>> parameters,
         CancellationToken cancellationToken)
     {
-        var queryParameters = new List<KeyValuePair<string, string>>(parameters.Count + 2);
-        queryParameters.AddRange(parameters);
-        queryParameters.Add(new("recvWindow", options.RecvWindowMilliseconds.ToString(CultureInfo.InvariantCulture)));
-        queryParameters.Add(new("timestamp", clock.EstimateServerNow().ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)));
-        var query = BuildQuery(queryParameters);
-        var signature = Sign(query, options.ApiSecret);
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"{endpoint}?{query}&signature={signature}", UriKind.Relative));
-        request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
+        for (var attempt = 0; ; attempt++)
+        {
+            var queryParameters = new List<KeyValuePair<string, string>>(parameters.Count + 2);
+            queryParameters.AddRange(parameters);
+            queryParameters.Add(new("recvWindow", options.RecvWindowMilliseconds.ToString(CultureInfo.InvariantCulture)));
+            queryParameters.Add(new("timestamp", clock.EstimateServerNow().ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)));
+            var query = BuildQuery(queryParameters);
+            var signature = Sign(query, options.ApiSecret);
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"{endpoint}?{query}&signature={signature}", UriKind.Relative));
+            request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
 
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        await EnsureSuccessAsync(response, endpoint).ConfigureAwait(false);
-        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false)
-            ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
+            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                if (!retryPolicy.ShouldRetry(response.StatusCode, attempt))
+                {
+                    throw new BinanceApiException(response.StatusCode, endpoint);
+                }
+
+                var delay = retryPolicy.GetDelay(response, attempt, timeProvider.GetUtcNow());
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false)
+                ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
+        }
     }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, string endpoint)
