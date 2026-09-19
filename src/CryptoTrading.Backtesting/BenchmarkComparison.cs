@@ -29,6 +29,39 @@ public sealed record BenchmarkComparison(
 /// </summary>
 public static class BenchmarkComparisonEvaluator
 {
+    public static WalkForwardBenchmarkSummary AggregateOutOfSample(
+        IReadOnlyList<OutOfSampleWindowResult> windows)
+    {
+        ArgumentNullException.ThrowIfNull(windows);
+        if (windows.Count == 0)
+        {
+            throw new ArgumentException("At least one OOS window is required.", nameof(windows));
+        }
+
+        var strategyReturn = Compound(windows.Select(window => window.Benchmark.Strategy.NetReturn));
+        var noTradeReturn = Compound(windows.Select(window => window.Benchmark.NoTradeCash.NetReturn));
+        var buyHoldReturn = Compound(windows.Select(window => window.Benchmark.BuyAndHold.NetReturn));
+        var payload = JsonSerializer.Serialize(new
+        {
+            windows = windows.Select(window => new
+            {
+                window = window.Window,
+                benchmark = window.Benchmark.Fingerprint,
+            }),
+            strategy_return = strategyReturn,
+            no_trade_return = noTradeReturn,
+            buy_hold_return = buyHoldReturn,
+        });
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+        return new(
+            strategyReturn,
+            noTradeReturn,
+            buyHoldReturn,
+            strategyReturn > noTradeReturn,
+            strategyReturn > buyHoldReturn,
+            fingerprint);
+    }
+
     public static BenchmarkComparison CompareOutOfSample(
         string strategyName,
         decimal initialCapital,
@@ -131,6 +164,17 @@ public static class BenchmarkComparisonEvaluator
             strategy.NetReturn > noTrade.NetReturn,
             strategy.NetReturn > buyHold.NetReturn,
             fingerprint);
+    }
+
+    private static decimal Compound(IEnumerable<decimal> returns)
+    {
+        var compounded = 1m;
+        foreach (var value in returns)
+        {
+            compounded *= 1m + value;
+        }
+
+        return compounded - 1m;
     }
 
     private static (decimal LastPrice, decimal MaximumDrawdown) ValidateAndMeasurePrices(IReadOnlyList<CloseBar> bars)

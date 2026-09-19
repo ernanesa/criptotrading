@@ -120,6 +120,9 @@ public sealed class TrendFollowingBacktestTests
             Assert.Equal("buy-and-hold", window.Benchmark.BuyAndHold.Name);
             Assert.Equal(64, window.Benchmark.Fingerprint.Length);
         });
+        var summary = result.GetBenchmarkSummary();
+        Assert.Equal(64, summary.Fingerprint.Length);
+        Assert.Equal(0m, summary.NoTradeCashNetReturn);
     }
 
     [Fact]

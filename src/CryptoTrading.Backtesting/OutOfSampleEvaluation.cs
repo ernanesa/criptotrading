@@ -67,12 +67,24 @@ public sealed record OutOfSampleWindowResult(
     int PeriodCount,
     BenchmarkComparison Benchmark);
 
+public sealed record WalkForwardBenchmarkSummary(
+    decimal StrategyNetReturn,
+    decimal NoTradeCashNetReturn,
+    decimal BuyAndHoldNetReturn,
+    bool BeatsNoTradeCash,
+    bool BeatsBuyAndHold,
+    string Fingerprint);
+
 public sealed record WalkForwardEvaluationResult(
     DatasetMetadata Dataset,
     string StrategyId,
     string StrategyVersion,
     string StrategyConfigurationFingerprint,
-    IReadOnlyList<OutOfSampleWindowResult> Windows);
+    IReadOnlyList<OutOfSampleWindowResult> Windows)
+{
+    public WalkForwardBenchmarkSummary GetBenchmarkSummary() =>
+        BenchmarkComparisonEvaluator.AggregateOutOfSample(Windows);
+}
 
 /// <summary>
 /// Evaluates explicit walk-forward OOS windows using training bars only as indicator warm-up.
