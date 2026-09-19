@@ -30,8 +30,8 @@ Antes de propor uma decisão aprovada, execute:
 ./scripts/validate-readiness.sh <PRM.md> <CANARY.md> <RISK-POLICY.md>
 ```
 
-O validator exige decisão/status aprovável, owner e aprovador, data de validade
-futura ou vigente em UTC (e rejeita datas inválidas ou expiradas),
+O validator exige decisão/status aprovável, owner e aprovador, datas de validade
+do PRM, CanaryPlan e RiskPolicy futuras ou vigentes em UTC (e rejeita datas inválidas ou expiradas),
 thresholds com unidade e janela, hash SHA-256 da `RiskPolicy` e ausência de
 placeholders ou checkboxes pendentes. Ele não cria aprovação e deve falhar para
 os snapshots atuais enquanto os gates humanos e Testnet permanecerem pendentes.
