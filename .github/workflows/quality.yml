@@ -1,0 +1,59 @@
+name: Quality gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: .NET restore, build, test and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install pinned SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          dotnet-quality: preview
+
+      - name: Show SDK
+        run: dotnet --info
+
+      - name: Restore
+        run: dotnet restore CryptoTrading.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build CryptoTrading.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test CryptoTrading.slnx --no-build --configuration Release --verbosity normal
+
+      - name: Verify formatting
+        run: dotnet format CryptoTrading.slnx --no-restore --verify-no-changes
+
+  secret-scan:
+    name: Tracked-file secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Scan tracked files without printing matches
+        run: ./scripts/scan-secrets.sh
