@@ -20,11 +20,12 @@ public sealed class PersistenceMigrationsTests
                 "007_account_stream_events.down.sql", "007_account_stream_events.up.sql",
                 "008_account_stream_session_identity.down.sql", "008_account_stream_session_identity.up.sql",
                 "009_reconciliation_open_orders.down.sql", "009_reconciliation_open_orders.up.sql",
+                "010_operational_control_audit.down.sql", "010_operational_control_audit.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -54,5 +55,7 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("session_generation", upMigrations[7].Sql, StringComparison.Ordinal);
         Assert.Contains("subscription_id", upMigrations[7].Sql, StringComparison.Ordinal);
         Assert.Contains("reconciliation_open_orders", upMigrations[8].Sql, StringComparison.Ordinal);
+        Assert.Contains("operational_control_audit_events", upMigrations[9].Sql, StringComparison.Ordinal);
+        Assert.Contains("append_only", upMigrations[9].Sql, StringComparison.OrdinalIgnoreCase);
     }
 }

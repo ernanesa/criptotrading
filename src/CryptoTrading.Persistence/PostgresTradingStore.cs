@@ -124,11 +124,24 @@ public interface ILocalOpenOrderStore
     Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable append-only store for KillSwitch/SafeMode transitions.</summary>
+public interface IOperationalControlAuditStore
+{
+    Task<bool> AppendOperationalControlAuditEventAsync(
+        OperationalControlAuditEvent auditEvent,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<OperationalControlAuditEvent>> ReadOperationalControlAuditEventsAsync(
+        DateTimeOffset? sinceUtc = null,
+        int limit = 1_000,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IOperationalControlAuditStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -399,6 +412,108 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
             }
 
             result.Add(record);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Appends one immutable operational-control transition. A repeated event ID or
+    /// idempotency key is accepted only when every field and its canonical hash match.
+    /// </summary>
+    public async Task<bool> AppendOperationalControlAuditEventAsync(
+        OperationalControlAuditEvent auditEvent,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateOperationalControlAuditEvent(auditEvent);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.operational_control_audit_events
+                (event_id, schema_version, event_type, from_mode, to_mode, actor, reason,
+                 idempotency_key, occurred_at, occurred_at_ticks, approval_id, payload_sha256)
+            VALUES (@event_id, @schema_version, @event_type, @from_mode, @to_mode, @actor, @reason,
+                    @idempotency_key, @occurred_at, @occurred_at_ticks, @approval_id, @payload_sha256)
+            ON CONFLICT DO NOTHING
+            RETURNING event_id;
+            """,
+            [
+                Parameter("event_id", NpgsqlDbType.Uuid, auditEvent.EventId),
+                Parameter("schema_version", NpgsqlDbType.Integer, auditEvent.SchemaVersion),
+                Parameter("event_type", NpgsqlDbType.Varchar, auditEvent.EventType),
+                Parameter("from_mode", NpgsqlDbType.Varchar, auditEvent.From.ToString()),
+                Parameter("to_mode", NpgsqlDbType.Varchar, auditEvent.To.ToString()),
+                Parameter("actor", NpgsqlDbType.Varchar, auditEvent.Actor),
+                Parameter("reason", NpgsqlDbType.Varchar, auditEvent.Reason),
+                Parameter("idempotency_key", NpgsqlDbType.Varchar, auditEvent.IdempotencyKey.Value),
+                Parameter("occurred_at", NpgsqlDbType.TimestampTz, auditEvent.OccurredAtUtc.UtcDateTime),
+                Parameter("occurred_at_ticks", NpgsqlDbType.Bigint, auditEvent.OccurredAtUtc.UtcTicks),
+                Parameter("approval_id", NpgsqlDbType.Varchar, auditEvent.ApprovalId),
+                Parameter("payload_sha256", NpgsqlDbType.Char, auditEvent.PayloadSha256),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existing = await ReadOperationalControlAuditEventAsync(
+                connection,
+                transaction,
+                auditEvent.EventId,
+                auditEvent.IdempotencyKey.Value,
+                cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    "Operational-control audit uniqueness reported a conflict, but no event was found.");
+            EnsureEquivalent(existing, auditEvent);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<OperationalControlAuditEvent>> ReadOperationalControlAuditEventsAsync(
+        DateTimeOffset? sinceUtc = null,
+        int limit = 1_000,
+        CancellationToken cancellationToken = default)
+    {
+        if (sinceUtc.HasValue && sinceUtc.Value.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Operational-control audit lookup timestamps must be UTC.", nameof(sinceUtc));
+        }
+
+        if (limit is < 1 or > 10_000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, schema_version, event_type, from_mode, to_mode, actor, reason,
+                   idempotency_key, occurred_at, occurred_at_ticks, approval_id, payload_sha256
+            FROM trading.operational_control_audit_events
+            WHERE (@since_utc IS NULL OR occurred_at >= @since_utc)
+            ORDER BY occurred_at, event_id
+            LIMIT @limit;
+            """, connection);
+        command.Parameters.Add(Parameter(
+            "since_utc",
+            NpgsqlDbType.TimestampTz,
+            sinceUtc?.UtcDateTime));
+        command.Parameters.Add(Parameter("limit", NpgsqlDbType.Integer, limit));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<OperationalControlAuditEvent>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var auditEvent = ReadOperationalControlAuditEvent(reader);
+            if (!string.Equals(auditEvent.PayloadSha256, reader.GetString(11).Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Operational-control audit event {auditEvent.EventId} has an invalid payload hash.");
+            }
+
+            result.Add(auditEvent);
         }
 
         return result;
@@ -1269,6 +1384,99 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
         reader.IsDBNull(9) ? null : reader.GetInt64(9),
         reader.IsDBNull(10) ? null : reader.GetInt64(10));
 
+    private static OperationalControlAuditEvent ReadOperationalControlAuditEvent(NpgsqlDataReader reader)
+    {
+        var auditEvent = new OperationalControlAuditEvent(
+            reader.GetGuid(0),
+            Enum.Parse<OperationalMode>(reader.GetString(3), ignoreCase: false),
+            Enum.Parse<OperationalMode>(reader.GetString(4), ignoreCase: false),
+            reader.GetString(5),
+            reader.GetString(6),
+            new IdempotencyKey(reader.GetString(7)),
+            new DateTimeOffset(new DateTime(reader.GetInt64(9), DateTimeKind.Utc)),
+            reader.IsDBNull(10) ? null : reader.GetString(10));
+
+        if (reader.GetInt32(1) != auditEvent.SchemaVersion
+            || !string.Equals(reader.GetString(2), auditEvent.EventType, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Operational-control audit event {auditEvent.EventId} has an unsupported schema or event type.");
+        }
+
+        return auditEvent;
+    }
+
+    private static async Task<OperationalControlAuditEvent?> ReadOperationalControlAuditEventAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid eventId,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, schema_version, event_type, from_mode, to_mode, actor, reason,
+                   idempotency_key, occurred_at, occurred_at_ticks, approval_id, payload_sha256
+            FROM trading.operational_control_audit_events
+            WHERE event_id = @event_id OR idempotency_key = @idempotency_key
+            LIMIT 1;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, eventId));
+        command.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, idempotencyKey));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadOperationalControlAuditEvent(reader)
+            : null;
+    }
+
+    private static void ValidateOperationalControlAuditEvent(OperationalControlAuditEvent auditEvent)
+    {
+        ArgumentNullException.ThrowIfNull(auditEvent);
+        if (auditEvent.SchemaVersion != OperationalControlAuditEvent.CurrentSchemaVersion
+            || !string.Equals(auditEvent.EventType, "OPERATIONAL_CONTROL_TRANSITION", StringComparison.Ordinal)
+            || auditEvent.OccurredAtUtc.Offset != TimeSpan.Zero
+            || !string.Equals(auditEvent.PayloadSha256, ComputeOperationalControlAuditHash(auditEvent), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Operational-control audit event schema, timestamp, type, or payload hash is invalid.");
+        }
+    }
+
+    private static string ComputeOperationalControlAuditHash(OperationalControlAuditEvent auditEvent) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(string.Join('|',
+                auditEvent.EventType,
+                auditEvent.SchemaVersion,
+                auditEvent.EventId.ToString("D"),
+                auditEvent.From,
+                auditEvent.To,
+                auditEvent.Actor,
+                auditEvent.Reason,
+                auditEvent.IdempotencyKey.ToString(),
+                auditEvent.OccurredAtUtc.ToUniversalTime().ToString("O"),
+                auditEvent.ApprovalId ?? string.Empty))));
+
+    private static void EnsureEquivalent(
+        OperationalControlAuditEvent existing,
+        OperationalControlAuditEvent candidate)
+    {
+        if (existing.EventId != candidate.EventId
+            || existing.SchemaVersion != candidate.SchemaVersion
+            || !string.Equals(existing.EventType, candidate.EventType, StringComparison.Ordinal)
+            || existing.From != candidate.From
+            || existing.To != candidate.To
+            || !string.Equals(existing.Actor, candidate.Actor, StringComparison.Ordinal)
+            || !string.Equals(existing.Reason, candidate.Reason, StringComparison.Ordinal)
+            || existing.IdempotencyKey != candidate.IdempotencyKey
+            || existing.OccurredAtUtc.UtcTicks != candidate.OccurredAtUtc.UtcTicks
+            || !string.Equals(existing.ApprovalId, candidate.ApprovalId, StringComparison.Ordinal)
+            || !string.Equals(existing.PayloadSha256, candidate.PayloadSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "The operational-control audit identity is already associated with different data.");
+        }
+    }
+
     private static void EnsureEquivalent(RiskPolicyRow existing, RiskPolicyDocument candidate)
     {
         var policy = candidate.Policy;
@@ -1351,6 +1559,22 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
     {
         return (bool)(await ExecuteScalarAsync(connection, transaction, sql, parameters, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The existence query returned no value."));
+    }
+}
+
+/// <summary>
+/// Compatibility adapter for the synchronous domain sink. The preferred boundary
+/// is <see cref="IOperationalControlAuditStore.AppendOperationalControlAuditEventAsync"/>;
+/// this adapter is fail-closed and intended only where the domain control contract
+/// still exposes a synchronous sink.
+/// </summary>
+public sealed class PostgresOperationalControlAuditSink(PostgresTradingStore store) : IOperationalControlAuditSink
+{
+    public void Append(OperationalControlAuditEvent auditEvent)
+    {
+        ArgumentNullException.ThrowIfNull(auditEvent);
+        ArgumentNullException.ThrowIfNull(store);
+        _ = store.AppendOperationalControlAuditEventAsync(auditEvent).GetAwaiter().GetResult();
     }
 }
 
