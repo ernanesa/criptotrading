@@ -79,7 +79,7 @@ itens em andamento ou bloqueados.
 - [x] Adicionar contratos de janelas out-of-sample/walk-forward e matriz de sensibilidade.
 - [x] Executar validação OOS com dataset sintético versionado e comparar janelas walk-forward; sensibilidade de execução permanece pendente.
 - [x] Evoluir o simulador para spread, latência, partial fills, rejeições e limites; impacto de mercado permanece pendente.
-- [ ] Implementar Monte Carlo e stress tests depois de validar o modelo de execução.
+- [x] Implementar Monte Carlo e stress tests determinísticos depois de validar o modelo de execução.
 
 ## Fase 7 — Shadow, observabilidade e operação
 
@@ -135,6 +135,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Backup/restore | Dump custom PostgreSQL restaurado em banco efêmero e verificado; recursos temporários removidos | `scripts/test-postgres-backup-restore.sh`, `docs/recovery-drill.md` | Validação local aprovada | Codex |
 | 2026-09-19 | Property tests | Gerador xorshift determinístico cobrindo balanceamento, idempotência, atomicidade e saldos | `tests/CryptoTrading.Domain.Tests/AccountingPropertyTests.cs` | `5f7d465` | Codex |
 | 2026-09-19 | Simulador Paper/Replay | Spread, latência, partial fills, rejeições e limites determinísticos; 8 testes Paper | `src/CryptoTrading.Exchange.Paper`, `docs/paper-replay-simulator.md` | `955fe1b` | Codex |
+| 2026-09-19 | Monte Carlo/stress | Bootstrap determinístico por seed, shocks adversos, quantis P05/P50/P95, drawdown e probabilidade de ruína; 29 testes Backtesting | `src/CryptoTrading.Backtesting/MonteCarloStress.cs` | `8d27838` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
