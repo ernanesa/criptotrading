@@ -58,6 +58,26 @@ public sealed class BinanceSymbolTradingRulesTests
         Assert.Throws<FormatException>(() => (malformed with { Filters = filters }).GetTradingRules());
     }
 
+    [Fact]
+    public void ParserSupportsModernNotionalAndPreservesUnknownFilters()
+    {
+        var symbol = CreateSymbol() with
+        {
+            Filters = [
+                .. CreateSymbol().Filters!,
+                new("NOTIONAL", MinNotional: "12", MaxNotional: "1000"),
+                new("MAX_NUM_ORDERS", MaxQty: "200")]
+        };
+
+        var rules = symbol.GetTradingRules();
+
+        Assert.Equal(12m, rules.MinimumNotional);
+        Assert.Equal(1000m, rules.MaximumNotional);
+        Assert.Contains(rules.ExchangeFilters!, filter => filter.FilterType == "MAX_NUM_ORDERS");
+        Assert.Contains(rules.ValidateLimitOrder(100m, 11m).Violations,
+            violation => violation.Code == "NOTIONAL_ABOVE_MAXIMUM");
+    }
+
     private static BinanceSymbolInfo CreateSymbol() => new(
         "BTCUSDT",
         "TRADING",
