@@ -13,5 +13,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../CryptoTrading.Configuration/CryptoTrading.Configuration.csproj" />
+    <ProjectReference Include="../CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
   </ItemGroup>
 </Project>
