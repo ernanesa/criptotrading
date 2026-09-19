@@ -14,20 +14,21 @@ itens em andamento ou bloqueados.
 - [x] `.env.example` documenta o contrato local de Testnet.
 - [x] `.env` local criado, ignorado pelo Git e com permissão `600`.
 - [x] Teste público da Binance Testnet executado.
-- [ ] CI executa restore, build, testes, análise e secret scan.
+- [x] CI executa restore, build, testes, análise, formatação e secret scan sem imprimir correspondências.
 
 ## Fase 1 — Domínio e contratos
 
-- [ ] Adicionar `TimeProvider` injetável e relógio determinístico.
-- [ ] Criar IDs de domínio, correlation ID e idempotency key.
-- [ ] Criar tipos de dinheiro, preço, quantidade e percentual com `decimal`.
+- [x] Adicionar `TimeProvider` injetável e relógio determinístico.
+- [x] Criar IDs de domínio, correlation ID e idempotency key.
+- [x] Criar tipos de dinheiro, preço, quantidade e percentual com `decimal`.
 - [ ] Modelar estados de ordem, fill, posição e decisão de risco.
 - [ ] Definir contratos Strategy → Portfolio → Risk → Execution → OMS → Exchange.
-- [ ] Criar testes unitários, property-based e de arquitetura.
+- [x] Criar testes unitários básicos para primitives e relógio.
+- [ ] Adicionar property-based e testes de arquitetura.
 
 ## Fase 2 — Persistência financeira local
 
-- [ ] Adicionar PostgreSQL ao Docker Compose.
+- [x] Adicionar PostgreSQL 18 ao Docker Compose, com volume nomeado, bind local e healthcheck.
 - [ ] Criar migrations e política de backup local.
 - [ ] Implementar journal imutável e ledger de saldos, fees, posições e PnL.
 - [ ] Implementar outbox/inbox com lease, retry e deduplicação.
@@ -95,6 +96,9 @@ itens em andamento ou bloqueados.
 |---|---|---|---|---|---|
 | 2026-09-19 | Bootstrap | Build .NET 11: 0 warnings/0 errors | `dotnet build --no-restore` | `7be8714` | Codex |
 | 2026-09-19 | Binance pública | `ping`, `time`, `exchangeInfo` aprovados | `scripts/test-binance-testnet-public.sh` | `828a449` | Codex |
+| 2026-09-19 | CI/gates | Restore, build Release, 9 testes, format e secret scan aprovados; Compose requer `POSTGRES_PASSWORD` explícita | `.github/workflows/quality.yml`, `scripts/scan-secrets.sh` | `64b333c` | Codex |
+| 2026-09-19 | Domínio | Primitives e relógio determinístico; build sem warnings e 9 testes aprovados | `src/CryptoTrading.Domain/Primitives`, `tests/CryptoTrading.Domain.Tests` | `319b4fc` | Codex |
+| 2026-09-19 | PostgreSQL local | Compose validado com senha temporária, bind em loopback e healthcheck | `compose.yaml`, `docs/postgres-local.md` | `66e982d` | Codex |
 
 ## Bloqueios e decisões
 
