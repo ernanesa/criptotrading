@@ -1,0 +1,29 @@
+name: cryptotrading
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cryptotrading}
+      POSTGRES_USER: ${POSTGRES_USER:-cryptotrading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the shell before starting PostgreSQL}
+    ports:
+      # Keep the database reachable only from this machine.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18 stores the cluster in a versioned subdirectory below
+      # this mount, which keeps major-version upgrades explicit and safe.
+      - cryptotrading-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  cryptotrading-postgres-data:
+    name: cryptotrading-postgres-data
