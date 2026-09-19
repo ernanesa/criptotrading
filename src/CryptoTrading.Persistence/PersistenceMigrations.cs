@@ -1,5 +1,7 @@
 using System.Reflection;
 
+#pragma warning disable IDE0305 // Keep the explicit array materialization for a stable migration list API.
+
 namespace CryptoTrading.Persistence;
 
 /// <summary>Loads ordered, embedded SQL migrations without selecting a runner.</summary>

@@ -55,19 +55,24 @@ O contrato esperado pelos próximos componentes é:
 Host=localhost;Port=5432;Database=cryptotrading;Username=cryptotrading;Password=<valor local>
 ```
 
-Migrations, journal, ledger, outbox/inbox e readiness real ainda são fatias
-posteriores. Até que sejam implementados, o health endpoint da aplicação não
-é evidência de conectividade com PostgreSQL.
+Quando `POSTGRES_CONNECTION_STRING` está presente, a API registra uma verificação
+de readiness que executa uma consulta real no PostgreSQL. O Worker também executa
+essa verificação antes de iniciar sua hospedagem de persistência; se
+`WORKER_APPLY_MIGRATIONS=true`, as migrations são aplicadas depois do probe.
+Journal, ledger, outbox/inbox e leases são cobertos pela fixture de integração
+reproduzível abaixo.
 
-## Evidência mínima
+## Evidência de integração
 
-Antes de marcar a tarefa de Compose como concluída, registrar:
+Execute a fixture a partir da raiz do repositório:
 
 ```bash
-docker compose config
-docker compose up -d postgres
-docker compose ps postgres
+./scripts/test-postgres-integration.sh
 ```
 
-Não cole a saída caso ela contenha variáveis sensíveis. A senha deve continuar
-fora dos arquivos versionados.
+Ela gera uma senha efêmera em memória, sobe o Compose em uma porta local de
+teste, verifica `pg_isready`, aplica migrations, grava e consulta o ledger,
+exercita deduplicação do outbox e valida o ciclo lease → falha transitória →
+retry → processed. Ao terminar, executa `docker compose down` sem `--volumes` e
+verifica que o volume nomeado continua presente. A senha deve continuar fora
+dos arquivos versionados e não é exibida pelo script.

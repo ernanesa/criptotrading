@@ -26,4 +26,4 @@ services:
 
 volumes:
   cryptotrading-postgres-data:
-    name: cryptotrading-postgres-data
+    name: ${POSTGRES_VOLUME_NAME:-cryptotrading-postgres-data}

@@ -46,10 +46,10 @@ builder.Services.AddSingleton<IPaperExchange, PaperExchange>();
 builder.Services.AddSingleton<IOutboxMessageExecutor, PaperOutboxMessageExecutor>();
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
-    builder.Services.AddSingleton<PostgresTradingStore>(serviceProvider =>
-        new PostgresTradingStore(new PostgresPersistenceOptions(
-            serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value.PostgresConnectionString)));
-    builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
+    _ = builder.Services.AddPostgresTradingStore(
+        builder.Configuration["POSTGRES_CONNECTION_STRING"]
+        ?? throw new InvalidOperationException("POSTGRES_CONNECTION_STRING is required when persistence is enabled."));
+    _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
 }
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
