@@ -28,6 +28,8 @@ uma nova chave Testnet. A integração pública pode ser verificada com
 [`scripts/test-binance-testnet-public.sh`](scripts/test-binance-testnet-public.sh);
 nenhum teste autenticado deve ocorrer com segredo enviado pelo chat.
 
+O procedimento do bootstrap local está em [`docs/local-development.md`](docs/local-development.md).
+
 ## Princípios
 
 1. Strategy propõe; Portfolio dimensiona; Risk autoriza; Execution executa.

@@ -1,0 +1,5 @@
+<Project>
+  <Target Name="PreventProductionSecretsInBuild" BeforeTargets="CoreCompile">
+    <Error Condition="'$(BINANCE_API_SECRET)' != ''" Text="Do not pass Binance secrets as MSBuild properties or environment values consumed by the build." />
+  </Target>
+</Project>

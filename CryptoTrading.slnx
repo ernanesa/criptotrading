@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CryptoTrading.Api/CryptoTrading.Api.csproj" />
+    <Project Path="src/CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <Project Path="src/CryptoTrading.Worker/CryptoTrading.Worker.csproj" />
+  </Folder>
+</Solution>

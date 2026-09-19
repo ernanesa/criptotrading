@@ -1,0 +1,11 @@
+@CryptoTrading.Api_HostAddress = http://localhost:5130
+
+GET {{CryptoTrading.Api_HostAddress}}/openapi/v1.json
+Accept: application/json
+
+###
+
+GET {{CryptoTrading.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
