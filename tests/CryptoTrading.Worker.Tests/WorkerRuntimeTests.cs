@@ -4,7 +4,6 @@ using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Exchange.Paper;
 using CryptoTrading.Persistence;
-using CryptoTrading.Worker;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
