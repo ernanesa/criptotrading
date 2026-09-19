@@ -1,5 +1,6 @@
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Risk;
+using CryptoTrading.Exchange.Binance;
 using Xunit;
 
 namespace CryptoTrading.Reconciliation.Tests;
@@ -15,6 +16,8 @@ public sealed class AccountReconciliationServiceTests
             new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"], maxSnapshotAge: TimeSpan.Zero));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"], maxSnapshotAge: TimeSpan.FromDays(2)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"], maxTradePages: 0));
     }
 
     [Fact]
@@ -124,6 +127,23 @@ public sealed class AccountReconciliationServiceTests
         Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
     }
 
+    [Fact]
+    public async Task BinanceSnapshotProviderPaginatesTradesAndDeduplicatesBoundaryRows()
+    {
+        var firstPage = Enumerable.Range(1, 1_000).Select(static id => CreateTrade(id)).ToArray();
+        var secondPage = new[] { CreateTrade(1_000), CreateTrade(1_001) };
+        var client = new FakeBinanceClient(firstPage, secondPage);
+        var provider = new BinanceReadOnlySnapshotProvider(
+            client,
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
+            new FixedTimeProvider(Now));
+
+        var snapshot = await provider.GetSnapshotAsync();
+
+        Assert.Equal(1_001, snapshot.Fills.Count);
+        Assert.Equal([null, 1_001L], client.FromIds);
+    }
+
     private static AccountReconciliationService CreateService(
         ReconciliationSnapshot snapshot,
         IReadOnlyDictionary<string, decimal> balances,
@@ -164,5 +184,30 @@ public sealed class AccountReconciliationServiceTests
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private static BinanceTrade CreateTrade(long id) => new(
+        "BTCUSDT", id, id, "100", "0.01", "1", "0.001", "USDT", 1, true, false, true);
+
+    private sealed class FakeBinanceClient(
+        IReadOnlyList<BinanceTrade> firstPage,
+        IReadOnlyList<BinanceTrade> secondPage) : IBinanceSpotAccountClient
+    {
+        public List<long?> FromIds { get; } = [];
+
+        public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BinanceAccountSnapshot(15, 15, 0, 0, true, false, true, 1, "SPOT", []));
+
+        public Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(string? symbol = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<BinanceOpenOrder>>([]);
+
+        public Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(string symbol, BinanceTradeQuery? query = null, CancellationToken cancellationToken = default)
+        {
+            FromIds.Add(query?.FromId);
+            return Task.FromResult<IReadOnlyList<BinanceTrade>>(query?.FromId is null ? firstPage : secondPage);
+        }
+
+        public Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BinanceClockSnapshot(1, TimeSpan.Zero, true));
     }
 }

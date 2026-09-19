@@ -13,7 +13,8 @@ public sealed record ReconciliationOptions
         AccountId ledgerAccount,
         IEnumerable<string> symbols,
         decimal absoluteTolerance = 0.00000001m,
-        TimeSpan? maxSnapshotAge = null)
+        TimeSpan? maxSnapshotAge = null,
+        int maxTradePages = 100)
     {
         LedgerAccount = ledgerAccount;
         ArgumentNullException.ThrowIfNull(symbols);
@@ -37,9 +38,15 @@ public sealed record ReconciliationOptions
             throw new ArgumentOutOfRangeException(nameof(maxSnapshotAge), "Snapshot age must be greater than zero and at most 24 hours.");
         }
 
+        if (maxTradePages is < 1 or > 10_000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxTradePages), "Maximum trade pages must be between 1 and 10,000.");
+        }
+
         Symbols = Array.AsReadOnly(normalized);
         AbsoluteTolerance = absoluteTolerance;
         MaxSnapshotAge = snapshotAge;
+        MaxTradePages = maxTradePages;
     }
 
     public AccountId LedgerAccount { get; }
@@ -49,6 +56,8 @@ public sealed record ReconciliationOptions
     public decimal AbsoluteTolerance { get; }
 
     public TimeSpan MaxSnapshotAge { get; }
+
+    public int MaxTradePages { get; }
 
     private static string NormalizeSymbol(string symbol)
     {
@@ -321,18 +330,49 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
     public async Task<ReconciliationSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
     {
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-        var trades = new List<ReconciliationFill>();
+        var trades = new Dictionary<long, ReconciliationFill>();
         foreach (var symbol in options.Symbols)
         {
-            var symbolTrades = await accountClient.GetMyTradesAsync(symbol, new BinanceTradeQuery(Limit: 1_000), cancellationToken)
-                .ConfigureAwait(false);
-            trades.AddRange(symbolTrades.Select(ReconciliationFill.FromBinance));
+            long? fromId = null;
+            var completed = false;
+            for (var page = 0; page < options.MaxTradePages; page++)
+            {
+                var symbolTrades = await accountClient.GetMyTradesAsync(
+                        symbol,
+                        new BinanceTradeQuery(FromId: fromId, Limit: 1_000),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                foreach (var trade in symbolTrades)
+                {
+                    trades.TryAdd(trade.Id, ReconciliationFill.FromBinance(trade));
+                }
+
+                if (symbolTrades.Count < 1_000)
+                {
+                    completed = true;
+                    break;
+                }
+
+                var nextFromId = symbolTrades.Max(static trade => trade.Id);
+                if (nextFromId == long.MaxValue || (fromId is not null && nextFromId < fromId.Value))
+                {
+                    throw new InvalidOperationException($"Binance trade pagination did not advance for symbol '{symbol}'.");
+                }
+
+                fromId = nextFromId + 1;
+            }
+
+            if (!completed)
+            {
+                throw new InvalidOperationException(
+                    $"Binance trade pagination exceeded the configured limit of {options.MaxTradePages} pages for symbol '{symbol}'.");
+            }
         }
 
         return new(
             timeProvider.GetUtcNow(),
             account.Balances.Select(ReconciliationBalance.FromBinance),
-            trades);
+            trades.Values.OrderBy(static trade => trade.TradeId).ToArray());
     }
 }
 

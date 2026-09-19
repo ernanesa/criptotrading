@@ -90,6 +90,28 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [Fact]
+    public async Task AccountWithWithdrawPermissionFailsClosed()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":true,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[]}"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+    }
+
+    [Fact]
+    public async Task UnexpectedAccountPermissionFailsClosed()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[],\"permissions\":[\"MARGIN\"]}"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+    }
+
+    [Fact]
     public async Task InvalidOpenOrderQuantityFailsClosedBeforeItReachesCallers()
     {
         using var handler = new RecordingHandler(

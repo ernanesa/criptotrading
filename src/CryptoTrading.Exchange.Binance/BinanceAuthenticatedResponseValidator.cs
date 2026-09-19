@@ -10,6 +10,8 @@ namespace CryptoTrading.Exchange.Binance;
 /// </summary>
 internal static class BinanceAuthenticatedResponseValidator
 {
+    private static readonly HashSet<string> ReadOnlyPermissions = ["SPOT"];
+
     public static BinanceAccountSnapshot Validate(BinanceAccountSnapshot? account)
     {
         if (account is null)
@@ -23,6 +25,11 @@ internal static class BinanceAuthenticatedResponseValidator
         RequireNonNegative(account.BuyerCommission, "buyerCommission");
         RequireNonNegative(account.SellerCommission, "sellerCommission");
         RequireNonNegative(account.UpdateTime, "updateTime");
+        if (account.CanWithdraw)
+        {
+            throw Invalid("account canWithdraw must be false for a read-only integration");
+        }
+
         if (account.Balances is null)
         {
             throw Invalid("balances is required");
@@ -40,9 +47,19 @@ internal static class BinanceAuthenticatedResponseValidator
 
         if (account.Permissions is not null)
         {
+            var permissions = new HashSet<string>(StringComparer.Ordinal);
             foreach (var permission in account.Permissions)
             {
-                RequireText(permission, "permission");
+                var normalizedPermission = RequireText(permission, "permission").ToUpperInvariant();
+                if (!ReadOnlyPermissions.Contains(normalizedPermission))
+                {
+                    throw Invalid($"permission '{normalizedPermission}' is not allowed for a read-only integration");
+                }
+
+                if (!permissions.Add(normalizedPermission))
+                {
+                    throw Invalid("permissions cannot contain duplicates");
+                }
             }
         }
 
