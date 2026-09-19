@@ -1,6 +1,7 @@
 # US-XXX - Título
 
-**Parent:** E-XXX
+**Parent:** E-XX
+**Owner:**
 **Priority:** P0/P1/P2/P3
 **Status:** Proposed/Ready/In Progress/Blocked/Done
 **Freshness/source hash:**
@@ -14,6 +15,14 @@ Como **[persona]**, quero **[capacidade]**, para **[valor]**.
 
 ### Non-goals
 
+## Behavior states
+
+- Normal:
+- Empty/initial:
+- Validation:
+- Conflict/concurrency:
+- Failure/timeout/recovery:
+
 ## Acceptance Criteria
 - AC-XXX: **Given** ... **When** ... **Then** ...
 - AC-XXX: **Given** ... **When** ... **Then** ...
@@ -23,6 +32,8 @@ Como **[persona]**, quero **[capacidade]**, para **[valor]**.
 - Performance:
 - Observability:
 - Trading risk:
+- Data/privacy:
+- Cost/capacity:
 
 ## Dependencies
 
