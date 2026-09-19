@@ -90,6 +90,10 @@ após sucesso, rejeitar gaps de versão e não executar downs automaticamente.
   da janela UTC solicitada. Ausência de policy ativa retorna `null`; o Worker
   pode transformar isso em bloqueio de startup com
   `WORKER_RISK_POLICY_REQUIRED=true`.
+- `IAccountStreamEventStore` grava eventos de conta em `account_stream_events`
+  (migration 007), com `dedupe_key`, payload JSON canonicalizado, SHA-256,
+  janela de leitura e trigger append-only. Replays idênticos são no-op; colisão
+  de identidade com conteúdo diferente falha fechado.
 
 ## Ativação pelo Worker
 
@@ -131,6 +135,8 @@ locais; são segredos distintos.
   preferido para criar o vínculo durável ao journal.
 - A migration 006 adiciona o registry de `RiskPolicy`; seu `.down.sql` é
   destrutivo para evidências de aprovação e exige exportação prévia.
+- A migration 007 adiciona evidência durável de eventos do User Data Stream;
+  seu rollback também exige exportação prévia.
 - O snapshot autenticado pagina trades por `fromId`, com limite configurável e
   falha fechada quando a paginação não termina; IDs repetidos entre páginas são
   deduplicados antes da reconciliação.

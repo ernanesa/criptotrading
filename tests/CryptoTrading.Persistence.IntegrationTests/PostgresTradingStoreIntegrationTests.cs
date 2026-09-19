@@ -278,4 +278,35 @@ public sealed class PostgresTradingStoreIntegrationTests
         await store.ActivateRiskPolicyAsync(second.Policy.Version, now.AddMinutes(5));
         Assert.Equal(second.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(6)))?.Policy.Version);
     }
+
+    [Fact]
+    public async Task PersistsAccountStreamEventsIdempotentlyAndReadsThemByTimeWindow()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+        var receivedAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        var record = new AccountStreamEventRecord(
+            Guid.NewGuid(), "executionReport", "execution-" + Guid.NewGuid().ToString("N"),
+            1_720_000_000_123, receivedAt,
+            "{\"e\":\"executionReport\",\"s\":\"BTCUSDT\",\"x\":\"TRADE\"}", "BTCUSDT");
+
+        Assert.True(await store.AppendAccountStreamEventAsync(record));
+        Assert.False(await store.AppendAccountStreamEventAsync(record));
+        var events = await store.ReadAccountStreamEventsAsync(receivedAt.AddSeconds(-1));
+        var persisted = Assert.Single(events, item => item.EventId == record.EventId);
+        Assert.Equal(record.PayloadSha256, persisted.PayloadSha256);
+        Assert.Equal(record.Symbol, persisted.Symbol);
+
+        var conflicting = new AccountStreamEventRecord(
+            record.EventId, record.EventType, record.DedupeKey, record.EventTimeMilliseconds,
+            record.ReceivedAtUtc, "{\"e\":\"executionReport\",\"s\":\"ETHUSDT\"}", "ETHUSDT");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendAccountStreamEventAsync(conflicting));
+    }
 }

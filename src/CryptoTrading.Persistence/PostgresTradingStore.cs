@@ -95,11 +95,24 @@ public interface IRiskPolicyStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Append-only account-stream evidence required for reconnect recovery.</summary>
+public interface IAccountStreamEventStore
+{
+    Task<bool> AppendAccountStreamEventAsync(
+        AccountStreamEventRecord record,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AccountStreamEventRecord>> ReadAccountStreamEventsAsync(
+        DateTimeOffset sinceUtc,
+        int limit = 1_000,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -286,6 +299,87 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAsyn
 
         var approval = await ReadLatestApprovalEventAsync(connection, null, row.PolicyVersion, cancellationToken).ConfigureAwait(false);
         return approval is null ? null : BuildRiskPolicyDocument(row, approval, RiskPolicyLifecycle.Active);
+    }
+
+    public async Task<bool> AppendAccountStreamEventAsync(
+        AccountStreamEventRecord record,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.account_stream_events
+                (event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256)
+            VALUES (@event_id, @event_type, @dedupe_key, @event_time_ms, @received_at, @symbol, @payload, @payload_sha256)
+            ON CONFLICT DO NOTHING
+            RETURNING event_id;
+            """,
+            [
+                Parameter("event_id", NpgsqlDbType.Uuid, record.EventId),
+                Parameter("event_type", NpgsqlDbType.Varchar, record.EventType),
+                Parameter("dedupe_key", NpgsqlDbType.Varchar, record.DedupeKey),
+                Parameter("event_time_ms", NpgsqlDbType.Bigint, record.EventTimeMilliseconds),
+                Parameter("received_at", NpgsqlDbType.TimestampTz, record.ReceivedAtUtc.UtcDateTime),
+                Parameter("symbol", NpgsqlDbType.Varchar, record.Symbol),
+                Parameter("payload", NpgsqlDbType.Jsonb, record.PayloadJson),
+                Parameter("payload_sha256", NpgsqlDbType.Char, record.PayloadSha256),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existing = await ReadAccountStreamEventAsync(connection, transaction, record.EventId, record.EventType, record.DedupeKey, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Account stream uniqueness reported a conflict, but no event was found.");
+            EnsureEquivalent(existing, record);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<AccountStreamEventRecord>> ReadAccountStreamEventsAsync(
+        DateTimeOffset sinceUtc,
+        int limit = 1_000,
+        CancellationToken cancellationToken = default)
+    {
+        if (sinceUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Account stream lookup timestamps must be UTC.", nameof(sinceUtc));
+        }
+
+        if (limit is < 1 or > 10_000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256
+            FROM trading.account_stream_events
+            WHERE received_at >= @since_utc
+            ORDER BY received_at, event_id
+            LIMIT @limit;
+            """, connection);
+        command.Parameters.Add(Parameter("since_utc", NpgsqlDbType.TimestampTz, sinceUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("limit", NpgsqlDbType.Integer, limit));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<AccountStreamEventRecord>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var record = ReadAccountStreamEvent(reader);
+            if (!string.Equals(record.PayloadSha256, reader.GetString(7).Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Account stream event {record.EventId} has an invalid payload hash.");
+            }
+
+            result.Add(record);
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -904,6 +998,29 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAsyn
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRiskPolicyRow(reader) : null;
     }
 
+    private static async Task<AccountStreamEventRecord?> ReadAccountStreamEventAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid eventId,
+        string eventType,
+        string dedupeKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, event_type, dedupe_key, event_time_ms, received_at, symbol, payload, payload_sha256
+            FROM trading.account_stream_events
+            WHERE event_id = @event_id OR (event_type = @event_type AND dedupe_key = @dedupe_key)
+            ORDER BY event_id
+            LIMIT 1;
+            """, connection, transaction);
+        command.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, eventId));
+        command.Parameters.Add(Parameter("event_type", NpgsqlDbType.Varchar, eventType));
+        command.Parameters.Add(Parameter("dedupe_key", NpgsqlDbType.Varchar, dedupeKey));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadAccountStreamEvent(reader) : null;
+    }
+
     private static async Task<RiskPolicyEventRow?> ReadLatestRiskPolicyEventAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1053,6 +1170,15 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAsyn
         reader.IsDBNull(4) ? null : reader.GetString(4),
         new DateTimeOffset(reader.GetDateTime(5), TimeSpan.Zero));
 
+    private static AccountStreamEventRecord ReadAccountStreamEvent(NpgsqlDataReader reader) => new(
+        reader.GetGuid(0),
+        reader.GetString(1),
+        reader.GetString(2),
+        reader.GetInt64(3),
+        new DateTimeOffset(reader.GetDateTime(4), TimeSpan.Zero),
+        reader.GetString(6),
+        reader.IsDBNull(5) ? null : reader.GetString(5));
+
     private static void EnsureEquivalent(RiskPolicyRow existing, RiskPolicyDocument candidate)
     {
         var policy = candidate.Policy;
@@ -1071,6 +1197,21 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAsyn
             !string.Equals(existing.CreatedBy, candidate.CreatedBy, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("The risk-policy version is already associated with different immutable content.");
+        }
+    }
+
+    private static void EnsureEquivalent(AccountStreamEventRecord existing, AccountStreamEventRecord candidate)
+    {
+        if (existing.EventId != candidate.EventId ||
+            !string.Equals(existing.EventType, candidate.EventType, StringComparison.Ordinal) ||
+            !string.Equals(existing.DedupeKey, candidate.DedupeKey, StringComparison.Ordinal) ||
+            existing.EventTimeMilliseconds != candidate.EventTimeMilliseconds ||
+            existing.ReceivedAtUtc.UtcTicks / 10 != candidate.ReceivedAtUtc.UtcTicks / 10 ||
+            !string.Equals(existing.Symbol, candidate.Symbol, StringComparison.Ordinal) ||
+            !string.Equals(existing.PayloadSha256, candidate.PayloadSha256, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(existing.PayloadJson, candidate.PayloadJson, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The account stream event identity is already associated with different data.");
         }
     }
 

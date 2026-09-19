@@ -23,6 +23,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Contrato do readiness validator | `./scripts/test-readiness-validator.sh` | PASS — fixture aprovada aceita; checkbox pendente rejeitado; snapshot corrente continua bloqueado |
 | API operational status | `dotnet run --configuration Release --no-build --no-launch-profile` + `GET /operational/status` | PASS — estado process-local read-only; `mutatingEndpointsEnabled=false`; nenhuma chamada à Binance |
 | RiskPolicy registry | `./scripts/test-postgres-integration.sh` | PASS — migration 006, hash/replay idempotente, aprovação segregada, ativação e supersession; 5 testes PostgreSQL |
+| Account stream persistence | `./scripts/test-postgres-integration.sh` | PASS — migration 007, JSON/hash canonicalizado, dedupe idempotente e leitura por janela; 6 testes PostgreSQL |
 
 ## O que estes gates comprovam
 
