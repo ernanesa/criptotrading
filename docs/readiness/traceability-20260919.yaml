@@ -1,0 +1,36 @@
+schema_version: 1
+snapshot: 2026-09-19
+commit: 29291c1
+decision: no-go-shadow-canary-live
+scope: local-foundation-paper
+items:
+  - id: persistence-ledger-outbox
+    capability: PostgreSQL migrations, journal, ledger, outbox lease/retry/idempotency
+    evidence: [scripts/test-postgres-integration.sh, f7b073a]
+    validation: ./scripts/test-postgres-integration.sh
+    status: pass-local
+    pending: [restart-crash-recovery, restore-rpo-rto]
+  - id: market-data-recorder
+    capability: public market data, bounded order book, deterministic recorder/replay
+    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, docs/market-data-recorder.md, 83657bd]
+    validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
+    status: pass-code
+    pending: [versioned-oos-dataset, empirical-slippage-latency]
+  - id: risk-safe-mode
+    capability: RiskPolicy contracts, kill switch, SafeMode, Strategy Health
+    evidence: [src/CryptoTrading.Domain/Risk, e080792, 8ffb4d8]
+    validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
+    status: pass-code
+    pending: [operational-drill, approved-thresholds]
+  - id: reconciliation
+    capability: read-only account drift detection and fail-closed decision
+    evidence: [src/CryptoTrading.Reconciliation, eb12678, docs/readiness/RECON-20260919-local.md]
+    validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
+    status: pass-code
+    pending: [authenticated-testnet-run, orders-fills-ledger-rebuild]
+  - id: release-readiness
+    capability: promotion, canary, release and traceability evidence
+    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md]
+    validation: ./scripts/scan-secrets.sh
+    status: no-go
+    pending: [oos-walk-forward, soak, restore, chaos, alerts, human-approval]
