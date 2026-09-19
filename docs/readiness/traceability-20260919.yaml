@@ -9,11 +9,11 @@ items:
     evidence: [scripts/test-postgres-integration.sh, f7b073a]
     validation: ./scripts/test-postgres-integration.sh
     status: pass-local
-    pending: [production-rpo-rto, full-state-reconstruction]
+    pending: [production-rpo-rto, production-full-state-reconstruction]
   - id: market-data-recorder
     capability: public market data, bounded order book, deterministic recorder/replay
-    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, docs/market-data-recorder.md, 83657bd]
-    validation: dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release
+    evidence: [src/CryptoTrading.Backtesting/MarketDataRecorder.cs, scripts/test-oos-sensitivity.sh, docs/oos-sensitivity-local.md, 83657bd, cf25d94]
+    validation: ./scripts/test-oos-sensitivity.sh
     status: pass-code
     pending: [real-market-oos-dataset, empirical-slippage-latency, execution-sensitivity]
   - id: risk-safe-mode

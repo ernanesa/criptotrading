@@ -37,7 +37,7 @@ itens em andamento ou bloqueados.
 - [x] Registrar o store no Worker sob flag explícita e aplicar migrations sob flag explícita.
 - [x] Implementar dispatcher PAPER com lease, retry, logs sem payload e default `NO_TRADE`.
 - [x] Implementar readiness real para banco e dependências.
-- [x] Validar restart, crash recovery de leases, idempotência durável e reconstrução determinística local; o drill físico local mede backup/restore e registra RPO do marcador, enquanto o RPO/RTO de produção permanece pendente.
+- [x] Validar restart, crash recovery de leases, idempotência durável e reconstrução determinística local; o gate composto executa ledger, persistência/restart e backup/restore, mede RPO/RTO do marcador e mantém o RPO/RTO de produção pendente.
 
 ## Fase 3 — Binance read-only e market data
 
@@ -80,7 +80,7 @@ itens em andamento ou bloqueados.
 - [x] Cobrir fees e slippage explícitos na baseline.
 - [x] Implementar slice determinístico com equity, retorno líquido, fees, turnover, drawdown e Sharpe parametrizado.
 - [x] Adicionar contratos de janelas out-of-sample/walk-forward e matriz de sensibilidade.
-- [x] Executar validação OOS com dataset sintético versionado e comparar janelas walk-forward; sensibilidade de execução permanece pendente.
+- [x] Executar validação OOS com dataset sintético versionado, comparar janelas walk-forward e percorrer matriz preregistrada de sensibilidade; dataset de mercado real e sensibilidade empírica de execução permanecem pendentes.
 - [x] Evoluir o simulador para spread, latência, partial fills, rejeições e limites; impacto de mercado permanece pendente.
 - [x] Implementar Monte Carlo e stress tests determinísticos depois de validar o modelo de execução.
 
@@ -148,6 +148,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Crash recovery | Lease expirado recuperado por novo store após reinício; owner antigo não consegue confirmar e não há segunda entrega após processamento | `tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs`, `docs/postgres-local.md` | `4843123` | Codex |
 | 2026-09-19 | Submissão ambígua | Timeout consulta `clientOrderId` antes de retry; sem duplicação no dispatcher PAPER | `src/CryptoTrading.Worker`, testes Worker | `9b89445` | Codex |
 | 2026-09-19 | Validação OOS | Dataset sintético BTCUSDT v1.0.0 com SHA-256 e métricas exclusivamente OOS; 24 testes Backtesting | `src/CryptoTrading.Backtesting/OutOfSampleEvaluation.cs`, `docs/trend-following-baseline.md` | `946bc87` | Codex |
+| 2026-09-19 | OOS sensitivity local | Três casos preregistrados percorrem as mesmas seis janelas cronológicas duas vezes, preservam fingerprints e não selecionam vencedor; 1 teste dedicado aprovado sem rede/credenciais | `tests/CryptoTrading.Backtesting.Tests/OosSensitivityTests.cs`, `scripts/test-oos-sensitivity.sh`, `docs/oos-sensitivity-local.md`, `artifacts/oos/sensitivity-*.md` | `cf25d94` + validação local | Codex |
 | 2026-09-19 | Market risk | Slippage/volatilidade/liquidez locais, limites fail-closed e 8 testes adicionais | `src/CryptoTrading.Domain/Risk/MarketRiskCalculator.cs`, `docs/readiness/` | `05bcc57` | Codex |
 | 2026-09-19 | Readiness snapshots | PRM, canary draft, reconciliação, release evidence e traceability; decisão No-Go preservada | `docs/readiness/` | `e9c6581` | Codex |
 | 2026-09-19 | Readiness validator | Validador fail-closed para PRM, CanaryPlan e RiskPolicy, exigindo aprovação, validade, thresholds/unidades/janelas e hash; contrato incluído no CI | `scripts/validate-readiness.sh`, `scripts/test-readiness-validator.sh`, `docs/readiness/README.md` | `7b58772` | Codex |
@@ -156,6 +157,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Account stream persistence | Migration 007, envelope JSON canonicalizado com SHA-256, dedupe idempotente e leitura por janela; 6 testes PostgreSQL | `src/CryptoTrading.Persistence/AccountStreamEvents.cs`, `src/CryptoTrading.Persistence/Migrations/007_account_stream_events.up.sql`, `src/CryptoTrading.Persistence/PostgresTradingStore.cs` | validação local | Codex |
 | 2026-09-19 | Contratos de camadas | Interfaces explícitas para Strategy, Portfolio, Risk, Execution, OMS e Exchange sem dependências de adapter | `src/CryptoTrading.Domain/Architecture/TradingLayerContracts.cs` | `ead5138` | Codex |
 | 2026-09-19 | Backup/restore + RPO/RTO local | Dump custom PostgreSQL restaurado em banco efêmero, marcador verificado, tempos de backup/restore/validação medidos e relatório redigido com permissão 600; recursos temporários removidos | `scripts/test-postgres-backup-restore.sh`, `docs/recovery-drill.md`, `artifacts/recovery/postgres-rpo-rto-*.md` | Validação local aprovada; RPO/RTO de produção permanece pendente | Codex |
+| 2026-09-19 | Full recovery drill composto | Ledger recovery, PostgreSQL integration/restart e backup/restore executados juntos; 3 componentes PASS, duração agregada e limitações registradas sem copiar logs brutos | `scripts/test-full-recovery-drill.sh`, `docs/recovery-drill.md`, `artifacts/recovery/full-recovery-*.md` | Validação local aprovada; reconstrução completa de produção permanece pendente | Codex |
 | 2026-09-19 | Property tests | Gerador xorshift determinístico cobrindo balanceamento, idempotência, atomicidade e saldos | `tests/CryptoTrading.Domain.Tests/AccountingPropertyTests.cs` | `5f7d465` | Codex |
 | 2026-09-19 | Simulador Paper/Replay | Spread, latência, partial fills, rejeições e limites determinísticos; 8 testes Paper | `src/CryptoTrading.Exchange.Paper`, `docs/paper-replay-simulator.md` | `955fe1b` | Codex |
 | 2026-09-19 | Monte Carlo/stress | Bootstrap determinístico por seed, shocks adversos, quantis P05/P50/P95, drawdown e probabilidade de ruína; 29 testes Backtesting | `src/CryptoTrading.Backtesting/MonteCarloStress.cs` | `8d27838` | Codex |
