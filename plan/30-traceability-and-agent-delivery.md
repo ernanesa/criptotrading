@@ -50,6 +50,13 @@ O manifesto canônico é `traceability.yaml` e segue `templates/traceability-man
 - artefato crítico obrigatório ausente ou incompleto;
 - gate com threshold/período sem `RiskPolicy`, `PromotionReadinessMatrix` ou `CanaryPlan` vinculado.
 
+O primeiro validator executável está em `scripts/validate-traceability.sh` e é
+executado na quality gate. Ele valida, sem dependências externas, schema v2,
+IDs explícitos de epic/story/task, duplicatas, intervalos implícitos, tasks
+presentes no backlog e referências AC/RF/RNF presentes nas fontes canônicas.
+Validações de estado `Ready/Done`, ciclos, evidência de runtime e aprovação
+humana continuam gates semânticos separados e não são inferidas pelo script.
+
 Um item só pode ser Done com AC, boundary alterado ou motivo explícito de não aplicabilidade, teste/comando, resultado observado, revisão, documentação/migração e risco residual/rollback.
 
 ## Ordem de dependências

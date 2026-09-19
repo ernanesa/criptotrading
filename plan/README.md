@@ -1,6 +1,6 @@
 # Plano mestre do CryptoTrading
 
-- **Estado:** planning baseline revisada; sem implementação
+- **Estado:** baseline canônica em implementação incremental; evidências locais versionadas
 - **Data-base:** 2026-09-19
 - **Produto:** plataforma autônoma de trading algorítmico de criptomoedas
 - **Exchange inicial:** Binance Spot

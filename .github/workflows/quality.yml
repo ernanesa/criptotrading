@@ -57,3 +57,6 @@ jobs:
 
       - name: Scan tracked files without printing matches
         run: ./scripts/scan-secrets.sh
+
+      - name: Validate traceability manifest
+        run: ./scripts/validate-traceability.sh
