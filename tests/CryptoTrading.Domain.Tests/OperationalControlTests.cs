@@ -32,6 +32,36 @@ public sealed class OperationalControlTests
     }
 
     [Fact]
+    public void KillSwitchPersistsVersionedHashedAuditBeforeChangingState()
+    {
+        var audit = new InMemoryOperationalControlAuditSink();
+        var control = new InMemoryOperationalControl(new TestResetAuthorizer { Allowed = true }, audit);
+
+        var result = control.ActivateKillSwitch(Command("persisted-kill", "operator-1", "manual emergency stop"));
+
+        var persisted = Assert.Single(audit.Events);
+        Assert.Equal(result.AuditEvent.EventId, persisted.EventId);
+        Assert.Equal(OperationalControlAuditEvent.CurrentSchemaVersion, persisted.SchemaVersion);
+        Assert.Equal("OPERATIONAL_CONTROL_TRANSITION", persisted.EventType);
+        Assert.Matches("^[0-9A-F]{64}$", persisted.PayloadSha256);
+        Assert.Equal(OperationalMode.KillSwitch, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public void AuditFailureLeavesControlUnchangedAndFailsClosed()
+    {
+        var control = new InMemoryOperationalControl(
+            new TestResetAuthorizer { Allowed = true },
+            new ThrowingAuditSink());
+
+        Assert.Throws<InvalidOperationException>(() =>
+            control.ActivateKillSwitch(Command("audit-failure", "operator-1", "manual emergency stop")));
+
+        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+        Assert.Equal(0, control.Snapshot.Revision);
+    }
+
+    [Fact]
     public void ReusingAControlKeyForDifferentCommandFailsClosed()
     {
         var control = NewControl();
@@ -168,5 +198,11 @@ public sealed class OperationalControlTests
             Calls++;
             return Allowed && current.BlocksNewEntries && resetCommand.Actor == authorization.Actor;
         }
+    }
+
+    private sealed class ThrowingAuditSink : IOperationalControlAuditSink
+    {
+        public void Append(OperationalControlAuditEvent auditEvent) =>
+            throw new InvalidOperationException("audit sink unavailable");
     }
 }
