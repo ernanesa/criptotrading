@@ -1,4 +1,3 @@
-using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Strategies;
 using Xunit;
 

@@ -114,6 +114,42 @@ public sealed class TrendFollowingBacktestTests
         Assert.Equal(6, result.Windows.Count);
         Assert.All(result.Windows, window => Assert.Equal(20, window.PeriodCount));
         Assert.All(result.Windows, window => Assert.InRange(window.NetReturn, -1m, 1m));
+        Assert.All(result.Windows, window =>
+        {
+            Assert.Equal("NO_TRADE/cash", window.Benchmark.NoTradeCash.Name);
+            Assert.Equal("buy-and-hold", window.Benchmark.BuyAndHold.Name);
+            Assert.Equal(64, window.Benchmark.Fingerprint.Length);
+        });
+    }
+
+    [Fact]
+    public void WalkForwardBenchmarksDoNotReadBarsAfterTheWindow()
+    {
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var windows = WalkForwardPlan.Create(dataset.Bars.Count, trainingBars: 60, outOfSampleBars: 20, stepBars: 20);
+        var original = WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            dataset.Bars,
+            TrendFollowingParameters.BtcUsdtBaseline,
+            BacktestEvaluationOptions.DailyCrypto(),
+            windows);
+
+        var changedFuture = dataset.Bars.ToArray();
+        for (var index = windows[0].OutOfSampleStartIndex + windows[0].OutOfSampleLength; index < changedFuture.Length; index++)
+        {
+            var bar = changedFuture[index];
+            changedFuture[index] = new CloseBar(bar.Symbol, bar.CloseTimeUtc, bar.ClosePrice.Value * 3m);
+        }
+
+        var replay = WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            changedFuture,
+            TrendFollowingParameters.BtcUsdtBaseline,
+            BacktestEvaluationOptions.DailyCrypto(),
+            windows);
+
+        Assert.Equal(original.Windows[0].Benchmark.Fingerprint, replay.Windows[0].Benchmark.Fingerprint);
+        Assert.Equal(original.Windows[0].Benchmark.BuyAndHold.NetReturn, replay.Windows[0].Benchmark.BuyAndHold.NetReturn);
     }
 
     [Fact]

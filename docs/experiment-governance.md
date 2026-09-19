@@ -30,3 +30,8 @@ Toda evidência também precisa carregar o fingerprint de `BenchmarkComparison`
 e os retornos de `NO_TRADE/cash` e `buy-and-hold`. O writer rejeita o bundle
 quando qualquer um dos dois benchmarks está ausente, impedindo uma decisão
 experimental sem referência explícita.
+
+Além disso, cada `OutOfSampleWindowResult` carrega sua própria comparação. A
+comparação usa o capital inicial da janela e somente suas barras OOS; não usa
+preços posteriores para formar retorno ou drawdown. O fingerprint SHA-256 da
+janela deve acompanhar o bundle agregado para permitir reconstrução por janela.
