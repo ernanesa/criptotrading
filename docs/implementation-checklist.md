@@ -25,7 +25,7 @@ itens em andamento ou bloqueados.
 - [x] Definir contratos Strategy → Portfolio → Risk → Execution → OMS → Exchange.
 - [x] Criar testes unitários básicos para primitives e relógio.
 - [x] Adicionar testes de arquitetura para fronteiras do domínio.
-- [ ] Adicionar property-based tests financeiros.
+- [x] Adicionar property-based tests financeiros determinísticos.
 
 ## Fase 2 — Persistência financeira local
 
@@ -78,7 +78,7 @@ itens em andamento ou bloqueados.
 - [x] Implementar slice determinístico com equity, retorno líquido, fees, turnover, drawdown e Sharpe parametrizado.
 - [x] Adicionar contratos de janelas out-of-sample/walk-forward e matriz de sensibilidade.
 - [x] Executar validação OOS com dataset sintético versionado e comparar janelas walk-forward; sensibilidade de execução permanece pendente.
-- [ ] Evoluir o simulador para spread, latência, partial fills, rejeições, limites e impacto de mercado.
+- [x] Evoluir o simulador para spread, latência, partial fills, rejeições e limites; impacto de mercado permanece pendente.
 - [ ] Implementar Monte Carlo e stress tests depois de validar o modelo de execução.
 
 ## Fase 7 — Shadow, observabilidade e operação
@@ -133,6 +133,8 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Readiness snapshots | PRM, canary draft, reconciliação, release evidence e traceability; decisão No-Go preservada | `docs/readiness/` | `e9c6581` | Codex |
 | 2026-09-19 | Contratos de camadas | Interfaces explícitas para Strategy, Portfolio, Risk, Execution, OMS e Exchange sem dependências de adapter | `src/CryptoTrading.Domain/Architecture/TradingLayerContracts.cs` | `ead5138` | Codex |
 | 2026-09-19 | Backup/restore | Dump custom PostgreSQL restaurado em banco efêmero e verificado; recursos temporários removidos | `scripts/test-postgres-backup-restore.sh`, `docs/recovery-drill.md` | Validação local aprovada | Codex |
+| 2026-09-19 | Property tests | Gerador xorshift determinístico cobrindo balanceamento, idempotência, atomicidade e saldos | `tests/CryptoTrading.Domain.Tests/AccountingPropertyTests.cs` | `5f7d465` | Codex |
+| 2026-09-19 | Simulador Paper/Replay | Spread, latência, partial fills, rejeições e limites determinísticos; 8 testes Paper | `src/CryptoTrading.Exchange.Paper`, `docs/paper-replay-simulator.md` | `955fe1b` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
