@@ -28,7 +28,8 @@ public static class PersistenceMigrations
         using var reader = new StreamReader(stream);
         var fileName = resourceName[ResourcePrefix.Length..];
         var parts = fileName.Split('.', StringSplitOptions.RemoveEmptyEntries);
-        return new MigrationScript(parts[0], parts[^2], fileName, reader.ReadToEnd());
+        var version = parts[0].Split('_', 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        return new MigrationScript(version, parts[^2], fileName, reader.ReadToEnd());
     }
 }
 

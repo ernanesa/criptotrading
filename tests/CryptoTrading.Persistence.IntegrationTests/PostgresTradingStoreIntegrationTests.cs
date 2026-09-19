@@ -99,4 +99,82 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.True(await store.MarkOutboxProcessedAsync(retried.MessageId, secondOwner, DateTimeOffset.UtcNow));
         Assert.Empty(await store.ClaimOutboxAsync("integration-owner-c", DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5), 1));
     }
+
+    [Fact]
+    public async Task ExpiredLeaseIsRecoverableAfterStoreRestartWithoutDuplicateDelivery()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var correlationId = CorrelationId.New();
+        var commandKey = IdempotencyKey.New();
+        var command = new SubmitOrderCommand(
+            OrderId.New(),
+            ClientOrderId.New(),
+            new Symbol("BTCUSDT"),
+            OrderSide.Buy,
+            OrderType.Market,
+            new Quantity(0.001m),
+            new Price(50_000m),
+            50m,
+            correlationId,
+            commandKey,
+            "integration-crash-recovery",
+            now);
+        var outbox = new OutboxRecord(
+            Guid.NewGuid(),
+            OrderExecutionPipeline.SubmitOrderMessageType,
+            correlationId,
+            commandKey,
+            "integration-crash-recovery",
+            command,
+            OutboxRecordStatus.Pending,
+            now);
+
+        await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
+        {
+            await firstProcess.ApplyMigrationsAsync();
+            await firstProcess.EnqueueAsync(outbox);
+
+            var claimedBeforeCrash = await firstProcess.ClaimOutboxAsync(
+                "integration-crashed-worker",
+                now,
+                TimeSpan.FromSeconds(1),
+                1);
+            var leasedBeforeCrash = Assert.Single(claimedBeforeCrash);
+            Assert.Equal(1, leasedBeforeCrash.Attempts);
+        }
+
+        // A new store instance represents a worker restart. The old lease is not
+        // acknowledged, so recovery must wait for its bounded expiry.
+        await using var restartedProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var recovered = await restartedProcess.ClaimOutboxAsync(
+            "integration-restarted-worker",
+            now.AddSeconds(2),
+            TimeSpan.FromSeconds(5),
+            1);
+        var recoveredMessage = Assert.Single(recovered);
+        Assert.Equal(outbox.MessageId, recoveredMessage.MessageId);
+        Assert.Equal(2, recoveredMessage.Attempts);
+        Assert.Equal("integration-restarted-worker", recoveredMessage.LeaseOwner);
+
+        Assert.False(await restartedProcess.MarkOutboxProcessedAsync(
+            recoveredMessage.MessageId,
+            "integration-crashed-worker",
+            now.AddSeconds(2)));
+        Assert.True(await restartedProcess.MarkOutboxProcessedAsync(
+            recoveredMessage.MessageId,
+            "integration-restarted-worker",
+            now.AddSeconds(2)));
+        Assert.Empty(await restartedProcess.ClaimOutboxAsync(
+            "integration-verification-worker",
+            now.AddSeconds(2),
+            TimeSpan.FromSeconds(5),
+            1));
+    }
 }
