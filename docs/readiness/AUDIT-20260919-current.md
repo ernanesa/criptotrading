@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `3332113`
+**Commit de código auditado:** `a5b3f62`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -14,7 +14,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Gate | Comando | Resultado |
 |---|---|---|
 | Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 204 aprovados, 0 falhas, 0 skips |
-| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 3 testes, incluindo migration 005, persistência idempotente e rejeição de símbolo conflitante |
+| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 4 testes, incluindo vínculo atômico journal/ledger/trade, migration 005, persistência idempotente e rejeição de símbolo conflitante |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
@@ -51,6 +51,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
   `fromId`, deduplica IDs e falha fechado ao atingir o limite configurado.
 - A reconciliação compara a união dos ativos locais e externos; um ativo
   presente apenas em um dos lados gera divergência e entrada em `SafeMode`.
+- O vínculo entre evento contábil e `trade_id` externo possui uma operação
+  transacional única, com replay idempotente e conflito de símbolo fail-closed.
 
 ## Gates que continuam pendentes
 
