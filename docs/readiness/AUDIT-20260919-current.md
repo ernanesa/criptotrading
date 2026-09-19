@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 237 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 239 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 7 testes, incluindo migrations 005–009, persistência idempotente, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
@@ -29,6 +29,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Modern account stream | `dotnet test` Binance + Worker + Reconciliation | PASS — HMAC subscription ACK, parser de controles, reconnect/session identity, rotação preventiva, clock drift, reconciliação pós-reconnect/periódica, filtros dinâmicos e comparação de open orders; 51 + 24 + 11 testes |
 | OMS order projection | `dotnet test` Persistence + PostgreSQL integration | PASS — transições idempotentes, preservação de `ExchangeOrderId`, retry após falha do store, estados terminais e replay/restart; 8 unitários + 7 integração |
 | Reconciliation mismatch accounting | `dotnet test` Reconciliation + Worker | PASS — `MismatchCount` inclui divergências de saldo e open orders em startup, periodicidade e reconnect; 11 + 24 testes |
+| Reconciliation alert delivery | `dotnet test` Worker | PASS — divergência não saudável publica alerta crítico redigido e saudável não publica; startup, periodicidade e reconnect integrados; 26 testes Worker |
 | Alert delivery retry | `dotnet test` Observability + Worker | PASS — backoff exponencial limitado, cancelamento não repetido, falha final propagada e wrapper registrado no Worker; 13 + 24 testes |
 | Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 53 testes |
 
