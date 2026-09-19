@@ -65,6 +65,53 @@ public sealed record OrderTransition(
     DateTimeOffset OccurredAtUtc,
     string? ExchangeOrderId = null);
 
+/// <summary>One venue execution applied to an OMS order.</summary>
+public sealed record OrderFill
+{
+    public OrderFill(
+        string executionId,
+        Quantity quantity,
+        Price price,
+        DateTimeOffset occurredAtUtc,
+        IdempotencyKey idempotencyKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
+        if (executionId.Length > 200)
+        {
+            throw new ArgumentOutOfRangeException(nameof(executionId));
+        }
+
+        if (quantity.Value <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(quantity), "Fill quantity must be greater than zero.");
+        }
+
+        if (occurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Fill timestamp must be UTC.", nameof(occurredAtUtc));
+        }
+
+        ExecutionId = executionId.Trim();
+        Quantity = quantity;
+        Price = price;
+        OccurredAtUtc = occurredAtUtc;
+        IdempotencyKey = idempotencyKey;
+    }
+
+    public string ExecutionId { get; }
+
+    public Quantity Quantity { get; }
+
+    public Price Price { get; }
+
+    public DateTimeOffset OccurredAtUtc { get; }
+
+    public IdempotencyKey IdempotencyKey { get; }
+}
+
+/// <summary>Result of applying a fill, including whether it was a replay.</summary>
+public sealed record OrderFillResult(OrderFill Fill, bool IsDuplicate, OrderTransition Transition);
+
 /// <summary>
 /// Aggregate root for OMS order lifecycle. State changes are explicit and idempotent
 /// by command key; adapters and persistence must persist the transition before sending
@@ -73,6 +120,7 @@ public sealed record OrderTransition(
 public sealed class Order
 {
     private readonly Dictionary<IdempotencyKey, OrderTransition> transitions = [];
+    private readonly Dictionary<string, OrderFill> fills = new(StringComparer.Ordinal);
 
     private Order(
         OrderId id,
@@ -136,6 +184,12 @@ public sealed class Order
 
     public DateTimeOffset UpdatedAtUtc { get; private set; }
 
+    public Quantity FilledQuantity { get; private set; }
+
+    public Quantity RemainingQuantity => new(Quantity.Value - FilledQuantity.Value);
+
+    public IReadOnlyCollection<OrderFill> Fills => fills.Values;
+
     /// <summary>Latest exchange-assigned order identity, when acknowledged by the venue.</summary>
     public string? ExchangeOrderId { get; private set; }
 
@@ -155,7 +209,50 @@ public sealed class Order
         return new Order(id, clientOrderId, symbol, side, type, quantity, limitPrice, idempotencyKey, createdAtUtc)
         {
             UpdatedAtUtc = createdAtUtc,
+            FilledQuantity = new Quantity(0m),
         };
+    }
+
+    /// <summary>
+    /// Applies one venue execution exactly once. A replay with the same
+    /// execution identity and identical data is a no-op; conflicting data
+    /// fails closed. Event timestamps may arrive out of order.
+    /// </summary>
+    public OrderFillResult ApplyFill(OrderFill fill)
+    {
+        ArgumentNullException.ThrowIfNull(fill);
+
+        if (fills.TryGetValue(fill.ExecutionId, out var existing))
+        {
+            if (!existing.Equals(fill))
+            {
+                throw new InvalidOperationException(
+                    $"Execution '{fill.ExecutionId}' was already applied with different data.");
+            }
+
+            var replayTransition = transitions.Values.Last(static item =>
+                item.To is OrderStatus.PartiallyFilled or OrderStatus.Filled);
+            return new(existing, true, replayTransition);
+        }
+
+        if (Status is OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired or OrderStatus.Filled)
+        {
+            throw new InvalidOrderTransitionException(Status, OrderStatus.PartiallyFilled);
+        }
+
+        var nextFilledQuantity = FilledQuantity.Value + fill.Quantity.Value;
+        if (nextFilledQuantity > Quantity.Value)
+        {
+            throw new InvalidOperationException("Applied fills cannot exceed the original order quantity.");
+        }
+
+        fills.Add(fill.ExecutionId, fill);
+        FilledQuantity = new Quantity(nextFilledQuantity);
+        var target = nextFilledQuantity == Quantity.Value
+            ? OrderStatus.Filled
+            : OrderStatus.PartiallyFilled;
+        var transition = TransitionTo(target, fill.IdempotencyKey, fill.OccurredAtUtc);
+        return new(fill, false, transition);
     }
 
     /// <summary>
@@ -191,7 +288,10 @@ public sealed class Order
         {
             ExchangeOrderId = exchangeOrderId;
         }
-        UpdatedAtUtc = occurredAtUtc;
+        if (occurredAtUtc > UpdatedAtUtc)
+        {
+            UpdatedAtUtc = occurredAtUtc;
+        }
         return transition;
     }
 
