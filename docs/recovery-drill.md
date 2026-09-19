@@ -77,8 +77,8 @@ Para executar o gate composto dos componentes locais de recuperação, execute:
 ./scripts/test-full-recovery-drill.sh
 ```
 
-Esse runner executa os drills de ledger, persistência/restart e
-backup/restore em sequência, agrega apenas status e duração em
+Esse runner executa os drills de ledger, manifesto full-state,
+persistência/restart e backup/restore em sequência, agrega apenas status e duração em
 `artifacts/recovery/full-recovery-<timestamp>-<pid>.md` e não copia stdout ou
 stderr dos filhos para o relatório. O gate composto continua limitado às
 fixtures locais; não prova RPO/RTO de produção, recuperação autenticada da
