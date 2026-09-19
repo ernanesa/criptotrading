@@ -9,6 +9,15 @@ public sealed class AccountReconciliationServiceTests
     private static readonly DateTimeOffset Now = new(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void ReconciliationOptionsRejectsUnsafeSnapshotAge()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"], maxSnapshotAge: TimeSpan.Zero));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"], maxSnapshotAge: TimeSpan.FromDays(2)));
+    }
+
+    [Fact]
     public async Task MatchingBalancesPublishReconciledEventsAndKeepNormalMode()
     {
         var control = CreateControl();
@@ -77,6 +86,41 @@ public sealed class AccountReconciliationServiceTests
         await second.ReconcileAsync();
 
         Assert.Equal(revision, control.Snapshot.Revision);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task StaleSnapshotFailsClosedAndEntersSafeMode()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(Now.AddMinutes(-1), [new ReconciliationBalance("USDT", 100m, 0m)], []),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            new InMemoryReconciliationEventSink());
+
+        var result = await service.ReconcileAsync();
+
+        Assert.False(result.IsHealthy);
+        var mismatch = Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
+        Assert.Equal("STALE_SNAPSHOT", mismatch.ReasonCode);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task FutureSnapshotFailsClosedInsteadOfBeingTrusted()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(Now.AddSeconds(1), [new ReconciliationBalance("USDT", 100m, 0m)], []),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            new InMemoryReconciliationEventSink());
+
+        var result = await service.ReconcileAsync();
+
+        Assert.False(result.IsHealthy);
+        Assert.Equal("STALE_SNAPSHOT", Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events)).ReasonCode);
         Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
     }
 

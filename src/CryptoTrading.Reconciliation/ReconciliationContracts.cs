@@ -12,7 +12,8 @@ public sealed record ReconciliationOptions
     public ReconciliationOptions(
         AccountId ledgerAccount,
         IEnumerable<string> symbols,
-        decimal absoluteTolerance = 0.00000001m)
+        decimal absoluteTolerance = 0.00000001m,
+        TimeSpan? maxSnapshotAge = null)
     {
         LedgerAccount = ledgerAccount;
         ArgumentNullException.ThrowIfNull(symbols);
@@ -30,8 +31,15 @@ public sealed record ReconciliationOptions
             throw new ArgumentOutOfRangeException(nameof(absoluteTolerance), "Reconciliation tolerance cannot be negative.");
         }
 
+        var snapshotAge = maxSnapshotAge ?? TimeSpan.FromSeconds(30);
+        if (snapshotAge <= TimeSpan.Zero || snapshotAge > TimeSpan.FromHours(24))
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxSnapshotAge), "Snapshot age must be greater than zero and at most 24 hours.");
+        }
+
         Symbols = Array.AsReadOnly(normalized);
         AbsoluteTolerance = absoluteTolerance;
+        MaxSnapshotAge = snapshotAge;
     }
 
     public AccountId LedgerAccount { get; }
@@ -39,6 +47,8 @@ public sealed record ReconciliationOptions
     public IReadOnlyList<string> Symbols { get; }
 
     public decimal AbsoluteTolerance { get; }
+
+    public TimeSpan MaxSnapshotAge { get; }
 
     private static string NormalizeSymbol(string symbol)
     {
@@ -177,7 +187,8 @@ public sealed record ReconciliationMismatch(
     decimal ExchangeBalance,
     decimal Delta,
     decimal Tolerance,
-    IReadOnlyList<long> UnknownTradeIds)
+    IReadOnlyList<long> UnknownTradeIds,
+    string ReasonCode = "BALANCE_DRIFT")
     : ReconciliationEvent(EventId, CorrelationId, OccurredAtUtc);
 
 public sealed record ReconciliationRunResult(
@@ -225,6 +236,10 @@ public sealed class AccountReconciliationService
         var snapshot = await snapshotProvider.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
         var knownTradeIds = await knownTradeReader.GetKnownTradeIdsAsync(cancellationToken).ConfigureAwait(false);
         var correlationId = CorrelationId.New();
+        var now = timeProvider.GetUtcNow();
+        var snapshotIsFresh = snapshot.ObservedAtUtc <= now
+            && now - snapshot.ObservedAtUtc <= options.MaxSnapshotAge;
+        var snapshotReason = snapshotIsFresh ? "BALANCE_DRIFT" : "STALE_SNAPSHOT";
         var unknownTradeIds = snapshot.Fills
             .Select(static fill => fill.TradeId)
             .Where(tradeId => !knownTradeIds.Contains(tradeId))
@@ -241,7 +256,7 @@ public sealed class AccountReconciliationService
             var delta = exchangeBalance.Total - localBalance;
             var occurredAt = timeProvider.GetUtcNow();
             ReconciliationEvent reconciliationEvent;
-            if (Math.Abs(delta) <= options.AbsoluteTolerance && unknownTradeIds.Length == 0)
+            if (snapshotIsFresh && Math.Abs(delta) <= options.AbsoluteTolerance && unknownTradeIds.Length == 0)
             {
                 reconciliationEvent = new BalanceReconciled(
                     Guid.NewGuid(), correlationId, occurredAt, exchangeBalance.Asset,
@@ -251,7 +266,7 @@ public sealed class AccountReconciliationService
             {
                 reconciliationEvent = new ReconciliationMismatch(
                     Guid.NewGuid(), correlationId, occurredAt, exchangeBalance.Asset,
-                    localBalance, exchangeBalance.Total, delta, options.AbsoluteTolerance, unknownTradeIds);
+                    localBalance, exchangeBalance.Total, delta, options.AbsoluteTolerance, unknownTradeIds, snapshotReason);
             }
 
             events.Add(reconciliationEvent);
@@ -261,12 +276,12 @@ public sealed class AccountReconciliationService
         // An account may legitimately return no balance rows while the trade endpoint
         // still reveals an unknown fill. Preserve that evidence as an explicit mismatch
         // instead of allowing an empty event stream to look healthy.
-        if (unknownTradeIds.Length > 0 && snapshot.Balances.Count == 0)
+        if ((!snapshotIsFresh || unknownTradeIds.Length > 0) && snapshot.Balances.Count == 0)
         {
             var occurredAt = timeProvider.GetUtcNow();
             var reconciliationEvent = new ReconciliationMismatch(
                 Guid.NewGuid(), correlationId, occurredAt, "*",
-                0m, 0m, 0m, options.AbsoluteTolerance, unknownTradeIds);
+                0m, 0m, 0m, options.AbsoluteTolerance, unknownTradeIds, snapshotReason);
             events.Add(reconciliationEvent);
             await eventSink.PublishAsync(reconciliationEvent, cancellationToken).ConfigureAwait(false);
         }
