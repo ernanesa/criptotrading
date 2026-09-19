@@ -17,6 +17,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 7 testes, incluindo migrations 005–009, persistência idempotente, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
+| Reconstrução determinística do ledger | `./scripts/test-ledger-recovery.sh` | PASS — 3 testes de reconstrução journal → projeção; relatório redigido em `artifacts/recovery/` |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
 | Compose | `POSTGRES_PASSWORD='validation-only-not-a-credential' docker compose config --quiet` | PASS |
