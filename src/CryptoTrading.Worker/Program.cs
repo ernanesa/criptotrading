@@ -132,7 +132,7 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
         _ = builder.Services.AddSingleton<IOperationalControl>(_ => new InMemoryOperationalControl(new DenyOperationalControlResetAuthorizer()));
     }
 
-    _ = builder.Services.AddSingleton<IBinanceUserDataStreamClient>(_ => new BinanceUserDataStreamApiClient(
+    _ = builder.Services.AddSingleton<IBinanceUserDataStreamClient>(serviceProvider => new BinanceUserDataStreamApiClient(
         new BinanceUserDataStreamApiOptions
         {
             Environment = string.Equals(builder.Configuration["TRADING_ENVIRONMENT"], "DEMO", StringComparison.OrdinalIgnoreCase)
@@ -144,7 +144,8 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
                 ? wsBaseAddress
                 : null,
             MaxReconnectAttempts = 10
-        }));
+        },
+        clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>()));
 }
 if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {

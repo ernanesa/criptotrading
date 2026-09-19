@@ -118,6 +118,19 @@ public sealed class BinanceUserDataStreamTests
     }
 
     [Fact]
+    public void RejectsSessionLifetimeBeyondBinanceMaximum()
+    {
+        var options = new BinanceUserDataStreamApiOptions
+        {
+            ApiKey = "api-key",
+            ApiSecret = "secret",
+            MaxSessionLifetime = TimeSpan.FromHours(24).Add(TimeSpan.FromMilliseconds(1))
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate());
+    }
+
+    [Fact]
     public async Task ModernApiClientConsumesAcknowledgementAndEmitsNestedEvents()
     {
         using var transport = new ModernFakeTransport();
