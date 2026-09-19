@@ -29,6 +29,19 @@ Sprints de 2 semanas. Como o projeto será desenvolvido um pouco por dia, cada S
 | S20 | Canary readiness review; somente executar se gates passarem |
 | S21+ | Canary observation, fixes, gradual promotion |
 
+## Rastreabilidade dos Sprints
+
+Cada Sprint deve listar explicitamente US, `TASK-US-XXX-NN`, AC, teste/comando e `EVIDENCE-<id>-<date>`. A ordem mínima é:
+
+| Fase | Dependências obrigatórias |
+|---|---|
+| S00–S02 | US-001..012, journal, correlação, CI e rastreabilidade |
+| S03–S07 | US-020..033, filtros, user-data, OMS e reconciliação |
+| S08–S09 | US-040..043, SafeMode, kill switch, restore e RiskPolicy |
+| S10–S12 | US-050..061, UniversePolicy, custos e baseline BTC/USDT |
+| S13–S19 | US-070..111, somente após gates quantitativos/operacionais |
+| S20+ | US-130..133, somente com matriz de evidências e aprovação explícita |
+
 ## Sprint Planning policy
 
 Cada Sprint seleciona histórias apenas até 80% da capacidade percebida; 20% fica para bugs, aprendizado e incerteza. Se não houver folga real, reduzir escopo.

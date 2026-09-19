@@ -6,6 +6,8 @@ Datas são forecast, não compromisso. O desenvolvimento é incremental e a capa
 
 Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs, arquitetura e autonomia como requisito central.
 
+Gate adicional: escopo MVP congelado em Spot/BTC/USDT, sem arbitragem/Futures/market making; RAG fica no Research Plane; SafeMode/restore, lineage e rastreabilidade são pré-requisitos, não itens pós-live.
+
 ## R0.1 - Foundation | set-out/2026
 
 - solution/backend/frontend skeleton;
@@ -26,6 +28,10 @@ Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs, arquitetura e aut
 - paper simulator;
 - SafeMode/recovery foundation.
 
+- event journal/outbox-inbox;
+- RiskPolicy versionada;
+- restore/reconcile drill inicial.
+
 **Gate:** migrar runtime para .NET 11 GA assim que publicado e estabilizar antes de qualquer capital real.
 
 ## R0.3 - Research Platform | dez/2026-jan/2027
@@ -36,6 +42,7 @@ Entregas: plano mestre, stack, backlog, DoR/DoD, riscos, ADRs, arquitetura e aut
 - walk-forward/sensitivity/Monte Carlo;
 - baseline Trend/Momentum/Breakout;
 - experiment/model lineage foundation.
+- RAG lexical/semântico local com citações e frescor.
 
 ## R0.4 - Autonomous Multi-Strategy | jan-mar/2027
 

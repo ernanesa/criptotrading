@@ -8,6 +8,8 @@ Evitar que o laboratório produza estratégias lindas no passado e frágeis no f
 
 Hypothesis → Strategy Spec → Data QA → Backtest → Validation → Out-of-Sample → Walk-Forward → Sensitivity → Monte Carlo/Stress → Paper → Shadow → Canary → Live.
 
+O primeiro experimento é BTC/USDT com uma única baseline simples e uma `UniversePolicy` explícita. A expansão para até 20 ativos exige snapshot point-in-time do universo, capacidade, liquidez e churn budget; não pode usar seleção futura ou survivorship implícito.
+
 ## Backtest fidelity levels
 
 ### L1 Candle
@@ -34,7 +36,7 @@ Sempre modelar:
 
 ## Data splits
 
-Nunca random shuffle de séries financeiras para validação temporal simples. Usar splits cronológicos. Para ML com labels sobrepostos, pesquisar purging/embargo e CV apropriada.
+Nunca random shuffle de séries financeiras para validação temporal simples. Usar splits cronológicos e registrar o instante em que cada feature ficou disponível. Para labels sobrepostos, usar purging/embargo quando aplicável; warmup, revisões/correções, delistings e dados faltantes devem estar definidos antes do experimento.
 
 ## Anti-overfitting
 
@@ -82,6 +84,8 @@ Cada execução persiste:
 - metrics;
 - artefatos/resultados;
 - decisão: rejected/continue/promote.
+
+O relatório deve separar PnL bruto, fees, spread, slippage, market impact, latência e PnL líquido, além de registrar benchmark, universo efetivo, número de tentativas e motivo de seleção. Nenhum resultado positivo somente in-sample é promoção.
 
 ## Promotion gates iniciais
 

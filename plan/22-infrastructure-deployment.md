@@ -65,6 +65,8 @@ Recomendado: 4–8 vCPU, 16 GB RAM, 100–250+ GB NVMe. A Oracle 4 vCPU/24 GB j�
 6. smoke test.
 7. promoção explícita para SHADOW/CANARY/LIVE.
 
+CI deve usar OIDC/credenciais efêmeras, lockfiles, secret scan, dependency/image/IaC scan, SBOM, assinatura/proveniência e verificação de digest no deploy. Nenhuma credencial live deve ser necessária para os gates de DEV/PAPER/Testnet.
+
 Não usar `latest` como referência de produção.
 
 ## IaC

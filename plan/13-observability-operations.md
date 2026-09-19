@@ -4,6 +4,10 @@
 
 Usar OTel para traces, metrics e logs estruturados. Context propagation deve atravessar sinal → risco → ordem → fill.
 
+O journal financeiro/audit não é um log OTel: deve ser append-only, persistido com schema versionado e não pode ser perdido por sampling. Logs operacionais, traces e métricas têm retenção, ACL e redaction próprios.
+
+Campos mínimos do audit event: `event_id`, `event_type`, `schema_version`, `occurred_at`, `ingested_at`, `environment`, `exchange`, `account_scope`, `actor`, `correlation_id`, `causation_id`, `idempotency_key_hash`, `aggregate_id`, `before/after` quando aplicável, motivo, policy/config version e payload hash.
+
 ## Métricas de sistema
 
 - CPU/RAM/GC;
@@ -28,6 +32,9 @@ Usar OTel para traces, metrics e logs estruturados. Context propagation deve atr
 - circuit breaker state;
 - reconciliation mismatch count;
 - Strategy Health.
+- exchange request/ack/fill latency por estágio;
+- rate-limit usage/retry-after e outbox/inbox lag;
+- reconciliation age, unknown order, balance drift e audit write failure.
 
 ## Alert severities
 
@@ -55,6 +62,8 @@ Usar OTel para traces, metrics e logs estruturados. Context propagation deve atr
 ## Deploy
 
 Blue/green ou rolling simples só depois de haver mais de uma instância segura. Em single-node, usar release versionada + backup + rollback rápido. Nunca reiniciar durante ordem crítica sem reconciliar no startup.
+
+Exporters e alerting devem ser decididos por ambiente: OTLP Collector, Prometheus-compatible metrics, Loki/structured logs e Tempo/traces ou equivalentes. Alertas precisam de regra, janela, deduplicação, routing, ownership, escalation, ação sugerida e teste de entrega.
 
 ## Incident management
 
