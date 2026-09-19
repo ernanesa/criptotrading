@@ -33,6 +33,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Alert delivery retry | `dotnet test` Observability + Worker | PASS — backoff exponencial limitado, cancelamento não repetido, falha final propagada e wrapper registrado no Worker; 13 + 24 testes |
 | Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 53 testes |
 
+| OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
+
 ## O que estes gates comprovam
 
 - OOS sintético, walk-forward determinístico, property tests financeiros,
