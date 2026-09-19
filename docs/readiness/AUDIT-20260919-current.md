@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `c9d9b9b`
+**Commit de código auditado:** `33eaf73`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,7 +13,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 267 aprovados, 0 falhas, 0 skips |
+| Testes da solução | `PATH=/home/ernane/.dotnet:$PATH dotnet test CryptoTrading.slnx --configuration Release --no-restore` | PASS — 272 aprovados, 0 falhas, 0 skips |
 | Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 7 testes, incluindo migrations 005–009, persistência idempotente, canonicalização JSON, identidade de sessão, projeção de open orders e replay/restart |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Shadow soak determinístico | `./scripts/test-shadow-soak.sh` | PASS — 3 repetições locais, sem rede/credenciais/submit/cancel; relatório redigido em `artifacts/shadow/` |
@@ -45,6 +45,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Validade do CanaryPlan | `./scripts/test-readiness-validator.sh` | PASS — CanaryPlan exige data UTC válida e vigente; datas inválidas/expiradas falham fechado |
 | Permissões de evidência local | testes Observability/Shadow/Worker | PASS — arquivos JSONL redigidos são restringidos a `0600` em Unix; conteúdo continua sem credenciais/payloads |
 | OMS partial-fill/idempotency | `dotnet test` Domain | PASS — fills parciais, replay idempotente, duplicata conflitante, overfill, ordem temporal invertida e cancelamento pós-fill cobertos; sem rede/ordens |
+| Release evidence local | `dotnet test` Shadow filtrado | PASS — artefato canônico redigido valida janela, decisão, responsáveis, fontes, métricas, follow-ups e hash; rejeita metadados com aparência de segredo |
+| Audit do controle operacional | `dotnet test` Domain filtrado | PASS — transições de KillSwitch/SafeMode persistem evento versionado/hash antes do estado; falha do sink mantém estado inalterado |
 
 ## O que estes gates comprovam
 

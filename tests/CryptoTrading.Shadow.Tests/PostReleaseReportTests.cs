@@ -1,12 +1,12 @@
-using CryptoTrading.Shadow;
-using Xunit;
-
+// Test fixtures are public for xUnit discovery and are instantiated by the test adapter.
+#pragma warning disable CA1515
+#pragma warning disable CA1812
 namespace CryptoTrading.Shadow.Tests;
 
 public sealed class PostReleaseReportTests
 {
-    [Fact]
-    [Trait("Category", "ReleaseEvidence")]
+    [Xunit.Fact]
+    [Xunit.Trait("Category", "ReleaseEvidence")]
     public void GeneratesDeterministicRedactedArtifactWithSortedSourcesAndFollowUps()
     {
         var first = CreateInput() with
@@ -31,50 +31,50 @@ public sealed class PostReleaseReportTests
         var firstArtifact = PostReleaseReportGenerator.Generate(first);
         var secondArtifact = PostReleaseReportGenerator.Generate(second);
 
-        Assert.Equal(PostReleaseReportGenerator.SchemaVersion, firstArtifact.SchemaVersion);
-        Assert.Equal(firstArtifact.CanonicalJson, secondArtifact.CanonicalJson);
-        Assert.Equal(firstArtifact.Sha256, secondArtifact.Sha256);
-        Assert.Contains("source_versions", firstArtifact.CanonicalJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("apiKey", firstArtifact.CanonicalJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("secret", firstArtifact.CanonicalJson, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.Equal(PostReleaseReportGenerator.SchemaVersion, firstArtifact.SchemaVersion);
+        Xunit.Assert.Equal(firstArtifact.CanonicalJson, secondArtifact.CanonicalJson);
+        Xunit.Assert.Equal(firstArtifact.Sha256, secondArtifact.Sha256);
+        Xunit.Assert.Contains("source_versions", firstArtifact.CanonicalJson, StringComparison.Ordinal);
+        Xunit.Assert.DoesNotContain("apiKey", firstArtifact.CanonicalJson, StringComparison.OrdinalIgnoreCase);
+        Xunit.Assert.DoesNotContain("secret", firstArtifact.CanonicalJson, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    [Trait("Category", "ReleaseEvidence")]
+    [Xunit.Fact]
+    [Xunit.Trait("Category", "ReleaseEvidence")]
     public void RejectsIncompleteOrUnsafeEvidenceFailClosed()
     {
         var valid = CreateInput();
 
-        Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with { Approver = " " }));
-        Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with { Approver = " " }));
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
         {
             WindowStartUtc = new DateTimeOffset(2026, 9, 19, 10, 0, 0, TimeSpan.FromHours(-3)),
         }));
-        Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
         {
             SourceVersions = new Dictionary<string, string>(),
         }));
-        Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
         {
             Decision = "Promote",
         }));
-        Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
         {
             SourceVersions = new Dictionary<string, string> { ["api_key"] = "must-not-appear" },
         }));
     }
 
-    [Fact]
-    [Trait("Category", "ReleaseEvidence")]
+    [Xunit.Fact]
+    [Xunit.Trait("Category", "ReleaseEvidence")]
     public void RejectsMetricContradictionsAndNegativeCounters()
     {
         var valid = CreateInput();
 
-        Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
+        Xunit.Assert.Throws<ArgumentException>(() => PostReleaseReportGenerator.Generate(valid with
         {
             Metrics = valid.Metrics with { OrderAcceptedCount = 11, OrderIntentCount = 10 },
         }));
-        Assert.Throws<ArgumentOutOfRangeException>(() => PostReleaseReportGenerator.Generate(valid with
+        Xunit.Assert.Throws<ArgumentOutOfRangeException>(() => PostReleaseReportGenerator.Generate(valid with
         {
             Metrics = valid.Metrics with { ReliabilityErrorCount = -1 },
         }));
