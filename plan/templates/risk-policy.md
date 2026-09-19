@@ -22,6 +22,11 @@ No field may remain blank when status is `Approved` or `Active`.
 | Max order/notional | | | | | |
 | Risk per trade | | | | | |
 | Asset/strategy/portfolio exposure | | | | | |
+
+> Semântica obrigatória: `MaxExposureNotional` e o alvo solicitado devem ser
+> definidos como exposição absoluta pós-ordem. Se o produto precisar de limite
+> incremental por ordem, registre-o separadamente e teste o headroom
+> `maxExposure - currentExposure`.
 | Daily loss / drawdown | | | | | |
 | Turnover / fee budget | | | | | |
 
