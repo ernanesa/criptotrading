@@ -15,6 +15,8 @@ Ameaças principais:
 - secrets em logs/backups;
 - permissões cloud excessivas.
 
+Antes de canary, preencher `templates/threat-model.md` com trust boundaries, data flows, abuse/misuse cases, likelihood/impact, owner, controle preventivo/detectivo, evidência e risco residual. O modelo deve cobrir browser/control plane, Worker, banco, secret store, CI/CD, registry, observabilidade, operador e Binance.
+
 ## Binance keys
 
 - withdrawals **sempre desabilitados**;
@@ -27,11 +29,11 @@ Ameaças principais:
 
 ## Secrets
 
-### AWS
-SSM Parameter Store `SecureString` para baseline de baixo custo; Secrets Manager se rotação/recursos justificarem.
+### Ambiente local inicial
+Segredos entram por arquivos locais fora do Git, com permissão mínima do sistema operacional, ou por Docker secrets quando aplicável. O repositório contém apenas exemplos sem valores. Backups, logs, shell history e evidence artifacts também passam por redaction/secret scanning.
 
-### Oracle/VPS
-Secrets injetados no runtime por arquivo protegido/secret manager adequado; nunca em compose versionado. Considerar SOPS/age para configuração cifrada versionável.
+### Cloud/hosting futuro
+O mecanismo será escolhido somente quando um destino for aprovado. SSM/Secrets Manager, vault do provedor ou SOPS/age são opções, nunca requisitos do runtime local.
 
 ## Web
 
@@ -43,8 +45,14 @@ Secrets injetados no runtime por arquivo protegido/secret manager adequado; nunc
 - rate limiting administrativo;
 - ações live críticas com step-up/confirmation;
 - audit trail imutável.
+- MFA/WebAuthn para conta administrativa;
+- step-up para CANARY/LIVE, RiskPolicy, credenciais, kill switch e reset;
+- session timeout, revogação e rotação de tokens;
+- proteção anti-replay para comandos críticos;
+- control plane restrito por VPN/allowlist/zero-trust quando possível;
+- caminho operacional autenticado para kill switch quando UI/API estiver indisponível.
 
-OWASP ASVS 5.0 é referência de verificação, proporcional a uma aplicação administrativa privada.
+OWASP ASVS 5.0 é referência de verificação, proporcional a uma aplicação administrativa privada. Controles selecionados devem usar IDs versionados no formato `v5.0.0-x.y.z`, com aplicabilidade e evidência.
 
 ## Supply chain
 
@@ -63,8 +71,8 @@ Rotação de chaves, secrets e certificados deve ter procedimento, periodicidade
 ## Network
 
 - banco não exposto publicamente;
-- firewall/security group mínimo;
-- SSH restrito, preferir SSM Session Manager na AWS;
+- firewall local mínimo; nenhuma porta de banco exposta além do host/rede Compose;
+- acesso remoto desabilitado por padrão; se futuramente necessário, exigir VPN/allowlist e autenticação forte;
 - HTTPS;
 - outbound necessário para Binance e serviços de observabilidade.
 

@@ -21,6 +21,9 @@ Payloads Binance, OpenAPI backend/frontend, schema compatibility.
 ### Replay
 Datasets gravados reproduzem comportamento determinístico.
 
+### Parity
+Mesmo replay/config produz sinais, targets, filtros, arredondamento e RiskDecisions equivalentes em backtest, paper e shadow dentro de tolerância definida.
+
 ### Chaos/fault injection
 - disconnect durante partial fill;
 - timeout após ordem aceita;
@@ -34,6 +37,11 @@ Datasets gravados reproduzem comportamento determinístico.
 - outbox/inbox duplicate, lag e poison event;
 - audit write failure, redaction failure e alert delivery failure;
 - backup corrompido, PITR/restore e verificação de imagem/digest.
+- fee em base/quote/BNB, dust, depósito/retirada/trade externo e stablecoin depeg;
+- Channel overflow por classe, shutdown durante outbox publish e poison event;
+- fill antes do ack, eventos duplicados/reordenados e cancel-replace parcial;
+- kill switch com ordem em voo e UI/API indisponível;
+- holdout contaminado e dataset corrigido depois do experimento.
 
 ### Backtest validation
 Lookahead analysis, data leakage tests, cost model tests, known synthetic datasets.
@@ -65,3 +73,5 @@ Coverage é indicador, não meta isolada. Código financeiro/risco/OMS deve ter 
 Live exige testnet/paper/shadow evidence, migration test, restore test, runbook e rollback.
 
 Nenhum gate é considerado aprovado sem comando e saída observada. Cada AC crítico deve apontar para teste, boundary e evidência.
+
+Canary exige `RiskPolicy`, `PromotionReadinessMatrix`, `CanaryPlan`, `ThreatModel`, `ReconciliationReport` e `ReleaseEvidence` completos, versionados, aprovados e vinculados no manifesto de rastreabilidade.

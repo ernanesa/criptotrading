@@ -1,0 +1,125 @@
+schema_version: 1
+status: planning-baseline
+product_goal:
+  id: GOAL-001
+  source: plan/README.md
+  statement: Safe, auditable and evidence-driven Binance Spot platform.
+epics:
+  - id: E-00
+    stories:
+      - id: US-001
+        task: TASK-US-001-01
+        acceptance: [AC-TRACE-01]
+      - id: US-003
+        task: TASK-US-003-01
+        requirements: [RF-003, RF-006, RF-135]
+        acceptance: [AC-ENV-01, AC-UI-01]
+  - id: E-01
+    stories:
+      - id: US-012
+        task: TASK-US-012-01
+        requirements: [RNF-040, RNF-041, RNF-042]
+        acceptance: [AC-AUDIT-01]
+      - id: US-013
+        task: TASK-US-013-01
+        requirements: [RF-044, RF-045, RF-046, RF-047, RF-048, RNF-043, RNF-044]
+        acceptance: [AC-LEDGER-01, AC-LEDGER-02]
+      - id: US-014
+        task: TASK-US-014-01
+        requirements: [RF-043, RF-049, RNF-006, RNF-007]
+        acceptance: [AC-DURABILITY-01, AC-DURABILITY-02]
+      - id: US-015
+        task: TASK-US-015-01
+        acceptance: [AC-TRACE-01]
+  - id: E-02
+    stories:
+      - id: US-020
+        task: TASK-US-020-01
+        requirements: [RF-010, RF-038, RF-039]
+        acceptance: [AC-EXCHANGE-01]
+      - id: US-024
+        requirements: [RF-019, RF-020]
+        acceptance: [AC-DATA-01, AC-UNIVERSE-01]
+  - id: E-03
+    stories:
+      - id: US-030
+        task: TASK-US-030-01
+        requirements: [RF-030, RF-031]
+        acceptance: [AC-RECON-01]
+      - id: US-032
+        task: TASK-US-032-01
+        requirements: [RF-036, RF-037, RF-043]
+        acceptance: [AC-OMS-01, AC-OMS-03, AC-DURABILITY-01]
+      - id: US-033
+        task: TASK-US-033-01
+        requirements: [RF-042]
+        acceptance: [AC-RECON-01]
+  - id: E-04
+    stories:
+      - id: US-040
+        task: TASK-US-040-01
+        requirements: [RF-070, RF-071, RF-072, RF-073, RF-074, RF-075]
+        acceptance: [AC-RISK-01, AC-RISK-02, AC-RISK-03]
+      - id: US-043
+        task: TASK-US-043-01
+        requirements: [RF-081, RF-145, RF-146, RF-147]
+        acceptance: [AC-KILL-01, AC-KILL-02]
+      - id: US-044
+        acceptance: [AC-RISK-03]
+        mandatory_artifacts: [RiskPolicy, PromotionReadinessMatrix]
+  - id: E-05
+    stories:
+      - id: US-050
+        task: TASK-US-050-01
+        requirements: [RF-100, RF-101]
+        acceptance: [AC-BACKTEST-01, AC-DATA-01, AC-UNIVERSE-01]
+      - id: US-051
+        task: TASK-US-051-01
+        requirements: [RF-102, RF-103, RF-104]
+        acceptance: [AC-COST-01, AC-PARITY-01]
+      - id: US-054
+        requirements: [RF-113, RF-114, RF-115, RF-116, RF-117, RF-118, RF-119]
+        acceptance: [AC-RESEARCH-01, AC-PARITY-01]
+  - id: E-06
+    stories:
+      - id: US-061
+        task: TASK-US-061-01
+        requirements: [RF-050, RF-052, RF-053]
+        acceptance: [AC-STRATEGY-01, AC-VALIDATION-01]
+  - id: E-09
+    stories:
+      - id: US-090
+        task: TASK-US-090-01
+        acceptance: [AC-ENV-02, AC-PARITY-01]
+      - id: US-092
+        mandatory_artifacts: [CanaryPlan]
+  - id: E-11
+    stories:
+      - id: US-113
+        requirements: [RF-001, RF-002, RF-007, RF-008, RF-009]
+        acceptance: [AC-SEC-01, AC-SEC-02]
+      - id: US-114
+        acceptance: [AC-OPS-01]
+  - id: E-12
+    stories:
+      - id: US-124
+        task: TASK-US-124-01
+        requirements: [RF-148, RNF-100, RNF-103]
+        acceptance: [AC-LOCAL-01, AC-LOCAL-02]
+      - id: US-123
+        status: deferred_option
+        acceptance: [AC-AWS-01]
+  - id: E-13
+    stories:
+      - id: US-130
+        task: TASK-US-130-01
+        acceptance: [AC-VALIDATION-01, AC-TRACE-01]
+      - id: US-134
+        task: TASK-US-134-01
+        mandatory_artifacts: [CanaryPlan, ReleaseEvidence, ReconciliationReport]
+
+validation_policy:
+  planned_items_may_omit: [code, tests, evidence]
+  ready_items_require: [requirements, acceptance, task, expected_validation]
+  done_items_require: [code, tests, command, observed_result, review, evidence, residual_risk, rollback]
+  forbidden_reference_forms: [implicit_numeric_range]

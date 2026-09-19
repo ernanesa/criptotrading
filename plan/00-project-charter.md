@@ -14,11 +14,12 @@ Operador/desenvolvedor único no início. A arquitetura deve permitir múltiplos
 
 ## Resultados desejados
 
-- aprender engenharia moderna em .NET, React, cloud e trading quantitativo;
+- aprender engenharia moderna em .NET 11, C# 15, React e trading quantitativo;
 - criar uma plataforma reproduzível de pesquisa → produção;
 - reduzir riscos de bugs, overfitting, execução incorreta e perda catastrófica;
-- permitir migração AWS → Oracle Cloud → VPS/Hostinger sem redesenhar o produto;
-- construir base extensível para Spot, Futures e estratégias market-neutral.
+- operar inicialmente nesta máquina local sem dependência de AWS ou de outro provedor;
+- preservar portabilidade para uma eventual migração futura de infraestrutura sem redesenhar o domínio;
+- construir uma base Spot extensível; Futures e estratégias market-neutral permanecem opções exploratórias, não compromisso do produto.
 
 ## Fora de escopo inicial
 
@@ -35,7 +36,7 @@ Operador/desenvolvedor único no início. A arquitetura deve permitir múltiplos
 ## Escopo congelado do MVP
 
 - Binance Spot, começando por BTC/USDT;
-- uma baseline simples antes de multi-estratégia;
+- uma única baseline Trend Following antes de multi-estratégia;
 - paper trading e integração real com Spot Testnet;
 - sem arbitragem, Futures, market making ou multi-exchange;
 - expansão para até 20 ativos somente depois de `UniversePolicy` e capacidade serem validadas;
@@ -44,9 +45,9 @@ Operador/desenvolvedor único no início. A arquitetura deve permitir múltiplos
 ## Restrições
 
 - desenvolvimento incremental, em pequenas sessões diárias;
-- infraestrutura inicial de baixo custo;
+- infraestrutura inicial obrigatoriamente local nesta máquina, sem provisionamento AWS;
 - suporte obrigatório a ARM64 e AMD64;
-- .NET 11/C# 15 como alvo definitivo;
+- .NET 11/C# 15 como stack obrigatória desde o primeiro commit de implementação, sem fallback de runtime;
 - Binance como primeira exchange;
 - interface web React + TypeScript.
 
@@ -86,4 +87,4 @@ Operador/desenvolvedor único no início. A arquitetura deve permitir múltiplos
 
 ## Critério de sucesso 1.0
 
-O produto 1.0 é considerado tecnicamente bem-sucedido quando consegue executar Spot em live canary por período definido sem inconsistências de estado, respeitando todos os limites de risco, com observabilidade suficiente para reconstruir cada decisão e com pelo menos uma estratégia que tenha passado por todo o pipeline de validação. Isso não implica promessa de lucro.
+O produto 1.0 é considerado tecnicamente bem-sucedido quando a baseline Trend Following executa Spot em live canary pelo período e volume mínimos definidos na `PromotionReadinessMatrix`, sem inconsistência financeira não explicada, respeitando a `RiskPolicy`, com cada decisão reconstruível e com os gates quantitativos, operacionais e de segurança comprovados. Isso não implica promessa de lucro.

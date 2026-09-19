@@ -1,5 +1,7 @@
 # 27 - Runbooks
 
+Cada runbook concreto deve usar `templates/runbook.md`, ter owner, trigger, ambiente, comandos com resultado esperado, last-tested, evidence e next-review. Procedimento não exercitado antes do canary é hipótese, não controle comprovado.
+
 ## RB-01 WebSocket market data caiu
 1. marcar feed degraded/disconnected;
 2. bloquear novas entradas dependentes;
@@ -56,13 +58,15 @@
 6. somente então entra em `Ready`.
 
 ## RB-08 Restaurar servidor
-1. provisionar VM por IaC/runbook;
-2. instalar Docker/runtime;
+1. isolar o ambiente corrompido e preparar diretório/volume limpo na máquina local;
+2. validar Docker/Compose e capacidade do host;
 3. restaurar PostgreSQL;
 4. restaurar configs/secrets por canal seguro;
 5. subir em modo read-only/reconcile;
 6. validar health/telemetry;
 7. reabilitar paper/shadow/live conforme ambiente.
+
+Em hosting futuro aprovado, um passo anterior pode reconstruir o host por IaC/runbook, sem alterar os gates de restore e reconciliação.
 
 ## RB-09 API key potencialmente comprometida
 1. kill switch;
@@ -72,3 +76,27 @@
 5. atualizar secret store;
 6. investigar fonte do vazamento;
 7. só retomar após revisão.
+
+## RB-10 Journal/ledger/audit indisponível
+1. bloquear novas exposições e entrar em `SafeMode`;
+2. não substituir persistência financeira por log/telemetry;
+3. preservar outbox/inbox e estado de ordens em voo;
+4. restaurar storage ou failover aprovado;
+5. reconciliar exchange, ledger, orders, fills e balances;
+6. emitir `ReconciliationReport` antes de reabilitar.
+
+## RB-11 UI/API administrativa indisponível
+1. usar caminho operacional autenticado e previamente testado;
+2. confirmar environment/account scope;
+3. executar kill switch ou block de novas entradas conforme policy;
+4. tratar ordens em voo;
+5. preservar evidence/audit por canal independente;
+6. não reabilitar até control plane e autenticação estarem íntegros.
+
+## RB-12 Stablecoin/quote asset depeg
+1. validar múltiplas fontes e freshness;
+2. bloquear novas exposições dependentes do quote asset;
+3. recalcular exposição/valuation sem assumir paridade;
+4. aplicar breaker/hedge/saída somente conforme RiskPolicy;
+5. reconciliar fees, balances e PnL;
+6. registrar incidente e decisão de reentrada.

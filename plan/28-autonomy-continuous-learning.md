@@ -17,7 +17,7 @@ O sistema não pode interpretar `melhor estratégia` como uma verdade conhecida.
 - **A4 Adaptive Allocation:** ranking e orçamento de risco mudam continuamente segundo contexto e performance live.
 - **A5 Bounded Continuous Learning:** modelos/parâmetros aprendem com novos dados, challengers são avaliados e promovidos automaticamente dentro de envelopes e gates predefinidos.
 
-**Alvo arquitetural:** A5. A autonomia entra incrementalmente; nenhum nível superior ignora os gates de segurança dos níveis anteriores.
+**Alvo arquitetural de longo prazo:** A5. O R1.0 entrega A2 para uma baseline; A3/A4 e depois A5 são releases posteriores. Nenhum nível superior ignora os gates de segurança dos níveis anteriores.
 
 ## Loop de decisão autônomo
 
@@ -95,6 +95,8 @@ Exploração deve ser restrita:
 - live usa apenas estratégias aprovadas;
 - qualquer exploração com capital real usa orçamento canary específico e limitado;
 - Risk Engine possui autoridade final em todos os casos.
+
+Cada candidato declara exploration budget por estratégia, ativo, regime e janela. Antes de capital real, executar off-policy evaluation e shadow comparison pareado, registrar delayed feedback e medir o efeito das próprias ordens sobre features, fills e labels. O learner não aumenta seu próprio budget.
 
 Contextual bandits são preferidos antes de reinforcement learning amplo por terem problema de decisão mais restrito, auditável e controlável.
 
@@ -188,7 +190,11 @@ Rollback automático para o champion anterior quando:
 - erro técnico ou de dados;
 - Risk Engine aciona proteção.
 
+O champion anterior não é automaticamente seguro em um novo regime. Quando sua elegibilidade ou integridade não puder ser confirmada, o rollback correto é `NO_TRADE`/SafeMode até nova avaliação.
+
 Model Registry deve persistir versão, dataset, features, parâmetros, métricas, seed, commit, motivo de promoção/rejeição e lineage.
+
+O pipeline monitora training-serving skew, versão de transformação/feature e compatibilidade do schema. Modelo, dataset, execution policy e RiskPolicy não mudam simultaneamente sem experimento identificável; caso contrário, attribution e rollback ficam inconclusivos.
 
 ## Estratégia de autoaprimoramento segura
 
@@ -288,9 +294,9 @@ LLM não deve estar no hot path de decisão de capital. Pode auxiliar pesquisa, 
 
 ## Critérios de aceite de autonomia
 
-- operação paper/shadow por período-alvo sem necessidade de intervenção rotineira;
+- operação paper/shadow pelo período e volume definidos na `PromotionReadinessMatrix`, sem necessidade de intervenção rotineira;
 - mudança de regime altera elegibilidade/alocação automaticamente e de forma auditável;
-- estratégia degradada perde capital ou é desabilitada automaticamente;
+- estratégia degradada perde alocação/risk budget ou é desabilitada automaticamente;
 - `NO_TRADE` é escolhido quando nenhuma oportunidade passa o threshold;
 - reinício do processo reconcilia e retoma em estado seguro;
 - challenger nunca recebe capital live fora do envelope de promoção;

@@ -6,6 +6,8 @@
 - **RNF-003** Startup live deve reconciliar conta antes de liberar novas entradas.
 - **RNF-004** Falha de conexão deve resultar em estado seguro; não em repetição cega.
 - **RNF-005** Processos devem reiniciar sem corromper estado.
+- **RNF-006** Eventos financeiros críticos não podem ser descartados por overflow, sampling ou shutdown.
+- **RNF-007** Entrega distribuída assume at-least-once com idempotência e reconciliação; nenhuma alegação de exactly-once sem prova formal do boundary.
 
 ## Performance
 - **RNF-010** Hot path market-event → signal → risk deve evitar I/O bloqueante.
@@ -34,6 +36,8 @@
 - **RNF-040** Toda decisão live deve possuir correlation/causation IDs.
 - **RNF-041** Deve ser possível reconstruir sinal → target → decisão de risco → ordem → fill.
 - **RNF-042** Configuração e strategy version usadas em cada trade devem ser recuperáveis.
+- **RNF-043** Ledger financeiro é append-only; correções usam lançamentos compensatórios.
+- **RNF-044** Fee preserva ativo, quantidade, valuation source/time e vínculo ao fill.
 
 ## Observabilidade
 - **RNF-050** Traces, metrics e logs estruturados via OpenTelemetry.
@@ -61,9 +65,11 @@
 ## Disponibilidade e recuperação
 - **RNF-090** Meta inicial live: 99,5% de disponibilidade mensal do engine; evoluir para 99,9% após maturidade.
 - **RNF-091** RTO inicial ≤ 15 min para falha de aplicação em single-node.
-- **RNF-092** Configurações e ledger transacional devem ter backup com RPO alvo ≤ 15 min; ordens/fills continuam reconciliáveis pela exchange.
+- **RNF-092** Order intent, risk decision, order/fill e ledger possuem RPO efetivo zero no processo normal; backup/PITR de desastre tem RPO alvo ≤ 15 min e recuperação é seguida por reconciliação.
+- **RNF-093** RTO/RPO devem ser medidos em restore drill e distinguir falha de processo, host, banco e região.
 
 ## Custo
-- **RNF-100** Infra inicial deve caber em Free Tier/créditos AWS sempre que razoável.
-- **RNF-101** Após fase AWS, single-node Oracle 4 ARM vCPU/24 GB deve ser um alvo suportado.
+- **RNF-100** O ambiente inicial deve executar integralmente nesta máquina local, sem criar ou exigir recursos AWS, Oracle Cloud, VPS ou outro serviço de compute gerenciado.
+- **RNF-101** Qualquer destino cloud/hosting é opção futura e exige decisão explícita, ADR, estimativa de custo, guardrails, threat model e plano de migração antes de entrar no roadmap ativo.
 - **RNF-102** Escala só será adicionada com evidência de gargalo.
+- **RNF-103** O perfil local deve declarar e medir budgets de CPU, memória, disco, I/O e retenção para evitar que research, telemetria ou backtest prejudiquem o trading runtime.

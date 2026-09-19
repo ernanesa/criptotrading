@@ -68,6 +68,8 @@ Preferir tamanhos relativos (XS/S/M/L/XL) ou story points apenas para capacidade
 
 Prioridade = valor + redução de risco + aprendizado + dependências + custo de atraso.
 
+IDs e dependências vêm do `traceability.yaml`; intervalos numéricos implícitos não substituem seleção explícita de PBIs. Itens de opção exploratória não competem com o Sprint Goal do R1.0.
+
 ## Sprint Goal over task completion
 
 Se capacidade mudar, retirar escopo secundário mantendo o Sprint Goal. Não sacrificar DoD para “fechar pontos”.

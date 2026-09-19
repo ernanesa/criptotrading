@@ -56,3 +56,5 @@ Toda release mede:
 - dashboard render/update rate.
 
 Baseline é versionado. Regressão relevante exige justificativa ou correção.
+
+O budget de decisão é decomposto por ingestão/parse, fila, feature, strategy, portfolio/risk, persistência durável, serialização e network/exchange. Medir queueing e clock skew separadamente; média não substitui p50/p95/p99 e cauda sob overload. Otimização não pode remover persistência, auditabilidade ou risk checks para cumprir latência.
