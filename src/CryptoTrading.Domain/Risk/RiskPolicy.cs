@@ -253,7 +253,8 @@ public static class RiskEvaluator
             return BlockNewExposure(request, policy, RiskReasonCodes.DrawdownLimit);
         }
 
-        if (request.EvaluatedAt - request.MarketDataAt > policy.MaxMarketDataAge)
+        if (request.MarketDataAt > request.EvaluatedAt ||
+            request.EvaluatedAt - request.MarketDataAt > policy.MaxMarketDataAge)
         {
             return BlockNewExposure(request, policy, RiskReasonCodes.MarketDataStale);
         }

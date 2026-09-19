@@ -14,11 +14,12 @@ public sealed class PersistenceMigrationsTests
                 "001_initial_schema.down.sql", "001_initial_schema.up.sql",
                 "002_append_only_guards.down.sql", "002_append_only_guards.up.sql",
                 "003_outbox_lease_owner.down.sql", "003_outbox_lease_owner.up.sql",
+                "004_outbox_dead_letter.down.sql", "004_outbox_dead_letter.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003"],
+            ["001", "001", "002", "002", "003", "003", "004", "004"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -36,5 +37,6 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("append-only", upMigrations[1].Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("DEFERRABLE INITIALLY DEFERRED", upMigrations[1].Sql, StringComparison.Ordinal);
         Assert.Contains("lease_owner", upMigrations[2].Sql, StringComparison.Ordinal);
+        Assert.Contains("dead_lettered_at", upMigrations[3].Sql, StringComparison.Ordinal);
     }
 }

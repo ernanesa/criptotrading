@@ -62,6 +62,25 @@ public sealed class RiskPolicyTests
     }
 
     [Fact]
+    public void FutureMarketDataRejectsEntryFailClosed()
+    {
+        var evaluatedAt = DateTimeOffset.UtcNow;
+        var request = new RiskEvaluationRequest(
+            10m,
+            0m,
+            0m,
+            0m,
+            evaluatedAt.AddMilliseconds(1),
+            evaluatedAt);
+
+        var decision = RiskEvaluator.Evaluate(Policy, request);
+
+        Assert.Equal(RiskDecisionStatus.Rejected, decision.Status);
+        Assert.Equal(0m, decision.AuthorizedTargetNotional);
+        Assert.Contains(RiskReasonCodes.MarketDataStale, decision.ReasonCodes);
+    }
+
+    [Fact]
     public void EmergencyStopAndWithdrawalsAreEmergencyBlocked()
     {
         var emergency = RiskEvaluator.Evaluate(Policy, Request(requested: 10m, emergency: true));

@@ -213,9 +213,22 @@ public sealed class OutboxDispatcher(
         catch (Exception exception)
         {
             var delaySeconds = Math.Min(300d, Math.Pow(2d, Math.Min(message.Attempts - 1, 8)));
-            var retryAt = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
-            _ = await store.FailOutboxAsync(message.MessageId, leaseOwner, exception.GetType().Name, retryAt, cancellationToken).ConfigureAwait(false);
-            DispatcherLog.Failed(logger, message.MessageId, message.MessageType, exception.GetType().Name, delaySeconds);
+            if (message.Attempts >= options.Value.MaxOutboxAttempts)
+            {
+                _ = await store.DeadLetterOutboxAsync(
+                    message.MessageId,
+                    leaseOwner,
+                    exception.GetType().Name,
+                    DateTimeOffset.UtcNow,
+                    cancellationToken).ConfigureAwait(false);
+                DispatcherLog.DeadLettered(logger, message.MessageId, message.MessageType, exception.GetType().Name);
+            }
+            else
+            {
+                var retryAt = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
+                _ = await store.FailOutboxAsync(message.MessageId, leaseOwner, exception.GetType().Name, retryAt, cancellationToken).ConfigureAwait(false);
+                DispatcherLog.Failed(logger, message.MessageId, message.MessageType, exception.GetType().Name, delaySeconds);
+            }
         }
     }
 }
@@ -245,4 +258,7 @@ internal static partial class DispatcherLog
 
     [LoggerMessage(LogLevel.Error, "Outbox dispatch failed. MessageId={MessageId} MessageType={MessageType} ErrorType={ErrorType} RetryAfterSeconds={RetryAfterSeconds}")]
     public static partial void Failed(ILogger logger, Guid messageId, string messageType, string errorType, double retryAfterSeconds);
+
+    [LoggerMessage(LogLevel.Error, "Outbox message moved to dead-letter after retry limit. MessageId={MessageId} MessageType={MessageType} ErrorType={ErrorType}")]
+    public static partial void DeadLettered(ILogger logger, Guid messageId, string messageType, string errorType);
 }
