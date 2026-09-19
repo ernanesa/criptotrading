@@ -66,6 +66,7 @@ itens em andamento ou bloqueados.
 - [ ] Confirmar withdrawals, transferências, margem e Futures desativados.
 - [ ] Preencher credenciais somente no `.env` local ou secret store externo.
 - [x] Implementar adapter autenticado read-only para account, balances, open orders e trades (sem submit/cancel).
+- [x] Integrar reconciliação read-only opcional no startup do Worker, exigindo persistência + `NO_TRADE` e ativando `SafeMode` para drift/stale; execução autenticada real permanece aguardando chaves novas.
 - [ ] Executar primeiro teste de ordem com notional mínimo e Risk aprovado.
 - [ ] Registrar evidência redacted e confirmar reconciliação após restart.
 
@@ -155,6 +156,7 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
 | 2026-09-19 | Reconciliação | Comparação de ledger com account/fills read-only, SafeMode em drift e rejeição fail-closed de snapshot stale/futuro; 6 testes | `src/CryptoTrading.Reconciliation`, `tests/CryptoTrading.Reconciliation.Tests/AccountReconciliationServiceTests.cs`, `docs/readiness/RECON-20260919-local.md` | `eb12678` + validação local | Codex |
+| 2026-09-19 | Worker reconciliation gate | Startup read-only opt-in exige PostgreSQL e `NO_TRADE`; adapter de saldo PostgreSQL, SafeMode e logging redigido; default não registra cliente autenticado | `src/CryptoTrading.Worker/ReconciliationStartupHostedService.cs`, `src/CryptoTrading.Worker/Program.cs`, `src/CryptoTrading.Worker/WorkerRuntimeOptions.cs`, `.env.example`, `docs/runbook-local.md` | validação local | Codex |
 | 2026-09-19 | Strategy Health | Healthy/NoTrade/Blocked, freshness, risco, reconciliação e kill switch | `src/CryptoTrading.Domain/Risk/StrategyHealth.cs` | `8ffb4d8` | Codex |
 | 2026-09-19 | Operação local | Runbook, threat model, backup/restore isolado, Paper chaos/soak, Shadow soak repetível e alertas locais executados sem capital; dados reais, canais externos e RPO/RTO continuam pendentes | `docs/runbook-local.md`, `docs/threat-model-local.md`, `docs/recovery-drill.md`, `docs/shadow-soak.md`, `docs/readiness/AUDIT-20260919-current.md` | `cf89005` (evidência local) | Codex |
 
