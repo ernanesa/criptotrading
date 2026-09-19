@@ -35,7 +35,7 @@ itens em andamento ou bloqueados.
 - [x] Implementar outbox/inbox com lease, retry e deduplicação.
 - [x] Registrar o store no Worker sob flag explícita e aplicar migrations sob flag explícita.
 - [x] Implementar dispatcher PAPER com lease, retry, logs sem payload e default `NO_TRADE`.
-- [ ] Implementar readiness real para banco e dependências.
+- [x] Implementar readiness real para banco e dependências.
 - [ ] Validar restart, crash recovery e reconstrução de estado.
 
 ## Fase 3 — Binance read-only e market data
@@ -57,7 +57,7 @@ itens em andamento ou bloqueados.
 - [x] Implementar limites de exposição, notional, daily loss e drawdown.
 - [x] Implementar controles de stale data e bloqueio de withdrawals.
 - [ ] Implementar slippage, volatilidade e liquidez com dados de mercado.
-- [ ] Implementar kill switch e testes de falha.
+- [x] Implementar kill switch, SafeMode, reset autorizado e testes de falha.
 
 ## Fase 5 — Integração autenticada Testnet
 
@@ -125,6 +125,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Worker outbox | Store/migrations opt-in, dispatcher PAPER com lease/retry e `NO_TRADE` fail-closed; 3 testes aprovados | `src/CryptoTrading.Worker`, `tests/CryptoTrading.Worker.Tests` | `437cb44` | Codex |
 | 2026-09-19 | Order book | Snapshot/delta, sequência, gap, duplicata, quarantine e resync; 31 testes Binance aprovados | `src/CryptoTrading.Exchange.Binance/BinanceLocalOrderBook.cs` | `9217d4f` | Codex |
 | 2026-09-19 | Conta read-only | HMAC, account/balances/open orders/trades, clock drift e sem endpoints de ordem; 4 testes específicos | `src/CryptoTrading.Exchange.Binance/BinanceSpotAccountClient.cs` | `1d3f574` | Codex |
+| 2026-09-19 | PostgreSQL integration | Migrations, ledger, outbox lease/retry/idempotência via Compose com senha efêmera; teste reproduzível | `scripts/test-postgres-integration.sh`, `tests/CryptoTrading.Persistence.IntegrationTests` | `f7b073a` | Codex |
+| 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
+| 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 
 ## Bloqueios e decisões
 

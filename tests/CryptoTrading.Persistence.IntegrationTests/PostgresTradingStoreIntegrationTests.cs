@@ -4,8 +4,8 @@ using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
-using CryptoTrading.Persistence;
 using Xunit;
+using Xunit.Sdk;
 
 namespace CryptoTrading.Persistence.IntegrationTests;
 
@@ -19,8 +19,11 @@ public sealed class PostgresTradingStoreIntegrationTests
     public async Task PersistsLedgerAndOutboxWithLeaseRetryAndIdempotency()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
-        Assert.False(string.IsNullOrWhiteSpace(connectionString),
-            "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
         await store.CheckConnectivityAsync();
