@@ -19,6 +19,9 @@ public sealed class WorkerRuntimeOptions
 
     public bool NoTrade { get; set; } = true;
 
+    /// <summary>Runs one deterministic local Shadow drill at worker startup when enabled.</summary>
+    public bool ShadowEnabled { get; set; }
+
     public int PollIntervalMilliseconds { get; set; } = 1_000;
 
     public int BatchSize { get; set; } = 25;
@@ -63,6 +66,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["POSTGRES_CONNECTION_STRING is required when WORKER_PERSISTENCE_ENABLED=true."]);
+        }
+
+        if (ShadowEnabled && !NoTrade)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_SHADOW_ENABLED requires WORKER_NO_TRADE=true."]);
         }
     }
 }
