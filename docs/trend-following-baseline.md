@@ -44,3 +44,40 @@ nas camadas de risco, OMS, paper exchange e nos gates de validação. Antes de
 qualquer uso operacional, o pipeline deve adicionar dados versionados,
 backtest com fills realistas, walk-forward, análise de sensibilidade,
 stress tests e paper/shadow.
+
+## Slice quantitativo determinístico
+
+`TrendFollowingBacktestEvaluator` fornece uma avaliação bounded para a baseline,
+sem enviar ordens e sem buscar dados externos. Ele consome as mesmas barras
+fechadas da estratégia e aplica as seguintes hipóteses explícitas:
+
+- long-only, usando todo o caixa disponível na entrada e liquidando toda a
+  posição na saída;
+- fill no fechamento do candle que gerou o sinal, com slippage adverso e fee
+  aplicados por lado;
+- posição marcada a mercado pelo fechamento de cada barra;
+- turnover é a soma do notional de referência (preço de fechamento vezes
+  quantidade) de cada fill, e `TurnoverRatio` divide esse valor pelo capital
+  inicial;
+- `MaximumDrawdown` é o maior declínio percentual entre um pico de equity e a
+  equity subsequente;
+- Sharpe usa retornos simples por barra, excesso sobre a taxa livre de risco
+  periódica, desvio-padrão amostral e `sqrt(PeriodsPerYear)`. O valor é `null`
+  quando não há pelo menos duas observações ou não há variação;
+- taxas e slippage são reportados separadamente para impedir que um retorno
+  líquido seja confundido com retorno bruto.
+
+O fill no fechamento é uma aproximação deliberadamente limitada: não modela
+spread, latência, partial fills, rejeições, limites da exchange, OHLCV intra-bar
+ou impacto de mercado. O resultado serve para verificar invariantes e comparar
+hipóteses reproduzíveis, não para justificar rentabilidade ou promoção.
+
+### OOS, walk-forward e sensibilidade
+
+`WalkForwardPlan.Create` apenas produz janelas de treino e teste fora da amostra
+com índices explícitos; ele não ajusta parâmetros nem seleciona o melhor
+resultado. `SensitivityPlan.Create` valida uma matriz de casos com identificadores
+únicos. O consumidor deve executar cada caso com a mesma versão do avaliador,
+preservar os hashes de dados/configuração e manter o período OOS separado do
+período usado para escolher parâmetros. Nenhuma métrica OOS deve ser misturada
+com a amostra de ajuste.
