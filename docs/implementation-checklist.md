@@ -21,10 +21,11 @@ itens em andamento ou bloqueados.
 - [x] Adicionar `TimeProvider` injetável e relógio determinístico.
 - [x] Criar IDs de domínio, correlation ID e idempotency key.
 - [x] Criar tipos de dinheiro, preço, quantidade e percentual com `decimal`.
-- [ ] Modelar estados de ordem, fill, posição e decisão de risco.
+- [x] Modelar estados de ordem, fill e transições explícitas do ciclo de vida.
 - [ ] Definir contratos Strategy → Portfolio → Risk → Execution → OMS → Exchange.
 - [x] Criar testes unitários básicos para primitives e relógio.
-- [ ] Adicionar property-based e testes de arquitetura.
+- [x] Adicionar testes de arquitetura para fronteiras do domínio.
+- [ ] Adicionar property-based tests financeiros.
 
 ## Fase 2 — Persistência financeira local
 
@@ -47,12 +48,13 @@ itens em andamento ou bloqueados.
 
 ## Fase 4 — OMS, reconciliação e risco
 
-- [ ] Implementar máquina de estados de ordens e `clientOrderId` idempotente.
+- [x] Implementar máquina de estados de ordens e `clientOrderId` idempotente.
 - [ ] Garantir persist-before-submit e tratamento de timeout ambíguo.
 - [ ] Implementar reconciliação de balances, ordens, fills e fees.
-- [ ] Implementar `RiskPolicy` versionada.
-- [ ] Implementar limites de exposição, notional, daily loss e drawdown.
-- [ ] Implementar controles de stale data, slippage, volatilidade e liquidez.
+- [x] Implementar `RiskPolicy` versionada.
+- [x] Implementar limites de exposição, notional, daily loss e drawdown.
+- [x] Implementar controles de stale data e bloqueio de withdrawals.
+- [ ] Implementar slippage, volatilidade e liquidez com dados de mercado.
 - [ ] Implementar kill switch e testes de falha.
 
 ## Fase 5 — Integração autenticada Testnet
@@ -105,6 +107,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Persistência SQL | Migrations journal/ledger/outbox, guards append-only e rollback documentado; 2 testes aprovados | `src/CryptoTrading.Persistence`, `docs/persistence-migrations.md` | `fa97f71` | Codex |
 | 2026-09-19 | Market data | Streams públicos trade/kline com parsing, fragmentação, reconnect/backoff; 10 testes aprovados | `src/CryptoTrading.Exchange.Binance`, `docs/market-data-websocket.md` | `49a3abc` | Codex |
 | 2026-09-19 | Observabilidade | Logs JSON, correlação, métricas, `/metrics`, health e redaction; 5 testes aprovados | `src/CryptoTrading.Observability`, `docs/observability-local.md` | `8948360` | Codex |
+| 2026-09-19 | OMS | Máquina de estados, transições inválidas, histórico e idempotência; 35 testes totais aprovados | `src/CryptoTrading.Domain/Orders` | `c48de4f` | Codex |
+| 2026-09-19 | Risk | RiskPolicy versionada, limites, stale data e reason codes; 35 testes totais aprovados | `src/CryptoTrading.Domain/Risk` | `e6b0e75` | Codex |
+| 2026-09-19 | Arquitetura | Fronteiras Domain e redaction de credenciais cobertas por testes | `tests/CryptoTrading.Domain.Tests/ArchitectureBoundaryTests.cs` | `822a05d` | Codex |
 
 ## Bloqueios e decisões
 
