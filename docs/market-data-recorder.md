@@ -5,6 +5,21 @@ públicos de mercado. A implementação é deliberadamente limitada ao journal
 append-only em JSONL; ela não autentica na Binance, não grava credenciais e não
 envia ordens.
 
+## Histórico público de klines
+
+`IBinanceSpotMarketClient.GetKlinesAsync` fornece a fonte REST somente leitura
+para preparar datasets históricos locais. O contrato valida símbolo ASCII,
+intervalo Spot suportado, timestamps UTC e limite de 1 a 1000 registros; não
+envia API key, secret ou qualquer endpoint de conta/ordem. O consumidor deve
+persistir as barras no recorder, executar `MarketDataQualityGate` e versionar o
+hash antes de usá-las no walk-forward.
+
+A execução contra a Binance é uma etapa operacional separada e deve usar apenas
+um host configurado permitido (Testnet/Demo), com limites pequenos e sem
+credenciais exportadas. O cliente não declara que uma resposta HTTP seja uma
+evidência de edge: ainda são obrigatórios disponibilidade da barra, deduplicação,
+janela temporal, comparação com benchmarks e aprovação experimental.
+
 ## Formato
 
 Cada evento ocupa uma linha em `market-data-YYYYMMDD.jsonl`, particionada pela

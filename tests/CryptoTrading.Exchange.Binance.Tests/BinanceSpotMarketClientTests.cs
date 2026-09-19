@@ -17,6 +17,37 @@ public sealed class BinanceSpotMarketClientTests
     }
 
     [Fact]
+    public async Task GetKlinesParsesPublicHistoricalRowsAndBounds()
+    {
+        using var handler = new RecordingHandler("[[1720000000000,\"60000.00\",\"61000.00\",\"59000.00\",\"60500.00\",\"12.5\",1720086399999,\"756250.00\",100,\"605000.00\",10,\"0\"]]");
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        var client = new BinanceSpotMarketClient(httpClient);
+
+        var result = await client.GetKlinesAsync(
+            " btcusdt ",
+            "1d",
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch.AddDays(2),
+            100);
+
+        Assert.Single(result);
+        Assert.Equal(60500m, result[0].Close);
+        Assert.Equal("/api/klines?symbol=BTCUSDT&interval=1d&limit=100&startTime=0&endTime=172800000", handler.Request!.RequestUri!.PathAndQuery);
+    }
+
+    [Theory]
+    [InlineData("2d")]
+    [InlineData("1D")]
+    public async Task GetKlinesRejectsInvalidRequestBeforeNetwork(string interval)
+    {
+        using var httpClient = CreateHttpClient("[]");
+        var client = new BinanceSpotMarketClient(httpClient);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetKlinesAsync("BTCUSDT", interval));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.GetKlinesAsync("BTCUSDT", "1d", limit: 1001));
+    }
+
+    [Fact]
     public async Task ExchangeInfoNormalizesSymbol()
     {
         using var handler = new RecordingHandler("{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8}]}");
