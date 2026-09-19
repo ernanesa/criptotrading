@@ -56,7 +56,7 @@ itens em andamento ou bloqueados.
 - [x] Implementar `RiskPolicy` versionada.
 - [x] Implementar limites de exposição, notional, daily loss e drawdown.
 - [x] Implementar controles de stale data e bloqueio de withdrawals.
-- [ ] Implementar slippage, volatilidade e liquidez com dados de mercado.
+- [x] Implementar slippage, volatilidade e liquidez com dados de mercado locais, com limites fail-closed.
 - [x] Implementar kill switch, SafeMode, reset autorizado e testes de falha.
 
 ## Fase 5 — Integração autenticada Testnet
@@ -92,9 +92,9 @@ itens em andamento ou bloqueados.
 ## Fase 8 — Readiness e canary
 
 - [ ] Aprovar `RiskPolicy`.
-- [ ] Preencher `PromotionReadinessMatrix` e `CanaryPlan`.
-- [ ] Preencher `ThreatModel`, `ReconciliationReport` e `ReleaseEvidence`.
-- [ ] Vincular critérios de aceitação ao manifesto de rastreabilidade.
+- [x] Preencher snapshots locais de `PromotionReadinessMatrix` e `CanaryPlan`; aprovação continua pendente.
+- [x] Preencher snapshots locais de `ThreatModel`, `ReconciliationReport` e `ReleaseEvidence`.
+- [x] Vincular critérios de aceitação ao manifesto de rastreabilidade local.
 - [ ] Realizar revisão independente de Risk/Execution.
 - [ ] Aprovar Go/No-Go e executar canary sem capital.
 
@@ -129,6 +129,8 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Crash recovery | Lease expirado recuperado por novo store após reinício; owner antigo não consegue confirmar e não há segunda entrega após processamento | `tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs`, `docs/postgres-local.md` | `4843123` | Codex |
 | 2026-09-19 | Submissão ambígua | Timeout consulta `clientOrderId` antes de retry; sem duplicação no dispatcher PAPER | `src/CryptoTrading.Worker`, testes Worker | `9b89445` | Codex |
 | 2026-09-19 | Validação OOS | Dataset sintético BTCUSDT v1.0.0 com SHA-256 e métricas exclusivamente OOS; 24 testes Backtesting | `src/CryptoTrading.Backtesting/OutOfSampleEvaluation.cs`, `docs/trend-following-baseline.md` | `946bc87` | Codex |
+| 2026-09-19 | Market risk | Slippage/volatilidade/liquidez locais, limites fail-closed e 8 testes adicionais | `src/CryptoTrading.Domain/Risk/MarketRiskCalculator.cs`, `docs/readiness/` | `05bcc57` | Codex |
+| 2026-09-19 | Readiness snapshots | PRM, canary draft, reconciliação, release evidence e traceability; decisão No-Go preservada | `docs/readiness/` | `e9c6581` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
