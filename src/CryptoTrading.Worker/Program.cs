@@ -87,7 +87,7 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
             serviceProvider.GetRequiredService<IBinanceSpotAccountClient>(), reconciliationOptions);
     });
     _ = builder.Services.AddSingleton<ILocalBalanceReader, PostgresLocalBalanceReader>();
-    _ = builder.Services.AddSingleton<IKnownTradeReader, NoKnownTradesReader>();
+    _ = builder.Services.AddSingleton<IKnownTradeReader, PostgresKnownTradeReader>();
     _ = builder.Services.AddSingleton<IReconciliationEventSink, InMemoryReconciliationEventSink>();
     _ = builder.Services.AddSingleton<IOperationalControl>(_ => new InMemoryOperationalControl(new DenyOperationalControlResetAuthorizer()));
     _ = builder.Services.AddSingleton<AccountReconciliationService>(serviceProvider =>

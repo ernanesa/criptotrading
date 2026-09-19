@@ -194,6 +194,70 @@ public sealed class PostgresTradingStore : IOutboxStore, IAsyncDisposable
         return new(result is null or DBNull ? 0m : (decimal)result, asset);
     }
 
+    /// <summary>
+    /// Appends an exchange trade ID after its journal event has been committed.
+    /// Re-registering the same ID is idempotent; existing rows are immutable.
+    /// </summary>
+    public async Task RecordKnownTradeAsync(
+        long tradeId,
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateTradeReference(tradeId, symbol);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var normalizedSymbol = symbol.Trim().ToUpperInvariant();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO trading.reconciliation_known_trades (trade_id, symbol)
+            VALUES (@trade_id, @symbol)
+            ON CONFLICT (trade_id) DO NOTHING;
+            """, connection);
+        command.Parameters.Add(Parameter("trade_id", NpgsqlDbType.Bigint, tradeId));
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, normalizedSymbol));
+        _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var existingCommand = new NpgsqlCommand(
+            "SELECT symbol FROM trading.reconciliation_known_trades WHERE trade_id = @trade_id;", connection);
+        existingCommand.Parameters.Add(Parameter("trade_id", NpgsqlDbType.Bigint, tradeId));
+        var existingSymbol = (string?)await existingCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(existingSymbol, normalizedSymbol, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Trade ID {tradeId} is already associated with symbol '{existingSymbol}', not '{normalizedSymbol}'.");
+        }
+    }
+
+    /// <summary>Reads immutable trade IDs used by account reconciliation.</summary>
+    public async Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT trade_id FROM trading.reconciliation_known_trades ORDER BY trade_id;", connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var ids = new HashSet<long>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            ids.Add(reader.GetInt64(0));
+        }
+
+        return ids;
+    }
+
+    private static void ValidateTradeReference(long tradeId, string symbol)
+    {
+        if (tradeId < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(tradeId), "Trade IDs cannot be negative.");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
+        var normalized = symbol.Trim().ToUpperInvariant();
+        if (normalized.Length > 20 || normalized.Any(static character => !char.IsAsciiLetterOrDigit(character)))
+        {
+            throw new ArgumentException("Trade symbols must contain only ASCII letters and digits and be at most 20 characters.", nameof(symbol));
+        }
+    }
+
     /// <summary>Enqueues a command durably; duplicate identity is accepted only for identical payload.</summary>
     public async Task<OutboxRecord> EnqueueAsync(
         OutboxRecord record,
