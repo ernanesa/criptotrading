@@ -41,6 +41,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Integração Worker de webhook | `dotnet test` Worker | PASS — configuração URL/allowlist/timeout validada fail-closed; default local preservado; nenhuma chamada externa realizada |
 | Evidência pós-reconciliação redigida | `dotnet test` Worker filtrado | PASS — contrato rejeita timestamps não-UTC, modo mutável, contagens inconsistentes e relatório saudável com drift; nenhuma credencial/payload é persistido |
 | Shadow operational quality gate | `./scripts/test-shadow-operational-gate.sh` | PASS — métricas locais de divergência, stale, recovery, intervention-rate e duração avaliadas com thresholds explícitos; sem rede/credenciais/ordens |
+| Validade de evidência de promoção | `./scripts/test-readiness-validator.sh` | PASS — datas inválidas/expiradas são rejeitadas; auditorias podem fixar `READINESS_AS_OF_UTC`; aprovação humana continua obrigatória |
 
 ## O que estes gates comprovam
 
