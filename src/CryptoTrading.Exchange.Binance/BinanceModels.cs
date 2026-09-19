@@ -33,5 +33,6 @@ public sealed record BinanceSymbolFilter(
     [property: JsonPropertyName("maxQty")] string? MaxQty = null,
     [property: JsonPropertyName("stepSize")] string? StepSize = null,
     [property: JsonPropertyName("minNotional")] string? MinNotional = null,
+    [property: JsonPropertyName("maxNotional")] string? MaxNotional = null,
     [property: JsonPropertyName("applyToMarket")] bool? ApplyToMarket = null,
     [property: JsonPropertyName("avgPriceMins")] int? AveragePriceMinutes = null);

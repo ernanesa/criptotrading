@@ -14,7 +14,9 @@ public sealed record BinanceSymbolTradingRules(
     decimal MinimumQuantity,
     decimal MaximumQuantity,
     decimal QuantityStepSize,
-    decimal MinimumNotional)
+    decimal MinimumNotional,
+    decimal MaximumNotional = 0m,
+    IReadOnlyList<BinanceSymbolFilter>? ExchangeFilters = null)
 {
     public BinanceOrderValidationResult ValidateLimitOrder(decimal price, decimal quantity)
     {
@@ -52,6 +54,13 @@ public sealed record BinanceSymbolTradingRules(
             violations.Add(new(
                 "NOTIONAL_BELOW_MINIMUM",
                 $"Order notional {Format(price * quantity)} is below minimum {Format(MinimumNotional)}."));
+        }
+
+        if (price > 0m && quantity > 0m && MaximumNotional > 0m && price * quantity > MaximumNotional)
+        {
+            violations.Add(new(
+                "NOTIONAL_ABOVE_MAXIMUM",
+                $"Order notional {Format(price * quantity)} is above maximum {Format(MaximumNotional)}."));
         }
 
         return new(violations.Count is 0, violations);
@@ -105,7 +114,28 @@ public static class BinanceSymbolTradingRulesParser
         var filters = symbol.Filters ?? throw new FormatException($"Symbol '{symbol.Symbol}' did not contain filters.");
         var price = RequireSingle(filters, "PRICE_FILTER", symbol.Symbol);
         var lot = RequireSingle(filters, "LOT_SIZE", symbol.Symbol);
-        var notional = RequireSingle(filters, "MIN_NOTIONAL", symbol.Symbol);
+        var minimumNotionalFilters = filters
+            .Where(filter => string.Equals(filter.FilterType, "MIN_NOTIONAL", StringComparison.Ordinal) ||
+                             string.Equals(filter.FilterType, "NOTIONAL", StringComparison.Ordinal))
+            .ToArray();
+        if (minimumNotionalFilters.Length is 0)
+        {
+            throw new FormatException($"Symbol '{symbol.Symbol}' is missing required MIN_NOTIONAL or NOTIONAL filter.");
+        }
+
+        var duplicateNotionalType = minimumNotionalFilters
+            .GroupBy(filter => filter.FilterType, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateNotionalType is not null)
+        {
+            throw new FormatException($"Symbol '{symbol.Symbol}' contains duplicate {duplicateNotionalType.Key} filters.");
+        }
+
+        var minimumNotional = minimumNotionalFilters
+            .Select(filter => ParsePositive(filter.MinNotional, "minNotional", symbol.Symbol))
+            .Max();
+        var notional = minimumNotionalFilters.SingleOrDefault(filter => string.Equals(filter.FilterType, "NOTIONAL", StringComparison.Ordinal));
+        var maximumNotional = notional is null ? 0m : ParseNonNegative(notional.MaxNotional, "maxNotional", symbol.Symbol);
 
         return new(
             symbol.Symbol,
@@ -116,7 +146,9 @@ public static class BinanceSymbolTradingRulesParser
             ParsePositive(lot.MinQty, "minQty", symbol.Symbol),
             ParseNonNegative(lot.MaxQty, "maxQty", symbol.Symbol),
             ParsePositive(lot.StepSize, "stepSize", symbol.Symbol),
-            ParsePositive(notional.MinNotional, "minNotional", symbol.Symbol));
+            minimumNotional,
+            maximumNotional,
+            filters.ToArray());
     }
 
     private static BinanceSymbolFilter RequireSingle(
