@@ -1,3 +1,5 @@
+#pragma warning disable CA2007 // Test assertions intentionally follow the task context.
+
 using Xunit;
 
 namespace CryptoTrading.Observability.Tests;
@@ -8,11 +10,11 @@ public sealed class ReliableAlertDeliveryTests
     public async Task RetriesATransientSinkFailureWithBoundedAttempts()
     {
         var sink = new FailingSink(failuresBeforeSuccess: 2);
-        var retrying = new RetryingTradingAlertSink(
+        using var retrying = new RetryingTradingAlertSink(
             sink,
             new TradingAlertRetryOptions { MaxAttempts = 3, InitialDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
 
-        await retrying.DeliverAsync(CreateAlert());
+        await retrying.DeliverAsync(CreateAlert()).ConfigureAwait(true);
 
         Assert.Equal(3, sink.Attempts);
         Assert.Equal(1, sink.Deliveries);
@@ -22,7 +24,7 @@ public sealed class ReliableAlertDeliveryTests
     public async Task ExhaustedRetriesPropagateFailureAndNeverSilentlySucceed()
     {
         var sink = new FailingSink(failuresBeforeSuccess: 10);
-        var retrying = new RetryingTradingAlertSink(
+        using var retrying = new RetryingTradingAlertSink(
             sink,
             new TradingAlertRetryOptions { MaxAttempts = 3, InitialDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
 
@@ -36,7 +38,7 @@ public sealed class ReliableAlertDeliveryTests
     public async Task CancellationIsNotRetried()
     {
         var sink = new FailingSink(failuresBeforeSuccess: 10);
-        var retrying = new RetryingTradingAlertSink(
+        using var retrying = new RetryingTradingAlertSink(
             sink,
             new TradingAlertRetryOptions { MaxAttempts = 5, InitialDelay = TimeSpan.FromSeconds(1), MaxDelay = TimeSpan.FromSeconds(1) });
         using var cancellation = new CancellationTokenSource();

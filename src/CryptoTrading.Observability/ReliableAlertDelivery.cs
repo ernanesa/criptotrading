@@ -36,7 +36,7 @@ public sealed record TradingAlertRetryOptions
 /// Retries transient sink failures with bounded exponential backoff. Cancellation
 /// is never retried and the final exception is propagated to the caller.
 /// </summary>
-public sealed class RetryingTradingAlertSink : ITradingAlertSink
+public sealed class RetryingTradingAlertSink : ITradingAlertSink, IDisposable, IAsyncDisposable
 {
     private readonly ITradingAlertSink inner;
     private readonly TradingAlertRetryOptions options;
@@ -83,5 +83,24 @@ public sealed class RetryingTradingAlertSink : ITradingAlertSink
             (double)options.MaxDelay.Ticks,
             options.InitialDelay.Ticks * Math.Pow(2, failedAttempt - 1));
         return TimeSpan.FromTicks((long)ticks);
+    }
+
+    public void Dispose()
+    {
+        if (inner is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (inner is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        Dispose();
     }
 }

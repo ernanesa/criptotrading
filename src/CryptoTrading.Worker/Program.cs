@@ -63,9 +63,10 @@ builder.Services.AddSingleton<IPaperExchange, PaperExchange>();
 builder.Services.AddSingleton<CryptoTrading.Observability.ITradingAlertSink>(serviceProvider =>
 {
     var options = serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value;
-    return string.IsNullOrWhiteSpace(options.AlertFileDirectory)
+    CryptoTrading.Observability.ITradingAlertSink sink = string.IsNullOrWhiteSpace(options.AlertFileDirectory)
         ? new CryptoTrading.Observability.InMemoryTradingAlertSink()
         : new CryptoTrading.Observability.JsonlTradingAlertSink(options.AlertFileDirectory);
+    return new CryptoTrading.Observability.RetryingTradingAlertSink(sink);
 });
 builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher>();
 builder.Services.AddSingleton<CryptoTrading.Shadow.ShadowReportWriter>(serviceProvider =>
