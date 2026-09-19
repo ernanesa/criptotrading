@@ -393,6 +393,9 @@ internal sealed class UserDataClientWebSocketTransport : IBinanceWebSocketTransp
 
     public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => client.ConnectAsync(uri, cancellationToken);
 
+    public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) =>
+        client.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+
     public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
