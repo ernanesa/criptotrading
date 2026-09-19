@@ -11,6 +11,19 @@ submeter ou cancelar ordens.
 ./scripts/test-shadow-soak.sh
 ```
 
+Por padrão, o runner repete a janela determinística três vezes e só retorna
+sucesso quando todas as repetições produzem um resumo aprovado. A quantidade
+pode ser ajustada para um lote local de 1 a 100 execuções:
+
+```bash
+SHADOW_SOAK_RUNS=10 ./scripts/test-shadow-soak.sh
+```
+
+Cada execução é exibida no terminal e os resumos são agregados no relatório
+Markdown redigido em `artifacts/shadow/`, incluindo o resultado individual de
+cada repetição. Uma falha em qualquer repetição faz o runner falhar fechado,
+mesmo que as demais sejam aprovadas.
+
 No Worker, o drill integrado é opt-in com `WORKER_SHADOW_ENABLED=true` e exige
 `WORKER_NO_TRADE=true`; ele executa uma única janela local no startup e não
 habilita o dispatcher de ordens.

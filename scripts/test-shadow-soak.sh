@@ -21,6 +21,12 @@ if [[ -n "${BINANCE_API_KEY:-}" || -n "${BINANCE_API_SECRET:-}" ]]; then
     exit 2
 fi
 
+soak_runs="${SHADOW_SOAK_RUNS:-3}"
+if [[ ! "$soak_runs" =~ ^[1-9][0-9]*$ ]] || (( soak_runs > 100 )); then
+    echo "Invalid SHADOW_SOAK_RUNS='$soak_runs'; expected an integer from 1 to 100." >&2
+    exit 2
+fi
+
 report_dir="$repo_root/artifacts/shadow"
 mkdir -p -- "$report_dir"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -42,22 +48,34 @@ test_command=(
 )
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-set +e
-"${test_command[@]}" > >(tee "$test_log") 2>&1
-test_status=$?
-set -e
+all_passed=1
+declare -a run_summaries=()
+for ((run_index = 1; run_index <= soak_runs; run_index++)); do
+    run_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-shadow-soak-run.XXXXXX")"
+    if "${test_command[@]}" >"$run_log" 2>&1; then
+        run_status=0
+    else
+        run_status=$?
+    fi
+    tee -a "$test_log" <"$run_log"
+
+    run_summary="$(rg -o 'Passed!.*' "$run_log" | tail -n 1 || true)"
+    if [[ -z "$run_summary" ]]; then
+        run_summary="No test summary was emitted."
+    fi
+    run_summaries+=("Run $run_index: $run_summary")
+    if (( run_status != 0 )) \
+        || [[ ! "$run_summary" =~ Passed! ]] \
+        || [[ ! "$run_summary" =~ Failed:[[:space:]]+0 ]] \
+        || [[ ! "$run_summary" =~ Total:[[:space:]]+[1-9][0-9]* ]]; then
+        all_passed=0
+    fi
+    rm -f -- "$run_log"
+done
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-summary="$(rg -o 'Passed!.*' "$test_log" | tail -n 1 || true)"
-if [[ -z "$summary" ]]; then
-    summary="No test summary was emitted."
-fi
-
 result="FAIL"
-if (( test_status == 0 )) \
-    && [[ "$summary" =~ Passed! ]] \
-    && [[ "$summary" =~ Failed:[[:space:]]+0 ]] \
-    && [[ "$summary" =~ Total:[[:space:]]+[1-9][0-9]* ]]; then
+if (( all_passed == 1 )); then
     result="PASS"
 fi
 
@@ -72,11 +90,15 @@ fi
     printf '%s\n' "- Finished (UTC): \`$finished_at\`"
     printf '%s\n' "- Harness: \`CryptoTrading.Backtesting.Tests\`"
     printf '%s\n' "- Filter: \`Category=ShadowSoak\`"
+    printf '%s\n' "- Repetitions: \`$soak_runs\`"
     echo "- Execution mode: local deterministic Shadow/Paper comparison"
     echo "- Network access: none"
     echo "- Credentials: none loaded or accepted"
     echo "- Exchange submit/cancel capability: none"
-    printf '%s\n' "- Test summary: \`$summary\`"
+    echo "- Test summaries:"
+    for run_summary in "${run_summaries[@]}"; do
+        printf '%s\n' "  - \`$run_summary\`"
+    done
     echo
     echo "## Evidence boundary"
     echo
