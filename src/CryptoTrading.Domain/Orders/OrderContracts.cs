@@ -136,6 +136,9 @@ public sealed class Order
 
     public DateTimeOffset UpdatedAtUtc { get; private set; }
 
+    /// <summary>Latest exchange-assigned order identity, when acknowledged by the venue.</summary>
+    public string? ExchangeOrderId { get; private set; }
+
     public IReadOnlyCollection<OrderTransition> Transitions => transitions.Values;
 
     public static Order Create(
@@ -184,6 +187,10 @@ public sealed class Order
         var transition = new OrderTransition(Status, target, idempotencyKey, occurredAtUtc, exchangeOrderId);
         transitions.Add(idempotencyKey, transition);
         Status = target;
+        if (!string.IsNullOrWhiteSpace(exchangeOrderId))
+        {
+            ExchangeOrderId = exchangeOrderId;
+        }
         UpdatedAtUtc = occurredAtUtc;
         return transition;
     }

@@ -82,6 +82,7 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<OrderProjectionService>();
 }
 // Hosted services are started in registration order. Migrations must complete
 // before reconciliation or account-stream persistence can be used.
