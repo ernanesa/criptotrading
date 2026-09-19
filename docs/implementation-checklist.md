@@ -36,7 +36,7 @@ itens em andamento ou bloqueados.
 - [x] Registrar o store no Worker sob flag explícita e aplicar migrations sob flag explícita.
 - [x] Implementar dispatcher PAPER com lease, retry, logs sem payload e default `NO_TRADE`.
 - [x] Implementar readiness real para banco e dependências.
-- [ ] Validar restart, crash recovery e reconstrução de estado.
+- [x] Validar restart, crash recovery de leases e idempotência durável; reconstrução completa de estado permanece pendente.
 
 ## Fase 3 — Binance read-only e market data
 
@@ -85,8 +85,8 @@ itens em andamento ou bloqueados.
 
 - [x] Implementar Strategy Health, estados `Healthy`/`NoTrade`/`Blocked` e razões auditáveis.
 - [x] Instrumentar logs JSON, correlação, métricas e `ActivitySource` local.
-- [ ] Criar alertas, redaction, dashboards e runbooks.
-- [ ] Criar threat model.
+- [x] Criar alertas, redaction, dashboards e runbooks (baseline local; alertas remotos ainda pendentes).
+- [x] Criar threat model local.
 - [ ] Executar backup/restore, chaos e soak test em shadow.
 
 ## Fase 8 — Readiness e canary
@@ -126,11 +126,13 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Order book | Snapshot/delta, sequência, gap, duplicata, quarantine e resync; 31 testes Binance aprovados | `src/CryptoTrading.Exchange.Binance/BinanceLocalOrderBook.cs` | `9217d4f` | Codex |
 | 2026-09-19 | Conta read-only | HMAC, account/balances/open orders/trades, clock drift e sem endpoints de ordem; 4 testes específicos | `src/CryptoTrading.Exchange.Binance/BinanceSpotAccountClient.cs` | `1d3f574` | Codex |
 | 2026-09-19 | PostgreSQL integration | Migrations, ledger, outbox lease/retry/idempotência via Compose com senha efêmera; teste reproduzível | `scripts/test-postgres-integration.sh`, `tests/CryptoTrading.Persistence.IntegrationTests` | `f7b073a` | Codex |
+| 2026-09-19 | Crash recovery | Lease expirado recuperado por novo store após reinício; owner antigo não consegue confirmar e não há segunda entrega após processamento | `tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs`, `docs/postgres-local.md` | Em andamento | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
 | 2026-09-19 | Reconciliação | Comparação de ledger com account/fills read-only e SafeMode em drift; 4 testes | `src/CryptoTrading.Reconciliation` | `eb12678` | Codex |
-| 2026-09-19 | Strategy Health | Healthy/NoTrade/Blocked, freshness, risco, reconciliação e kill switch | `src/CryptoTrading.Domain/Risk/StrategyHealth.cs` | Em andamento | Codex |
+| 2026-09-19 | Strategy Health | Healthy/NoTrade/Blocked, freshness, risco, reconciliação e kill switch | `src/CryptoTrading.Domain/Risk/StrategyHealth.cs` | `8ffb4d8` | Codex |
+| 2026-09-19 | Operação local | Runbook, threat model e recovery drill sem capital | `docs/runbook-local.md`, `docs/threat-model-local.md`, `docs/recovery-drill.md` | Em andamento: drill ainda não executado | Codex |
 
 ## Bloqueios e decisões
 
