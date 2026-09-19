@@ -1,10 +1,15 @@
 # Coleta local de klines públicos
 
-`CryptoTrading.PublicKlinesRecorder` coleta candles Spot históricos do
-endpoint público da Binance Spot Testnet (`/api/v3/klines`) e grava um journal
+`CryptoTrading.PublicKlinesRecorder` coleta candles Spot históricos de uma fonte
+pública permitida (`/api/v3/klines`) e grava um journal
 JSONL local com manifesto/fingerprint. O tool não aceita nem usa credenciais,
 não chama account/order endpoints e falha se `BINANCE_API_KEY` ou
 `BINANCE_API_SECRET` estiverem presentes.
+
+Por padrão a fonte é `testnet`. Para obter uma amostra histórica maior, a
+opção explícita `--source production-data` usa somente o host público
+`data-api.binance.vision`; isso não transforma os dados em dados de conta nem
+autoriza qualquer operação privada.
 
 ## Execução
 
@@ -19,6 +24,14 @@ dotnet run --project tools/CryptoTrading.PublicKlinesRecorder -c Release -- \
   --interval 1d \
   --output "$out" \
   --max-bars 180
+```
+
+Exemplo com a fonte pública histórica:
+
+```bash
+dotnet run --project tools/CryptoTrading.PublicKlinesRecorder -c Release -- \
+  --source production-data --symbol BTCUSDT --interval 1d \
+  --output "$out" --max-bars 180
 ```
 
 `--start` e `--end` são opcionais, mas quando usados devem ser timestamps
