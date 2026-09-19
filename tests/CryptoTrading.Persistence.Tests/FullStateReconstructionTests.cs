@@ -1,6 +1,5 @@
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Primitives;
-using CryptoTrading.Persistence;
 using Xunit;
 
 namespace CryptoTrading.Persistence.Tests;
