@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `79647a5`
+**Commit de código auditado:** `6bd3aec`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -13,8 +13,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 
 | Gate | Comando | Resultado |
 |---|---|---|
-| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 214 aprovados, 0 falhas, 0 skips |
-| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 4 testes, incluindo vínculo atômico journal/ledger/trade, migration 005, persistência idempotente e rejeição de símbolo conflitante |
+| Testes da solução | `./.tools/dotnet/dotnet test CryptoTrading.slnx --configuration Release --verbosity minimal --no-restore` | PASS — 219 aprovados, 0 falhas, 0 skips |
+| Integração PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 6 testes, incluindo migrations 005–007, persistência idempotente, canonicalização JSON e rejeição de símbolo conflitante |
 | Paper chaos/soak | `./scripts/test-paper-soak-chaos.sh` | PASS — 1 teste, 64 ordens simuladas, sem side effect duplicado |
 | Backup/restore isolado | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; recursos removidos |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
@@ -24,6 +24,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | API operational status | `dotnet run --configuration Release --no-build --no-launch-profile` + `GET /operational/status` | PASS — estado process-local read-only; `mutatingEndpointsEnabled=false`; nenhuma chamada à Binance |
 | RiskPolicy registry | `./scripts/test-postgres-integration.sh` | PASS — migration 006, hash/replay idempotente, aprovação segregada, ativação e supersession; 5 testes PostgreSQL |
 | Account stream persistence | `./scripts/test-postgres-integration.sh` | PASS — migration 007, JSON/hash canonicalizado, dedupe idempotente e leitura por janela; 6 testes PostgreSQL |
+| Modern account stream | `dotnet test` Binance + Worker | PASS — HMAC subscription ACK, parser de controles, persistência idempotente e gates SafeMode; 49 + 22 testes |
 
 ## O que estes gates comprovam
 
