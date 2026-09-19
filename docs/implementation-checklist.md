@@ -51,7 +51,7 @@ itens em andamento ou bloqueados.
 ## Fase 4 — OMS, reconciliação e risco
 
 - [x] Implementar máquina de estados de ordens e `clientOrderId` idempotente.
-- [ ] Garantir persist-before-submit e tratamento de timeout ambíguo.
+- [x] Garantir persist-before-submit e tratamento de timeout ambíguo.
 - [x] Implementar reconciliação read-only de saldos/fills com entrada em SafeMode em caso de drift.
 - [x] Implementar `RiskPolicy` versionada.
 - [x] Implementar limites de exposição, notional, daily loss e drawdown.
@@ -126,7 +126,8 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | Order book | Snapshot/delta, sequência, gap, duplicata, quarantine e resync; 31 testes Binance aprovados | `src/CryptoTrading.Exchange.Binance/BinanceLocalOrderBook.cs` | `9217d4f` | Codex |
 | 2026-09-19 | Conta read-only | HMAC, account/balances/open orders/trades, clock drift e sem endpoints de ordem; 4 testes específicos | `src/CryptoTrading.Exchange.Binance/BinanceSpotAccountClient.cs` | `1d3f574` | Codex |
 | 2026-09-19 | PostgreSQL integration | Migrations, ledger, outbox lease/retry/idempotência via Compose com senha efêmera; teste reproduzível | `scripts/test-postgres-integration.sh`, `tests/CryptoTrading.Persistence.IntegrationTests` | `f7b073a` | Codex |
-| 2026-09-19 | Crash recovery | Lease expirado recuperado por novo store após reinício; owner antigo não consegue confirmar e não há segunda entrega após processamento | `tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs`, `docs/postgres-local.md` | Em andamento | Codex |
+| 2026-09-19 | Crash recovery | Lease expirado recuperado por novo store após reinício; owner antigo não consegue confirmar e não há segunda entrega após processamento | `tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs`, `docs/postgres-local.md` | `4843123` | Codex |
+| 2026-09-19 | Submissão ambígua | Timeout consulta `clientOrderId` antes de retry; sem duplicação no dispatcher PAPER | `src/CryptoTrading.Worker`, testes Worker | `9b89445` | Codex |
 | 2026-09-19 | Risk operations | SafeMode/KillSwitch idempotente, reset autorizado e bloqueio de novas entradas | `src/CryptoTrading.Domain/Execution`, testes de domínio | `e080792` | Codex |
 | 2026-09-19 | Backtest metrics | Equity, retorno líquido, fees, slippage, turnover, drawdown, Sharpe parametrizado e planos OOS | `src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs` | `c06b038` | Codex |
 | 2026-09-19 | Market-data recorder | JSONL append-only por dia UTC, envelope v1, checksum SHA-256, retenção explícita e replay determinístico; 22 testes Backtesting | `src/CryptoTrading.Backtesting/MarketDataRecorder.cs`, `docs/market-data-recorder.md` | `83657bd` | Codex |
