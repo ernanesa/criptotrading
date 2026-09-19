@@ -30,15 +30,15 @@ itens em andamento ou bloqueados.
 
 - [x] Adicionar PostgreSQL 18 ao Docker Compose, com volume nomeado, bind local e healthcheck.
 - [ ] Criar migrations e política de backup local.
-- [ ] Implementar journal imutável e ledger de saldos, fees, posições e PnL.
+- [~] Implementar journal imutável e ledger de saldos, fees, posições e PnL (contrato/in-memory concluído; persistência ainda pendente).
 - [ ] Implementar outbox/inbox com lease, retry e deduplicação.
 - [ ] Implementar readiness real para banco e dependências.
 - [ ] Validar restart, crash recovery e reconstrução de estado.
 
 ## Fase 3 — Binance read-only e market data
 
-- [ ] Implementar adapter REST read-only.
-- [ ] Validar ambiente, endpoint e permissões fail-closed.
+- [x] Implementar adapter REST read-only (`ping`, `time`, `exchangeInfo`).
+- [x] Validar ambiente, endpoint e permissões fail-closed.
 - [ ] Implementar rate limits, retry, backoff e clock drift.
 - [ ] Implementar `exchangeInfo`, filtros e precisão por símbolo.
 - [ ] Implementar trades/candles via WebSocket e reconexão.
@@ -99,6 +99,9 @@ itens em andamento ou bloqueados.
 | 2026-09-19 | CI/gates | Restore, build Release, 9 testes, format e secret scan aprovados; Compose requer `POSTGRES_PASSWORD` explícita | `.github/workflows/quality.yml`, `scripts/scan-secrets.sh` | `64b333c` | Codex |
 | 2026-09-19 | Domínio | Primitives e relógio determinístico; build sem warnings e 9 testes aprovados | `src/CryptoTrading.Domain/Primitives`, `tests/CryptoTrading.Domain.Tests` | `319b4fc` | Codex |
 | 2026-09-19 | PostgreSQL local | Compose validado com senha temporária, bind em loopback e healthcheck | `compose.yaml`, `docs/postgres-local.md` | `66e982d` | Codex |
+| 2026-09-19 | Contabilidade | Journal/ledger in-memory com idempotência, balanceamento e atomicidade; 15 testes aprovados | `src/CryptoTrading.Domain/Accounting`, testes de domínio | `50cba3b` | Codex |
+| 2026-09-19 | Configuração | `.env` carregado localmente e validação Testnet fail-closed; 5 testes aprovados | `src/CryptoTrading.Configuration` | `9a11432` | Codex |
+| 2026-09-19 | Binance read-only | Cliente REST público com testes fake; 7 testes aprovados | `src/CryptoTrading.Exchange.Binance` | `9f5243f` | Codex |
 
 ## Bloqueios e decisões
 
