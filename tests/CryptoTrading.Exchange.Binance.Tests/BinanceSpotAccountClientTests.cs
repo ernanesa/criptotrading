@@ -25,7 +25,7 @@ public sealed class BinanceSpotAccountClientTests
         Assert.Single(account.Balances);
         Assert.Equal("USDT", account.Balances[0].Asset);
         Assert.Equal(2, handler.Requests.Count);
-        Assert.Equal("time", handler.Requests[0].RequestUri!.AbsolutePath.Trim('/').Split('/').Last());
+        Assert.Equal("/api/v3/time", handler.Requests[0].RequestUri!.AbsolutePath);
 
         var request = handler.Requests[1];
         Assert.Equal(HttpMethod.Get, request.Method);
@@ -56,7 +56,9 @@ public sealed class BinanceSpotAccountClientTests
         Assert.Single(orders);
         Assert.Single(trades);
         Assert.Equal(4, handler.Requests.Count); // one public time sync per signed read
-        Assert.All(handler.Requests.Where(request => request.RequestUri!.AbsolutePath.Contains("v3/", StringComparison.Ordinal)), request =>
+        Assert.All(handler.Requests.Where(request => request.RequestUri!.AbsolutePath.EndsWith("/v3/account", StringComparison.Ordinal) ||
+                                                     request.RequestUri.AbsolutePath.EndsWith("/v3/openOrders", StringComparison.Ordinal) ||
+                                                     request.RequestUri.AbsolutePath.EndsWith("/v3/myTrades", StringComparison.Ordinal)), request =>
         {
             Assert.Equal(HttpMethod.Get, request.Method);
             Assert.True(request.RequestUri!.Query.Contains("signature=", StringComparison.Ordinal));
@@ -75,7 +77,7 @@ public sealed class BinanceSpotAccountClientTests
         await Assert.ThrowsAsync<BinanceClockDriftException>(() => client.GetAccountAsync());
 
         Assert.Single(handler.Requests);
-        Assert.DoesNotContain(handler.Requests, request => request.RequestUri!.AbsolutePath.Contains("v3/", StringComparison.Ordinal));
+        Assert.DoesNotContain(handler.Requests, request => request.RequestUri!.AbsolutePath.EndsWith("/v3/account", StringComparison.Ordinal));
     }
 
     [Fact]

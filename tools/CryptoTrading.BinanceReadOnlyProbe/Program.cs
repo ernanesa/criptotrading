@@ -5,6 +5,7 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Exchange.Binance;
 using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 
 var configuration = new ConfigurationBuilder()
     .AddLocalDotEnv()
@@ -54,6 +55,7 @@ var options = new BinanceAuthenticatedClientOptions
     ApiSecret = apiSecret
 };
 
+var operation = "account";
 try
 {
     using var httpClient = new HttpClient
@@ -64,7 +66,9 @@ try
     httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading/readonly-probe");
     var client = new BinanceSpotAccountClient(httpClient, options);
     var account = await client.GetAccountAsync().ConfigureAwait(false);
+    operation = "openOrders";
     var openOrders = await client.GetOpenOrdersAsync(symbol).ConfigureAwait(false);
+    operation = "trades";
     var trades = await client.GetMyTradesAsync(symbol, new BinanceTradeQuery(Limit: 100)).ConfigureAwait(false);
 
     Console.WriteLine("Binance Spot Testnet authenticated read-only probe: OK");
@@ -72,9 +76,25 @@ try
     Console.WriteLine("No order, cancel, transfer, withdrawal, margin, or futures endpoint was called.");
     return 0;
 }
+catch (JsonException exception)
+{
+    const string validationPrefix = "Binance authenticated response validation failed: ";
+    var reason = exception.Message.StartsWith(validationPrefix, StringComparison.Ordinal)
+        ? exception.Message[validationPrefix.Length..]
+        : "JSON schema parsing failed";
+    return Fail($"Binance read-only response failed validation during {operation}: {reason} Response body withheld.");
+}
 catch (OperationCanceledException)
 {
     return Fail("The read-only probe timed out or was cancelled.");
+}
+catch (BinanceApiException exception)
+{
+    var status = exception.StatusCode is { } statusCode
+        ? $"HTTP {(int)statusCode} ({statusCode})"
+        : "HTTP status unavailable";
+    var endpoint = string.IsNullOrWhiteSpace(exception.Endpoint) ? "endpoint unavailable" : exception.Endpoint;
+    return Fail($"Binance rejected the read-only request to {endpoint} ({status}); response body withheld.");
 }
 catch (Exception exception)
 {
