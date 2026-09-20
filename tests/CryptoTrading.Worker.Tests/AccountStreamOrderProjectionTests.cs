@@ -30,6 +30,16 @@ public sealed class AccountStreamOrderProjectionTests
     }
 
     [Fact]
+    public async Task PendingCancelExecutionReportRemainsOpenUntilTerminalOutcome()
+    {
+        var store = new RecordingStore();
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("PENDING_CANCEL"));
+
+        var record = Assert.Single(store.Records);
+        Assert.Equal("PENDING_CANCEL", record.Status);
+    }
+
+    [Fact]
     public async Task UnknownStatusFailsClosed()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

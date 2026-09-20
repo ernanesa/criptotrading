@@ -10,6 +10,10 @@ public enum OrderStatus
     Submitted,
     Acknowledged,
     PartiallyFilled,
+    /// <summary>The venue outcome is not yet provable; new exposure must remain blocked.</summary>
+    Unknown,
+    /// <summary>A cancel request was accepted locally but its venue outcome is pending.</summary>
+    CancelPending,
     Filled,
     Cancelled,
     Rejected,
@@ -300,9 +304,11 @@ public sealed class Order
         {
             (OrderStatus.Created, OrderStatus.Validated or OrderStatus.Rejected or OrderStatus.Expired) => true,
             (OrderStatus.Validated, OrderStatus.Submitted or OrderStatus.Rejected or OrderStatus.Expired) => true,
-            (OrderStatus.Submitted, OrderStatus.Acknowledged or OrderStatus.Rejected or OrderStatus.Expired) => true,
-            (OrderStatus.Acknowledged, OrderStatus.PartiallyFilled or OrderStatus.Filled or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired) => true,
-            (OrderStatus.PartiallyFilled, OrderStatus.Filled or OrderStatus.Cancelled or OrderStatus.Expired) => true,
+            (OrderStatus.Submitted, OrderStatus.Acknowledged or OrderStatus.Unknown or OrderStatus.CancelPending or OrderStatus.Rejected or OrderStatus.Expired) => true,
+            (OrderStatus.Acknowledged, OrderStatus.PartiallyFilled or OrderStatus.Filled or OrderStatus.Unknown or OrderStatus.CancelPending or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired) => true,
+            (OrderStatus.PartiallyFilled, OrderStatus.Filled or OrderStatus.Unknown or OrderStatus.CancelPending or OrderStatus.Cancelled or OrderStatus.Expired) => true,
+            (OrderStatus.CancelPending, OrderStatus.Unknown or OrderStatus.PartiallyFilled or OrderStatus.Filled or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired) => true,
+            (OrderStatus.Unknown, OrderStatus.Acknowledged or OrderStatus.PartiallyFilled or OrderStatus.Filled or OrderStatus.CancelPending or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired) => true,
             _ => false,
         };
 }

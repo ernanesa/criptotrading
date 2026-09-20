@@ -21,7 +21,7 @@ internal static class AccountStreamOrderProjection
         var status = execution.OrderStatus.Trim().ToUpperInvariant();
         return status switch
         {
-            "NEW" or "PARTIALLY_FILLED" => store.UpsertOpenOrderAsync(
+            "NEW" or "PARTIALLY_FILLED" or "PENDING_CANCEL" => store.UpsertOpenOrderAsync(
                 new LocalOpenOrderRecord(
                     execution.Symbol,
                     execution.OrderId,
