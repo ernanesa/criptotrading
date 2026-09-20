@@ -82,6 +82,9 @@ Testnet e não envia nem cancela ordens. Como o vínculo de trades externos ao
 journal ainda é conservador, qualquer trade desconhecido ativa `SafeMode`. Cada
 execução acrescenta somente um resumo JSONL redigido em
 `WORKER_RECONCILIATION_REPORT_DIRECTORY` (por padrão `artifacts/reconciliation`);
+`WORKER_RUNTIME_AUDIT_PATH` (por padrão `artifacts/runtime/runtime-transitions.jsonl`)
+registra as transições do supervisor em JSONL encadeado por hash. O arquivo é
+evidência operacional local, não contém credenciais nem autoriza resets.
 balances, payloads e segredos não são gravados.
 Sem credenciais, a configuração deve permanecer desabilitada; o startup não
 faz chamadas autenticadas por padrão.

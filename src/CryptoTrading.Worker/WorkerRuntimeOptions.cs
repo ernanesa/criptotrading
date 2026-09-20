@@ -71,6 +71,9 @@ public sealed class WorkerRuntimeOptions
 
     public string ReconciliationReportDirectory { get; set; } = "artifacts/reconciliation";
 
+    /// <summary>Append-only local runtime lifecycle journal path.</summary>
+    public string RuntimeAuditPath { get; set; } = "artifacts/runtime/runtime-transitions.jsonl";
+
     /// <summary>Optional local JSONL alert directory; blank keeps the in-memory sink.</summary>
     public string AlertFileDirectory { get; set; } = string.Empty;
 
@@ -273,6 +276,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RECONCILIATION_REPORT_DIRECTORY is required when reconciliation is enabled."]);
+        }
+
+        if (string.IsNullOrWhiteSpace(RuntimeAuditPath))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_RUNTIME_AUDIT_PATH cannot be empty."]);
         }
 
         if (PersistenceEnabled && string.IsNullOrWhiteSpace(PostgresConnectionString))
