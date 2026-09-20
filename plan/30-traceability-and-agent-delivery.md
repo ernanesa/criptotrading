@@ -34,6 +34,20 @@ O revisor independente recebe fontes canônicas e não o parecer do primeiro rev
 
 Nenhum agente publica, altera risco/credenciais ou executa integração externa como consequência implícita de uma revisão.
 
+## Contrato de contexto dos agentes
+
+O agente executor recebe um envelope compacto por tarefa: `objective`,
+`constraints`, `allowed_paths`, `non_goals`, `invariants`, `base_commit`,
+`validation_commands` e `known_conflicts`. Ao concluir, devolve `commit`,
+`files_changed`, `validation_results`, `residual_risks`, `assumptions` e
+`next_action`. O consolidator recarrega os arquivos atuais antes de mesclar;
+nenhum resumo é considerado evidência suficiente.
+
+Entre tarefas, o contexto ativo é reiniciado a partir desse handoff. Decisões
+substituídas permanecem no histórico com `SUPERSEDES`, mas são excluídas do
+prompt e do RAG ativo. O RAG pode localizar fontes por IDs, hashes e caminhos,
+mas nunca autoriza ordens, risco, credenciais ou alterações externas.
+
 ## Validator e evidência
 
 O manifesto canônico é `traceability.yaml` e segue `templates/traceability-manifest.yaml`; intervalos como `US-001..012` não são referências válidas. O validator deve detectar:
