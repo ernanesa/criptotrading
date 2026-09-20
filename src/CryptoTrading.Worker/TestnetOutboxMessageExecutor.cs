@@ -159,10 +159,14 @@ public sealed class TestnetOutboxMessageExecutor(
             "NEW" => (OrderStatus?)null,
             "PARTIALLY_FILLED" => OrderStatus.PartiallyFilled,
             "FILLED" => OrderStatus.Filled,
+            "PENDING_CANCEL" => OrderStatus.CancelPending,
             "CANCELED" or "CANCELLED" => OrderStatus.Cancelled,
             "REJECTED" => OrderStatus.Rejected,
-            "EXPIRED" => OrderStatus.Expired,
-            _ => throw new InvalidOperationException($"Unsupported Binance order status '{result.Status}'.")
+            "EXPIRED" or "EXPIRED_IN_MATCH" => OrderStatus.Expired,
+            // Preserve a venue status we do not yet understand as an open
+            // Unknown order. Completing the outbox is safe only because this
+            // projection is durable and reconciliation remains authoritative.
+            _ => OrderStatus.Unknown
         };
         if (target is not { } finalStatus)
         {
