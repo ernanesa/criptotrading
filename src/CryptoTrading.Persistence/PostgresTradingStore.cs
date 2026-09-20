@@ -153,6 +153,23 @@ public interface IExecutionAccountingStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable, point-in-time accounting inputs consumed by autonomous risk evaluation.</summary>
+public interface IAutonomyRiskContextStore
+{
+    Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(
+        Symbol symbol,
+        Asset quoteAsset,
+        DateTimeOffset dayStartUtc,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record AutonomyRiskContextSnapshot(
+    decimal RealizedDailyLossNotional,
+    decimal PositionCostNotional,
+    decimal PositionQuantity,
+    bool HasPositionBasis,
+    DateTimeOffset AsOfUtc);
+
 /// <summary>Durable append-only store for KillSwitch/SafeMode transitions.</summary>
 public interface IOperationalControlAuditStore
 {
@@ -209,7 +226,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1127,6 +1144,50 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new(command.ExecutionId, entry, update.RealizedPnlQuote, averageCost, false);
+    }
+
+    public async Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(
+        Symbol symbol,
+        Asset quoteAsset,
+        DateTimeOffset dayStartUtc,
+        CancellationToken cancellationToken = default)
+    {
+        if (dayStartUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Risk-context boundaries must be UTC.", nameof(dayStartUtc));
+        }
+
+        var dayEndUtc = dayStartUtc.AddDays(1);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0),
+                COALESCE((SELECT quantity FROM trading.position_cost_basis WHERE symbol = @symbol), 0),
+                COALESCE((SELECT cost_quote FROM trading.position_cost_basis WHERE symbol = @symbol), 0),
+                EXISTS (SELECT 1 FROM trading.position_cost_basis WHERE symbol = @symbol)
+            FROM trading.execution_fills
+            WHERE symbol = @symbol
+              AND quote_asset = @quote_asset
+              AND occurred_at >= @day_start
+              AND occurred_at < @day_end;
+            """, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol.Value));
+        command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, quoteAsset.Value));
+        command.Parameters.Add(Parameter("day_start", NpgsqlDbType.TimestampTz, dayStartUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("day_end", NpgsqlDbType.TimestampTz, dayEndUtc.UtcDateTime));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("PostgreSQL returned no autonomy risk-context row.");
+        }
+
+        return new(
+            reader.GetDecimal(0),
+            reader.GetDecimal(2),
+            reader.GetDecimal(1),
+            reader.GetBoolean(3),
+            DateTimeOffset.UtcNow);
     }
 
     public async Task<Money> GetBalanceAsync(

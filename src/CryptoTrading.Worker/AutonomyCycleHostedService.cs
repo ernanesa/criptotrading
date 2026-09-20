@@ -24,6 +24,7 @@ internal sealed class AutonomyCycleHostedService(
     IBinanceSpotMarketClient marketClient,
     IBinanceSpotAccountClient accountClient,
     IRiskPolicyStore riskPolicyStore,
+    IAutonomyRiskContextStore riskContextStore,
     IOutboxStore outboxStore,
     IAutonomyCheckpointStore checkpointStore,
     IAsyncOperationalControl operationalControl,
@@ -107,16 +108,41 @@ internal sealed class AutonomyCycleHostedService(
 
         var btc = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase));
         var btcQuantity = ParseBalance(btc?.Free) + ParseBalance(btc?.Locked);
+        var quoteAsset = new Asset("USDT");
+        var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
+        var availableQuoteLiquidity = ParseBalance(quote?.Free);
+        var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        var accounting = await riskContextStore.ReadAutonomyRiskContextAsync(
+            new Symbol(runtime.AutonomySymbol),
+            quoteAsset,
+            dayStartUtc,
+            cancellationToken).ConfigureAwait(false);
         var latest = closed[^1];
+        var positionBasisConsistent = btcQuantity <= 0m
+            ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
+            : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m;
+        // A high-water mark is not yet persisted. Keeping the context incomplete
+        // deliberately blocks new exposure instead of treating drawdown as zero.
+        var riskContextComplete = false;
+        var riskContextReason = !positionBasisConsistent
+            ? "POSITION_BASIS_DRIFT"
+            : "HIGH_WATER_MARK_UNAVAILABLE";
         var portfolio = new PortfolioSnapshot(
-            new Dictionary<Asset, Money>(),
+            new Dictionary<Asset, Money>
+            {
+                [quoteAsset] = new Money(availableQuoteLiquidity, quoteAsset),
+                [new Asset("BTC")] = new Money(btcQuantity, new Asset("BTC")),
+            },
             btcQuantity * latest.ClosePrice.Value,
+            accounting.RealizedDailyLossNotional,
             0m,
-            0m);
+            accounting.PositionCostNotional,
+            riskContextComplete,
+            riskContextReason);
         var marketRisk = new MarketRiskSnapshot(
             expectedSlippageBps: 5m,
             volatilityBps: 0m,
-            availableLiquidityNotional: runtime.AutonomyEntryTargetNotional * 10m,
+            availableLiquidityNotional: availableQuoteLiquidity,
             latest.CloseTimeUtc);
         var runtimeSnapshot = runtimeSupervisor.Snapshot;
         var effectiveControl = runtimeSnapshot.CanCreateNewExposure
@@ -155,10 +181,20 @@ internal sealed class AutonomyCycleHostedService(
         AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
     }
 
-    private static decimal ParseBalance(string? value) =>
-        decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0m
-            ? parsed
-            : 0m;
+    private static decimal ParseBalance(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return 0m;
+        }
+
+        if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) || parsed < 0m)
+        {
+            throw new InvalidOperationException("Binance returned an invalid account balance.");
+        }
+
+        return parsed;
+    }
 
     private static List<CloseBar> ValidateAndMapKlines(
         IReadOnlyList<BinanceSpotKline> klines,

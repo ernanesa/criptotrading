@@ -27,6 +27,7 @@ public static class RiskReasonCodes
     public const string SlippageLimit = "SLIPPAGE_LIMIT";
     public const string VolatilityLimit = "VOLATILITY_LIMIT";
     public const string LiquidityLimit = "LIQUIDITY_LIMIT";
+    public const string RiskContextUnavailable = "RISK_CONTEXT_UNAVAILABLE";
 }
 
 /// <summary>Immutable, versioned hard limits. Values are decimal quote-currency notional.</summary>
@@ -169,7 +170,8 @@ public sealed record RiskEvaluationRequest
         DateTimeOffset evaluatedAt,
         bool emergencyStopActive = false,
         bool withdrawalRequested = false,
-        MarketRiskSnapshot? marketRisk = null)
+        MarketRiskSnapshot? marketRisk = null,
+        bool riskContextComplete = true)
     {
         ValidateNonNegative(requestedTargetNotional, nameof(requestedTargetNotional));
         ValidateNonNegative(currentExposureNotional, nameof(currentExposureNotional));
@@ -189,6 +191,7 @@ public sealed record RiskEvaluationRequest
         EmergencyStopActive = emergencyStopActive;
         WithdrawalRequested = withdrawalRequested;
         MarketRisk = marketRisk;
+        RiskContextComplete = riskContextComplete;
     }
 
     /// <summary>Absolute post-order target exposure used by the evaluator.</summary>
@@ -201,6 +204,8 @@ public sealed record RiskEvaluationRequest
     public bool EmergencyStopActive { get; }
     public bool WithdrawalRequested { get; }
     public MarketRiskSnapshot? MarketRisk { get; }
+    /// <summary>False when a required accounting/high-water-mark input is unavailable.</summary>
+    public bool RiskContextComplete { get; }
 
     private static void ValidateNonNegative(decimal value, string parameterName)
     {
@@ -243,6 +248,11 @@ public static class RiskEvaluator
         if (request.EmergencyStopActive)
         {
             return Block(RiskDecisionStatus.EmergencyBlocked, requested, policy, RiskReasonCodes.EmergencyStop);
+        }
+
+        if (!request.RiskContextComplete)
+        {
+            return BlockNewExposure(request, policy, RiskReasonCodes.RiskContextUnavailable);
         }
 
         if (request.DailyLoss >= policy.MaxDailyLoss)

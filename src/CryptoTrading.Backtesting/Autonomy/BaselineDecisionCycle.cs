@@ -102,7 +102,8 @@ public sealed class BaselineDecisionCycle
             request.Portfolio.Drawdown,
             decision.CloseTimeUtc,
             request.EvaluatedAtUtc,
-            marketRisk: request.MarketRisk);
+            marketRisk: request.MarketRisk,
+            riskContextComplete: request.Portfolio.RiskContextComplete);
         var intent = new OrderIntent(
             identity.OrderId,
             identity.ClientOrderId,

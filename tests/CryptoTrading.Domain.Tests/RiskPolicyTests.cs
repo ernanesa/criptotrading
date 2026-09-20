@@ -81,6 +81,18 @@ public sealed class RiskPolicyTests
     }
 
     [Fact]
+    public void IncompleteRiskContextRejectsNewExposureFailClosed()
+    {
+        var decision = RiskEvaluator.Evaluate(
+            Policy,
+            Request(requested: 10m, riskContextComplete: false));
+
+        Assert.Equal(RiskDecisionStatus.Rejected, decision.Status);
+        Assert.Equal(0m, decision.AuthorizedTargetNotional);
+        Assert.Contains(RiskReasonCodes.RiskContextUnavailable, decision.ReasonCodes);
+    }
+
+    [Fact]
     public void EmergencyStopAndWithdrawalsAreEmergencyBlocked()
     {
         var emergency = RiskEvaluator.Evaluate(Policy, Request(requested: 10m, emergency: true));
@@ -108,7 +120,8 @@ public sealed class RiskPolicyTests
         decimal drawdown = 0m,
         TimeSpan? age = null,
         bool emergency = false,
-        bool withdrawal = false)
+        bool withdrawal = false,
+        bool riskContextComplete = true)
     {
         var evaluatedAt = DateTimeOffset.UtcNow;
         return new(
@@ -119,6 +132,7 @@ public sealed class RiskPolicyTests
             evaluatedAt - (age ?? TimeSpan.FromSeconds(1)),
             evaluatedAt,
             emergency,
-            withdrawal);
+            withdrawal,
+            riskContextComplete: riskContextComplete);
     }
 }

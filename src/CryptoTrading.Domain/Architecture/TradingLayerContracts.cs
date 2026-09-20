@@ -22,7 +22,10 @@ public sealed record PortfolioSnapshot(
     IReadOnlyDictionary<Asset, Money> Balances,
     decimal GrossExposureNotional,
     decimal DailyLossNotional,
-    decimal Drawdown);
+    decimal Drawdown,
+    decimal PositionCostNotional = 0m,
+    bool RiskContextComplete = true,
+    string? RiskContextUnavailableReason = null);
 
 /// <summary>Strategy produces intents only; it cannot submit or persist an order.</summary>
 public interface IStrategy
