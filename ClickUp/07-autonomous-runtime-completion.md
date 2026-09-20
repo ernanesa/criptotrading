@@ -7,6 +7,22 @@
 **Source:** `plan/31-autonomous-runtime-completion.md`  
 **Scope:** fechar o ciclo executável market-data → decisão → risco → outbox → OMS → exchange → projeção → reconciliação → saúde.
 
+## Atualização de implementação — 2026-09-20
+
+- `TASK-US-193-03-01`: reserva de taxa configurável no planner (`2bab4c1`),
+  com BUY exigindo headroom estrito e SELL preservado.
+- `TASK-US-195-04-01`: resolução autoritativa de `UNKNOWN`/`PENDING_CANCEL` em
+  snapshot fresco (`cf34b65`); ausência na lista open orders continua
+  inconclusiva e bloqueante.
+- `TASK-US-196-02-02`: contrato puro de TTL/cancelamento/replan e residual
+  (`aae53e1`) foi criado e testado; wiring mutável do Worker/adapter Testnet
+  permanece **In Progress** e não autoriza cancelamento real.
+
+Essas fatias não alteram o status do épico: produção/canary continuam
+bloqueados por persistência PostgreSQL real, integração stream→decisão,
+cancelamento mutável, reconciliação terminal por fills, chaos/soak Testnet e
+aprovação Go/No-Go.
+
 ## Regras comuns dos cartões
 
 - Produção inicial é local/Testnet; nenhuma credencial deve aparecer no repositório.

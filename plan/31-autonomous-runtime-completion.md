@@ -155,3 +155,18 @@ Test ladder: architecture → unit/property → state machine → PostgreSQL →
 ## 12. Handoff para implementação
 
 Cada cartão deve ser executado na ordem `contrato → migration/store → implementação pura → adapter/host → unit → integration → observability → docs/evidence`. O modelo executor deve parar se qualquer invariant, arquivo permitido, comando de validação ou condição de segurança não for atendido; não deve compensar lacunas com mocks silenciosos.
+
+## 13. Estado de implementação em 2026-09-20
+
+As seguintes fatias já possuem código e testes locais, mas não encerram o gate
+de promoção: reserva de taxa no sizing (`2bab4c1`), resolução autoritativa de
+ordens ambíguas por snapshot fresco (`cf34b65`) e política pura de TTL,
+cancelamento pendente e residual (`aae53e1`). O cancelamento mutável ainda não
+está conectado ao outbox/adapter Testnet; resoluções terminais dependem de
+fills/user-data e a reconciliação append-only dedicada ainda não existe.
+
+O contexto dos agentes é parte do controle operacional: `AGENTS.md`,
+`.agents/rules/context-state.md` e a skill `context-state-manager` exigem
+envelope mínimo, RAG seletivo verificado no checkout, handoff compacto e
+proveniência `SUPERSEDED`. Esses artefatos reduzem contexto carregado, mas não
+substituem testes, policy state ou evidência financeira.
