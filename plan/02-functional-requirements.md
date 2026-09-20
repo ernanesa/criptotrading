@@ -173,3 +173,7 @@
 - **RF-177** Impedir mudança simultânea não identificável de modelo, dados, execution policy e RiskPolicy.
 - **RF-178** Permitir fallback para `NO_TRADE` quando champion anterior não for seguro para o contexto atual.
 - **RF-179** Fornecer RAG/GraphRAG local no Research Plane com citações, autoridade, versão, frescor, detecção de conflito e confirmação contra o commit atual, sem acesso ao hot path, credenciais ou autorização de risco/ordem.
+- **RF-180** Consultar a tabela de comissão efetiva da conta e do símbolo antes da execução, preservando taxas maker/taker/buyer/seller, componentes special/tax, desconto BNB, fonte, timestamp e validade.
+- **RF-181** Calcular o custo de execução usando a taxa aplicável à tática e ao lado da ordem, sem assumir desconto, rebate ou condição de BNB que não esteja habilitado e comprovado.
+- **RF-182** Bloquear novas entradas com `NO_TRADE`/`SafeMode` quando a comissão efetiva estiver ausente, stale, incompleta ou impossível de valorar no ativo cobrado.
+- **RF-183** Comparar comissão estimada e comissão efetivamente cobrada em cada fill, registrar o desvio e alimentar atribuição de custo, PnL líquido e execution drift.

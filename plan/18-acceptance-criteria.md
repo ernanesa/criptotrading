@@ -204,6 +204,25 @@ Todo PBI deve atender DoD e seus critérios específicos. Para código live, acc
 
 **Given** uma fase A2 concluída, **when** os gates da próxima fase são avaliados, **then** só há promoção com critérios objetivos, evidence bundle, aprovação requerida, capability correta e rollback testado.
 
+## AC-FEE-01 Comissão efetiva e custo líquido
+
+**Given** uma decisão Spot Testnet com símbolo, lado e tática de execução definidos,
+**when** o runtime prepara o sizing e o custo esperado,
+**then** consulta uma tabela de comissão autenticada e vigente para o símbolo,
+seleciona a taxa aplicável (maker/taker e buyer/seller conforme o caso), registra
+fonte/timestamp/hash/validade e aplica uma reserva conservadora que não presume
+desconto BNB, rebate ou comissão especial sem evidência habilitante.
+
+**Given** a tabela está ausente, stale, incompleta, inconsistente ou o ativo da
+comissão não pode ser valorado,
+**when** o ciclo tenta criar nova exposição,
+**then** retorna `NO_TRADE`/`SafeMode`, não envia a ordem e registra o reason code.
+
+**Given** um fill contém comissão efetiva,
+**when** a contabilidade registra o evento,
+**then** preserva quantidade, ativo, valuation source/time, order/trade IDs e
+compara estimativa versus realizado para PnL líquido e execution-drift.
+
 ## Critério para release canary
 
 - todos os ACs críticos vinculados explicitamente na `PromotionReadinessMatrix`;

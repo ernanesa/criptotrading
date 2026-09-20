@@ -17,6 +17,12 @@
 - `TASK-US-196-02-02`: contrato puro de TTL/cancelamento/replan e residual
   (`aae53e1`) foi criado e testado; wiring mutável do Worker/adapter Testnet
   permanece **In Progress** e não autoriza cancelamento real.
+- Novo requisito de custo efetivo: a reserva fixa de 25 bps não substitui a
+  consulta da comissão vigente por símbolo. A implementação deverá consultar,
+  versionar e validar maker/taker, buyer/seller, special/tax e desconto BNB;
+  aplicar a taxa correta ao edge/sizing; e comparar comissão estimada com o
+  fill real. Ausência, stale, schema parcial ou valuation insegura resultam em
+  `NO_TRADE`/`SafeMode`.
 
 Essas fatias não alteram o status do épico: produção/canary continuam
 bloqueados por persistência PostgreSQL real, integração stream→decisão,
@@ -129,6 +135,14 @@ aprovação Go/No-Go.
 
 **AC-AUTONOMY-05 — Given** execução Testnet habilitada; **When** RiskPolicy está ausente, expirada, incompatível ou qualquer guard está unhealthy; **Then** startup falha seguro ou o ciclo retorna rejeição/SafeMode, sem aumentar target nem enviar ordem.
 
+**AC-FEE-01 — Given** símbolo, lado e tática de execução conhecidos; **When** o
+runtime calcula sizing/custo; **Then** consulta e versiona a comissão efetiva da
+conta/símbolo, escolhe maker/taker e buyer/seller de forma conservadora, não
+presume desconto BNB/special/tax sem evidência e persiste fonte/timestamp/hash.
+Snapshot ausente, stale, parcial ou sem valuation bloqueia novas entradas.
+Comissão efetiva do fill é comparada à estimativa e divergência acima do limite
+entra em `EXECUTION_FEE_DRIFT`, alerta e SafeMode/reconciliação.
+
 ### Tasks
 
 - **TASK-US-193-01 — Startup gate de RiskPolicy** (`src/CryptoTrading.Worker/WorkerRuntimeOptions.cs`, `src/CryptoTrading.Configuration`)
@@ -143,6 +157,11 @@ aprovação Go/No-Go.
   - **SUBTASK-TASK-US-193-03-01:** implementar notional, exposição, fee reserve, daily loss e DD.
   - **SUBTASK-TASK-US-193-03-02:** implementar spread, slippage, volatilidade, depth, turnover e edge.
   - **SUBTASK-TASK-US-193-03-03:** testar limites, arredondamento e rejeições próximas ao bound.
+  - **SUBTASK-TASK-US-193-03-04:** definir `EffectiveCommissionSnapshot` com símbolo, ambiente, account scope, maker/taker, buyer/seller, standard/special/tax, desconto BNB, fonte, timestamp, validade e hash canônico.
+  - **SUBTASK-TASK-US-193-03-05:** implementar consulta autenticada da comissão vigente (`GET /api/v3/account/commission`) com endpoint allowlisted, clock drift, retry somente read-only e resposta fail-closed.
+  - **SUBTASK-TASK-US-193-03-06:** selecionar a taxa conservadora conforme lado e tática; só aplicar desconto BNB quando habilitação, saldo e valuation forem comprovados.
+  - **SUBTASK-TASK-US-193-03-07:** bloquear nova exposição e emitir reason code quando o snapshot estiver ausente, stale, parcial, inconsistente ou impossível de valorar.
+  - **SUBTASK-TASK-US-193-03-08:** testar maker/taker, buyer/seller, special/tax, BNB ativo/inativo, mudança entre ciclos e schema desconhecido.
 - **TASK-US-193-04 — Guards operacionais** (`src/CryptoTrading.Application`, `src/CryptoTrading.Worker`)
   - **SUBTASK-TASK-US-193-04-01:** bloquear com DB/outbox/queue/rate-limit/reconciliation unhealthy.
   - **SUBTASK-TASK-US-193-04-02:** bloquear Unknown order e StrategyHealth degraded.
@@ -151,6 +170,7 @@ aprovação Go/No-Go.
   - **SUBTASK-TASK-US-193-05-01:** registrar RiskApproved/Adjusted/Rejected com policy hash.
   - **SUBTASK-TASK-US-193-05-02:** atualizar matriz de promoção e exemplos Testnet.
   - **SUBTASK-TASK-US-193-05-03:** anexar property/integration report e residual risk.
+  - **SUBTASK-TASK-US-193-05-04:** persistir no decision trace o hash/versão/fonte/validade da comissão usada no sizing e no custo esperado.
 
 ## US-194 — Completar OMS e projeção financeira
 
@@ -215,7 +235,7 @@ aprovação Go/No-Go.
 ## US-196 — Implementar execution planner determinístico
 
 **Valor:** uma decisão autorizada vira ordens economicamente limitadas, sem overfill ou retry cego.  
-**Dependências:** US-193, US-194, US-195. **Não inclui:** market making.
+**Dependências:** US-193, US-194, US-195. **Não inclui:** market making nem sizing baseado em taxa fixa quando houver snapshot efetivo disponível.
 
 **AC-AUTONOMY-08 — Given** target autorizado, preço/depth recentes e filtros exchangeInfo; **When** houver partial fill, timeout ou custo fora do limite; **Then** o planner usa passive limit por padrão, calcula apenas residual, cancela/replaneja com novo attempt determinístico ou retorna `NO_TRADE`.
 
@@ -237,10 +257,14 @@ aprovação Go/No-Go.
   - **SUBTASK-TASK-US-196-04-01:** revalidar exchangeInfo, lot size, tick size e fee reserve.
   - **SUBTASK-TASK-US-196-04-02:** impedir cumulative quantity acima do target.
   - **SUBTASK-TASK-US-196-04-03:** testar rounding e rejeições da exchange.
+  - **SUBTASK-TASK-US-196-04-04:** recalcular custo esperado e fee reserve imediatamente antes do submit com snapshot vigente; bloquear se a validade expirar.
+  - **SUBTASK-TASK-US-196-04-05:** garantir que passive-limit só use maker rate quando a policy permitir; caso contrário usar taker/worst-case sem aumentar o target.
 - **TASK-US-196-05 — Attribution** (`src/CryptoTrading.Persistence`, `docs/observability`)
   - **SUBTASK-TASK-US-196-05-01:** persistir latency, fill ratio e implementation shortfall.
   - **SUBTASK-TASK-US-196-05-02:** correlacionar plano, attempts e lifecycle.
   - **SUBTASK-TASK-US-196-05-03:** anexar relatório de execução determinística.
+  - **SUBTASK-TASK-US-196-05-04:** comparar comissão estimada versus comissão real de cada fill por ativo e registrar `EXECUTION_FEE_DRIFT` quando exceder o limite.
+  - **SUBTASK-TASK-US-196-05-05:** testar fee em base/quote/BNB, valuation, arredondamento, rebates e reconciliação sem update destrutivo do ledger.
 
 ## US-197 — Automatizar self-healing e fail-safe
 

@@ -46,6 +46,6 @@ documentação, migração, rollback e revisão independente estiverem completos
 ## Validação do pacote local
 
 ```text
-19 epics; 96 stories; 233 tasks; 523 subtasks; 43 acceptance criteria
+20 epics; 106 stories; 283 tasks; 683 subtasks; 54 acceptance criteria
 0 IDs duplicados; 0 órfãos; 0 ciclos de dependência; 0 links locais quebrados
 ```

@@ -38,6 +38,7 @@
 - **RNF-042** Configuração e strategy version usadas em cada trade devem ser recuperáveis.
 - **RNF-043** Ledger financeiro é append-only; correções usam lançamentos compensatórios.
 - **RNF-044** Fee preserva ativo, quantidade, valuation source/time e vínculo ao fill.
+- **RNF-045** Cada decisão de execução deve preservar hash/versão, fonte, timestamp, validade e regra da tabela de comissão usada no sizing e no custo esperado.
 
 ## Observabilidade
 - **RNF-050** Traces, metrics e logs estruturados via OpenTelemetry.

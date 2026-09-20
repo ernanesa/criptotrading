@@ -84,6 +84,16 @@ Todo PBI deve atender DoD e seus critérios específicos. Para código live, acc
 
 **Given** a baseline Trend em shadow/canary dentro do envelope aprovado, **when** completa o período, volume e regimes definidos na PromotionReadinessMatrix, **then** intervention rate, recovery, `NO_TRADE`, SafeMode, violações de risco e divergências permanecem dentro dos limites explícitos; qualquer violação impede promoção.
 
+## AC-FEE-01 Comissão efetiva e custo líquido
+
+**Given** símbolo, lado e tática de execução conhecidos, **when** o runtime
+calcula sizing/custo, **then** consulta e versiona a comissão efetiva da
+conta/símbolo, escolhe maker/taker e buyer/seller de forma conservadora, não
+presume desconto BNB/special/tax sem evidência e persiste fonte/timestamp/hash.
+Snapshot ausente, stale, parcial ou sem valuation bloqueia novas entradas.
+Comissão efetiva do fill é comparada à estimativa e divergência acima do limite
+entra em `EXECUTION_FEE_DRIFT`, alerta e SafeMode/reconciliação.
+
 ## AC-RAG-02 Recuperação do índice
 
 **Given** embeddings indisponíveis ou índice RAG ausente/corrompido, **when** uma consulta é executada, **then** o sistema degrada para busca lexical ou falha explicitamente, não retorna contexto não verificável e permite rebuild determinístico a partir das fontes registradas.
