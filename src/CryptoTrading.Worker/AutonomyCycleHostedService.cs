@@ -27,6 +27,7 @@ internal sealed class AutonomyCycleHostedService(
     IOutboxStore outboxStore,
     IAutonomyCheckpointStore checkpointStore,
     IAsyncOperationalControl operationalControl,
+    CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
     BaselineDecisionCycle cycle,
     ILogger<AutonomyCycleHostedService> logger) : BackgroundService
 {
@@ -117,11 +118,20 @@ internal sealed class AutonomyCycleHostedService(
             volatilityBps: 0m,
             availableLiquidityNotional: runtime.AutonomyEntryTargetNotional * 10m,
             latest.CloseTimeUtc);
+        var runtimeSnapshot = runtimeSupervisor.Snapshot;
+        var effectiveControl = runtimeSnapshot.CanCreateNewExposure
+            ? operationalControl.Snapshot
+            : new OperationalControlSnapshot(
+                OperationalMode.SafeMode,
+                runtimeSnapshot.Revision,
+                now,
+                "runtime-supervisor",
+                $"RUNTIME_NOT_READY:{runtimeSnapshot.State}");
         var request = new BaselineDecisionCycleRequest(
             closed,
             portfolio,
             policyDocument.Policy,
-            operationalControl.Snapshot,
+            effectiveControl,
             runtime.AutonomyEntryTargetNotional,
             now,
             marketRisk);
