@@ -40,6 +40,8 @@ ser privado. Se um valor direto `BINANCE_API_KEY`/`BINANCE_API_SECRET` estiver
 presente, ele tem precedência para manter compatibilidade com o contrato `.env`.
 Valores de arquivo contendo whitespace, arquivos inexistentes ou permissões
 inseguras são tratados como credenciais ausentes e falham na validação.
+Essa mesma resolução é usada pelo cliente REST autenticado e pelo User Data
+Stream; não há um segundo caminho que leia chaves diretamente da configuração.
 
 Create the files with the repository helper:
 

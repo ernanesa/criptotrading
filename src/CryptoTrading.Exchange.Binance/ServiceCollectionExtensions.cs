@@ -1,3 +1,4 @@
+using CryptoTrading.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -14,8 +15,8 @@ public static class ServiceCollectionExtensions
 
         return services.AddBinanceSpotAccountClient(options =>
         {
-            options.ApiKey = configuration["BINANCE_API_KEY"] ?? string.Empty;
-            options.ApiSecret = configuration["BINANCE_API_SECRET"] ?? string.Empty;
+            options.ApiKey = TradingConfigurationExtensions.ResolveCredential(configuration, "BINANCE_API_KEY", "BINANCE_API_KEY_FILE");
+            options.ApiSecret = TradingConfigurationExtensions.ResolveCredential(configuration, "BINANCE_API_SECRET", "BINANCE_API_SECRET_FILE");
             options.RestBaseAddress = Uri.TryCreate(configuration["BINANCE_REST_BASE_URL"], UriKind.Absolute, out var restBaseAddress)
                 ? restBaseAddress
                 : null;

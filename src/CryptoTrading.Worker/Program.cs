@@ -170,8 +170,8 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
             Environment = string.Equals(builder.Configuration["TRADING_ENVIRONMENT"], "DEMO", StringComparison.OrdinalIgnoreCase)
                 ? BinanceEnvironment.Demo
                 : BinanceEnvironment.Testnet,
-            ApiKey = builder.Configuration["BINANCE_API_KEY"] ?? string.Empty,
-            ApiSecret = builder.Configuration["BINANCE_API_SECRET"] ?? string.Empty,
+            ApiKey = serviceProvider.GetRequiredService<IOptions<TradingOptions>>().Value.Binance.ApiKey,
+            ApiSecret = serviceProvider.GetRequiredService<IOptions<TradingOptions>>().Value.Binance.ApiSecret,
             WebSocketApiBaseAddress = Uri.TryCreate(builder.Configuration["BINANCE_USER_STREAM_WS_API_BASE_URL"], UriKind.Absolute, out var wsBaseAddress)
                 ? wsBaseAddress
                 : null,
