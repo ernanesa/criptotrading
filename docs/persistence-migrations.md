@@ -117,10 +117,14 @@ os modos anterior e seguinte, ator, motivo, chave de idempotência, eventual
 aprovação e o SHA-256 do payload canônico. Repetições do mesmo evento ou chave
 de idempotência são no-op somente quando todos os campos coincidem; colisões de
 identidade falham fechado. Um trigger PostgreSQL impede `UPDATE` e `DELETE`.
-O contrato assíncrono é `IOperationalControlAuditStore`; o adapter
-`PostgresOperationalControlAuditSink` existe somente para a fronteira síncrona
-legada de `IOperationalControlAuditSink` e propaga qualquer falha de persistência
-antes de a mudança de estado ser considerada válida.
+O contrato de armazenamento é assíncrono (`IOperationalControlAuditStore`) e o
+Worker usa `IAsyncOperationalControlAuditSink`: o append PostgreSQL é aguardado
+antes de publicar o novo snapshot. Assim, o caminho hospedado não bloqueia uma
+thread com `GetAwaiter().GetResult()` e qualquer falha/cancelamento mantém a
+transição fail-closed. `PostgresOperationalControlAuditSink` ainda implementa
+`IOperationalControlAuditSink` somente como compatibilidade para consumidores
+síncronos legados; esse caminho permanece bloqueante por contrato e não deve ser
+usado em hosted services.
 
 O teste de integração `ReplaysOpenOrderProjectionAcrossStoreRestartAndRetainsRemovalState`
 valida o contrato operacional dessa projeção: upsert repetido é idempotente,
@@ -135,7 +139,8 @@ O Worker também registra esse sink de forma explícita: `WORKER_PERSISTENCE_ENA
 O `IOperationalControl` é registrado uma única vez para evitar que as branches de
 reconciliação ou account stream substituam o sink. Com persistência habilitada,
 uma falha no PostgreSQL faz a transição falhar fechado antes de alterar o estado
-em memória. `WORKER_APPLY_MIGRATIONS=true` deve ser usado para preparar a
+em memória; a leitura de `Snapshot` continua não bloqueante enquanto o append
+assíncrono está em andamento. `WORKER_APPLY_MIGRATIONS=true` deve ser usado para preparar a
 migration 010 antes de habilitar transições operacionais persistidas.
 
 ## Ativação pelo Worker

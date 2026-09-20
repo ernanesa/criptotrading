@@ -12,7 +12,7 @@ internal sealed class PeriodicReconciliationHostedService(
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reportWriter,
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
-    IOperationalControl operationalControl,
+    IAsyncOperationalControl operationalControl,
     ILogger<PeriodicReconciliationHostedService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -56,11 +56,11 @@ internal sealed class PeriodicReconciliationHostedService(
         {
             try
             {
-                _ = operationalControl.EnterSafeMode(new OperationalControlCommand(
+                _ = await operationalControl.EnterSafeModeAsync(new OperationalControlCommand(
                     "periodic-reconciliation",
                     "PERIODIC_RECONCILIATION_FAILURE",
                     IdempotencyKey.New(),
-                    DateTimeOffset.UtcNow));
+                    DateTimeOffset.UtcNow), stoppingToken).ConfigureAwait(false);
             }
             catch (InvalidOperationException controlException)
             {

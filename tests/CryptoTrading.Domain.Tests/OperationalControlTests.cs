@@ -62,6 +62,43 @@ public sealed class OperationalControlTests
     }
 
     [Fact]
+    public async Task AsyncAuditFailureLeavesControlUnchangedAndFailsClosed()
+    {
+        var control = new InMemoryOperationalControl(
+            new TestResetAuthorizer { Allowed = true },
+            auditSink: null,
+            asyncAuditSink: new ThrowingAsyncAuditSink());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            control.EnterSafeModeAsync(Command("async-audit-failure", "operator-1", "market data unavailable")));
+
+        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+        Assert.Equal(0, control.Snapshot.Revision);
+    }
+
+    [Fact]
+    public async Task AsyncTransitionPublishesStateOnlyAfterAuditCompletes()
+    {
+        var audit = new BlockingAsyncAuditSink();
+        var control = new InMemoryOperationalControl(
+            new TestResetAuthorizer { Allowed = true },
+            auditSink: null,
+            asyncAuditSink: audit);
+        var transition = control.EnterSafeModeAsync(Command("async-audit-order", "operator-1", "audit first"));
+
+        await audit.Started.Task.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(true);
+        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+        Assert.False(transition.IsCompleted);
+
+        audit.Release();
+        var result = await transition.ConfigureAwait(true);
+
+        Assert.True(result.StateChanged);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+        Assert.Equal(1, audit.Appends);
+    }
+
+    [Fact]
     public void ReusingAControlKeyForDifferentCommandFailsClosed()
     {
         var control = NewControl();
@@ -204,5 +241,29 @@ public sealed class OperationalControlTests
     {
         public void Append(OperationalControlAuditEvent auditEvent) =>
             throw new InvalidOperationException("audit sink unavailable");
+    }
+
+    private sealed class ThrowingAsyncAuditSink : IAsyncOperationalControlAuditSink
+    {
+        public Task AppendAsync(OperationalControlAuditEvent auditEvent, CancellationToken cancellationToken = default) =>
+            Task.FromException(new InvalidOperationException("async audit sink unavailable"));
+    }
+
+    private sealed class BlockingAsyncAuditSink : IAsyncOperationalControlAuditSink
+    {
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int Appends { get; private set; }
+
+        public async Task AppendAsync(OperationalControlAuditEvent auditEvent, CancellationToken cancellationToken = default)
+        {
+            Started.SetResult();
+            await release.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Appends++;
+        }
+
+        public void Release() => release.SetResult();
     }
 }

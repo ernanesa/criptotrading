@@ -109,6 +109,28 @@ public interface IOperationalControl
     OperationalControlResult Reset(OperationalControlCommand command, OperationalControlResetAuthorization authorization);
 }
 
+/// <summary>
+/// Async operational-control boundary for hosted services. Implementations
+/// must await durable audit persistence before publishing a new snapshot.
+/// </summary>
+public interface IAsyncOperationalControl
+{
+    OperationalControlSnapshot Snapshot { get; }
+
+    Task<OperationalControlResult> ActivateKillSwitchAsync(
+        OperationalControlCommand command,
+        CancellationToken cancellationToken = default);
+
+    Task<OperationalControlResult> EnterSafeModeAsync(
+        OperationalControlCommand command,
+        CancellationToken cancellationToken = default);
+
+    Task<OperationalControlResult> ResetAsync(
+        OperationalControlCommand command,
+        OperationalControlResetAuthorization authorization,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record OperationalControlAuditEvent(
     Guid EventId,
     OperationalMode From,
@@ -147,8 +169,14 @@ public interface IOperationalControlAuditSink
     void Append(OperationalControlAuditEvent auditEvent);
 }
 
+/// <summary>Async append-only boundary used by persistence-backed hosted services.</summary>
+public interface IAsyncOperationalControlAuditSink
+{
+    Task AppendAsync(OperationalControlAuditEvent auditEvent, CancellationToken cancellationToken = default);
+}
+
 /// <summary>Deterministic local sink used by Paper/NO_TRADE and contract tests.</summary>
-public sealed class InMemoryOperationalControlAuditSink : IOperationalControlAuditSink
+public sealed class InMemoryOperationalControlAuditSink : IOperationalControlAuditSink, IAsyncOperationalControlAuditSink
 {
     private readonly object gate = new();
     private readonly List<OperationalControlAuditEvent> events = [];
@@ -176,6 +204,13 @@ public sealed class InMemoryOperationalControlAuditSink : IOperationalControlAud
 
             events.Add(auditEvent);
         }
+    }
+
+    public Task AppendAsync(OperationalControlAuditEvent auditEvent, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Append(auditEvent);
+        return Task.CompletedTask;
     }
 }
 
@@ -206,32 +241,30 @@ public sealed class OperationalControlResetDeniedException : UnauthorizedAccessE
 /// Thread-safe in-memory control plane for the local runtime. Persistence and transport
 /// adapters can wrap the same contract later; this class deliberately performs no I/O.
 /// </summary>
-public sealed class InMemoryOperationalControl : IOperationalControl
+#pragma warning disable CA1001 // The process-scoped control gate is owned by the host singleton.
+public sealed class InMemoryOperationalControl : IOperationalControl, IAsyncOperationalControl
 {
-    private readonly object gate = new();
+    private readonly SemaphoreSlim gate = new(1, 1);
     private readonly IOperationalControlResetAuthorizer resetAuthorizer;
-    private readonly IOperationalControlAuditSink auditSink;
+    private readonly IOperationalControlAuditSink? auditSink;
+    private readonly IAsyncOperationalControlAuditSink? asyncAuditSink;
     private readonly Dictionary<IdempotencyKey, (OperationalControlCommand Command, OperationalControlResult Result)> commands = [];
     private OperationalControlSnapshot snapshot = OperationalControlSnapshot.Initial;
 
     public InMemoryOperationalControl(
         IOperationalControlResetAuthorizer resetAuthorizer,
-        IOperationalControlAuditSink? auditSink = null)
+        IOperationalControlAuditSink? auditSink = null,
+        IAsyncOperationalControlAuditSink? asyncAuditSink = null)
     {
         ArgumentNullException.ThrowIfNull(resetAuthorizer);
         this.resetAuthorizer = resetAuthorizer;
         this.auditSink = auditSink ?? new InMemoryOperationalControlAuditSink();
+        this.asyncAuditSink = asyncAuditSink ?? this.auditSink as IAsyncOperationalControlAuditSink;
     }
 
     public OperationalControlSnapshot Snapshot
     {
-        get
-        {
-            lock (gate)
-            {
-                return snapshot;
-            }
-        }
+        get => Volatile.Read(ref snapshot);
     }
 
     public OperationalControlResult ActivateKillSwitch(OperationalControlCommand command) =>
@@ -245,7 +278,8 @@ public sealed class InMemoryOperationalControl : IOperationalControl
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(authorization);
 
-        lock (gate)
+        gate.Wait();
+        try
         {
             if (commands.TryGetValue(command.IdempotencyKey, out var previous))
             {
@@ -260,13 +294,57 @@ public sealed class InMemoryOperationalControl : IOperationalControl
 
             return ApplyLocked(command, OperationalMode.Normal, authorization.ApprovalId);
         }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<OperationalControlResult> ActivateKillSwitchAsync(
+        OperationalControlCommand command,
+        CancellationToken cancellationToken = default) =>
+        await ApplyAsync(command, OperationalMode.KillSwitch, approvalId: null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<OperationalControlResult> EnterSafeModeAsync(
+        OperationalControlCommand command,
+        CancellationToken cancellationToken = default) =>
+        await ApplyAsync(command, OperationalMode.SafeMode, approvalId: null, cancellationToken).ConfigureAwait(false);
+
+    public async Task<OperationalControlResult> ResetAsync(
+        OperationalControlCommand command,
+        OperationalControlResetAuthorization authorization,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(authorization);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (commands.TryGetValue(command.IdempotencyKey, out var previous))
+            {
+                EnsureReplayMatches(previous.Command, command);
+                return previous.Result with { StateChanged = false };
+            }
+
+            if (!resetAuthorizer.IsAuthorized(snapshot, command, authorization))
+            {
+                throw new OperationalControlResetDeniedException();
+            }
+
+            return await ApplyLockedAsync(command, OperationalMode.Normal, authorization.ApprovalId, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private OperationalControlResult Apply(OperationalControlCommand command, OperationalMode requestedMode, string? approvalId)
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        lock (gate)
+        gate.Wait();
+        try
         {
             if (commands.TryGetValue(command.IdempotencyKey, out var previous))
             {
@@ -275,6 +353,34 @@ public sealed class InMemoryOperationalControl : IOperationalControl
             }
 
             return ApplyLocked(command, requestedMode, approvalId);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<OperationalControlResult> ApplyAsync(
+        OperationalControlCommand command,
+        OperationalMode requestedMode,
+        string? approvalId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (commands.TryGetValue(command.IdempotencyKey, out var previous))
+            {
+                EnsureReplayMatches(previous.Command, command);
+                return previous.Result with { StateChanged = false };
+            }
+
+            return await ApplyLockedAsync(command, requestedMode, approvalId, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 
@@ -299,7 +405,47 @@ public sealed class InMemoryOperationalControl : IOperationalControl
             approvalId);
         // Audit persistence is part of the state transition. If it fails, the
         // control state remains unchanged and the caller stays fail-closed.
+        if (auditSink is null)
+        {
+            throw new InvalidOperationException("Synchronous operational-control transition is unavailable for an async-only audit sink.");
+        }
+
         auditSink.Append(audit);
+        snapshot = next;
+        var result = new OperationalControlResult(next, audit, changed);
+        commands.Add(command.IdempotencyKey, (command, result));
+        return result;
+    }
+
+    private async Task<OperationalControlResult> ApplyLockedAsync(
+        OperationalControlCommand command,
+        OperationalMode requestedMode,
+        string? approvalId,
+        CancellationToken cancellationToken)
+    {
+        var previous = snapshot;
+        var effectiveMode = requestedMode is OperationalMode.SafeMode && previous.Mode is OperationalMode.KillSwitch
+            ? OperationalMode.KillSwitch
+            : requestedMode;
+        var changed = previous.Mode != effectiveMode;
+        var next = changed
+            ? new OperationalControlSnapshot(effectiveMode, previous.Revision + 1, command.OccurredAtUtc, command.Actor, command.Reason)
+            : previous;
+        var audit = new OperationalControlAuditEvent(
+            Guid.NewGuid(),
+            previous.Mode,
+            effectiveMode,
+            command.Actor,
+            command.Reason,
+            command.IdempotencyKey,
+            command.OccurredAtUtc,
+            approvalId);
+        if (asyncAuditSink is null)
+        {
+            throw new InvalidOperationException("Async operational-control transition requires an async audit sink.");
+        }
+
+        await asyncAuditSink.AppendAsync(audit, cancellationToken).ConfigureAwait(false);
         snapshot = next;
         var result = new OperationalControlResult(next, audit, changed);
         commands.Add(command.IdempotencyKey, (command, result));
@@ -314,4 +460,6 @@ public sealed class InMemoryOperationalControl : IOperationalControl
                 $"Operational control idempotency key '{current.IdempotencyKey}' was reused with different command data.");
         }
     }
+
 }
+#pragma warning restore CA1001
