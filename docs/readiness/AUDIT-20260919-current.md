@@ -59,7 +59,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Governed evidence PostgreSQL integration | `./scripts/test-postgres-integration.sh` | PASS — 10/10, incluindo persistência/restart e bundle governado com `promotion_authorized=false`; container efêmero encerrado ao final |
 | Governed evidence runner E2E | `./scripts/test-governed-evidence-runner.sh` | PASS — PostgreSQL efêmero persiste fixture governada, runner read-only reconstrói snapshot e produz artefato + manifesto; 179 barras públicas, `promotion_authorized=false`, sem credenciais/ordens |
 | Probe autenticado Testnet | `./scripts/test-binance-testnet-auth-readonly.sh` | **PENDING/FAIL EXTERNAL** — após corrigir `/api/v3/time`, a conta autenticada respondeu, mas reportou `canWithdraw=true`; o probe bloqueou fail-closed antes de open orders/trades; nenhuma resposta, chave ou URL assinada foi persistida; requer chave Testnet com retirada desabilitada |
-| Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 56 testes |
+| Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado, withdrawals false e DI de segredo por arquivo; 57 testes |
 
 | OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
 | Quality gate de dataset externo | `dotnet test` Backtesting | PASS — 3 testes rejeitam look-ahead, sequência duplicada e tempo não monotônico; sem rede/credenciais |
