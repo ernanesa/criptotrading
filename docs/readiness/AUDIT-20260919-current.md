@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `24ff5be`
+**Commit de código auditado:** `a123e44`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -47,6 +47,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Public OOS CI guard | `./scripts/test-public-oos-production-guard.sh` | PASS — credenciais fictícias foram recusadas antes da rede; o job foi adicionado ao workflow de qualidade |
 | External secret-file loading | `dotnet test tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj --configuration Release --no-restore` | PASS — arquivos externos privados carregam sem ecoar valores; precedência direta e permissões inseguras cobertas por 9 testes |
 | Dotenv permission gate | `dotnet test tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj --configuration Release --no-restore` | PASS — `.env` inseguro/symlink é ignorado em Unix; contrato coberto por 11 testes Configuration |
+| Probe external-secret integration | `dotnet build tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj --configuration Release --no-restore` | PASS — probe compartilha resolução de arquivos protegidos com o runtime; build sem warnings, sem chamadas mutáveis |
 | Governed evidence projection | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — preregistration/dataset/estratégia lineage e trial budget validados antes do bundle; 51 testes Backtesting |
 | Governed evidence runner | `dotnet build tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj --configuration Release --no-restore` + guard tests | PASS — snapshot PostgreSQL read-only, sem migrations/ordens; credencial e connection string ausentes falham antes da rede |
 | Governed evidence PostgreSQL integration | `./scripts/test-postgres-integration.sh` | PASS — 10/10, incluindo persistência/restart e bundle governado com `promotion_authorized=false`; container efêmero encerrado ao final |
