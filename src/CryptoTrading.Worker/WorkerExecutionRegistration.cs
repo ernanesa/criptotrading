@@ -1,6 +1,7 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Exchange.Paper;
+using CryptoTrading.Persistence;
 using Microsoft.Extensions.Options;
 
 namespace CryptoTrading.Worker;
@@ -23,6 +24,7 @@ internal static class WorkerExecutionRegistration
                     serviceProvider.GetRequiredService<IBinanceSpotOrderClient>(),
                     runtimeOptions,
                     serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
+                    serviceProvider.GetRequiredService<OrderProjectionService>(),
                     serviceProvider.GetRequiredService<ILogger<TestnetOutboxMessageExecutor>>());
             }
 

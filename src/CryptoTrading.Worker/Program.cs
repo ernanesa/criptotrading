@@ -130,8 +130,15 @@ OperationalControlRegistration.Add(
     builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false));
 
 // Hosted services are started in registration order. Migrations must complete
-// before reconciliation or account-stream persistence can be used.
+// before RiskPolicy validation, reconciliation or account-stream persistence.
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
+if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
+{
+    // RiskPolicy is deliberately registered before any service that could
+    // observe or publish account state. Testnet never reconciles before its
+    // active policy has been validated.
+    builder.Services.AddHostedService<RiskPolicyStartupHostedService>();
+}
 if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
 {
     _ = builder.Services.AddSingleton<ReconciliationReportWriter>(serviceProvider =>
@@ -169,10 +176,6 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
     });
     builder.Services.AddHostedService<ReconciliationStartupHostedService>();
     builder.Services.AddHostedService<PeriodicReconciliationHostedService>();
-}
-if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
-{
-    builder.Services.AddHostedService<RiskPolicyStartupHostedService>();
 }
 if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {

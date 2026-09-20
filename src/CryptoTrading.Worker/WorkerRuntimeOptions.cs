@@ -117,6 +117,24 @@ public sealed class WorkerRuntimeOptions
                 ["WORKER_TESTNET_ORDER_EXECUTION_ENABLED=true is required for Testnet execution."]);
         }
 
+        if (isTestnet && !RiskPolicyRequired)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_EXECUTION_MODE=TESTNET requires WORKER_RISK_POLICY_REQUIRED=true."]);
+        }
+
+        if (isTestnet && !ReconciliationEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_EXECUTION_MODE=TESTNET requires WORKER_RECONCILIATION_ENABLED=true."]);
+        }
+
+        if (isTestnet && !AccountStreamEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_EXECUTION_MODE=TESTNET requires WORKER_ACCOUNT_STREAM_ENABLED=true."]);
+        }
+
         if (PollIntervalMilliseconds is < 100 or > 60_000)
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
@@ -141,10 +159,10 @@ public sealed class WorkerRuntimeOptions
                 ["WORKER_MAX_OUTBOX_ATTEMPTS must be between 1 and 100."]);
         }
 
-        if (ReconciliationEnabled && !NoTrade)
+        if (isPaper && ReconciliationEnabled && !NoTrade)
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
-                ["WORKER_RECONCILIATION_ENABLED requires WORKER_NO_TRADE=true."]);
+                ["PAPER reconciliation requires WORKER_NO_TRADE=true."]);
         }
 
         if (ReconciliationEnabled && !PersistenceEnabled)
@@ -159,10 +177,10 @@ public sealed class WorkerRuntimeOptions
                 ["WORKER_RISK_POLICY_REQUIRED requires WORKER_PERSISTENCE_ENABLED=true."]);
         }
 
-        if (AccountStreamEnabled && !NoTrade)
+        if (isPaper && AccountStreamEnabled && !NoTrade)
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
-                ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_NO_TRADE=true."]);
+                ["PAPER account stream requires WORKER_NO_TRADE=true."]);
         }
 
         if (AccountStreamEnabled && !PersistenceEnabled)
