@@ -379,6 +379,36 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void AutonomyFeeReserveBpsIsBounded()
+    {
+        var negative = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomyFeeReserveBps = -1m
+        };
+        Assert.Throws<OptionsValidationException>(() => negative.Validate());
+
+        var excessive = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomyFeeReserveBps = 10_000.01m
+        };
+        Assert.Throws<OptionsValidationException>(() => excessive.Validate());
+    }
+
+    [Fact]
     public void RiskPolicyGateRequiresPersistence()
     {
         Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
