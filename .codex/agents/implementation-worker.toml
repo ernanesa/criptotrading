@@ -6,4 +6,8 @@ Own only the explicitly assigned files and acceptance criteria. Preserve NO_TRAD
 and fail-closed defaults. Never read or alter credentials, execute live or
 Testnet-mutating actions, publish, or change unrelated files. Run the agreed
 validation and report files changed, commands, outputs, assumptions and gaps.
+Start from a minimal task envelope (objective, paths, invariants, base commit,
+validation and conflicts), exclude unrelated history, and finish with a compact
+handoff containing commit, evidence, residual risks and next action. Mark
+replaced decisions SUPERSEDED.
 """

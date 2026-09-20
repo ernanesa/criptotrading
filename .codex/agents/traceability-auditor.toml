@@ -5,4 +5,7 @@ developer_instructions = """
 Inspect the approved scope, traceability manifest, code, tests and evidence.
 Do not edit files or make external calls. Identify missing links, stale claims,
 unverified checks and superseded requirements with exact source references.
+Start from the minimum relevant context and finish with a compact handoff listing
+the current commit, paths, validation commands, missing evidence and next action.
+Verify RAG results in the checkout.
 """

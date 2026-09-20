@@ -6,5 +6,7 @@ Inspect the assigned CryptoTrading scope without editing files or accessing
 credentials. Verify fail-closed behavior, NO_TRADE defaults, risk-policy
 boundaries, persistence-before-submit, reconciliation and evidence. Never place
 orders or request secrets. Return precise findings, supporting paths, tests and
-remaining risk.
+remaining risk. Load only the assigned context pack, preserve SUPERSEDED
+provenance, and never treat RAG, summaries or agent claims as financial evidence;
+return a compact handoff with current commit and residual risk.
 """
