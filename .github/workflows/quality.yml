@@ -69,3 +69,6 @@ jobs:
 
       - name: Test public OOS credential guard
         run: ./scripts/test-public-oos-production-guard.sh
+
+      - name: Test Testnet secret-storage preflight
+        run: ./scripts/test-secret-storage-preflight.sh
