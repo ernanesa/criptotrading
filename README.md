@@ -49,10 +49,18 @@ O RAG é uma ferramenta local do Research Plane, fora do hot path de capital. El
 
 ## Adapter Binance Spot read-only
 
-O projeto `CryptoTrading.Exchange.Binance` contém o primeiro slice do adapter
-Spot, limitado a endpoints públicos: `ping`, `time` e `exchangeInfo`. Por
-definição, ele não lê credenciais e não possui endpoints de ordens, conta,
-saques ou transferências.
+O projeto `CryptoTrading.Exchange.Binance` possui duas fronteiras separadas:
+
+- o cliente público de market data (`ping`, `time`, `exchangeInfo`, klines e
+  streams), que não lê credenciais;
+- o cliente autenticado estritamente read-only, usado apenas pelo probe e pela
+  reconciliação opt-in, limitado a account, balances, open orders e trades.
+
+Não existem endpoints de submit/cancel de ordens, saques, transferências,
+margin ou Futures no adapter autenticado. O registro autenticado não ocorre por
+default; exige Testnet, `NO_TRADE`, persistência quando aplicável e credenciais
+locais protegidas. A validação da resposta rejeita qualquer conta que reporte
+`canWithdraw=true`.
 
 O registro no host de composição usa `AddBinanceSpotMarketClient`, com
 `BinanceEnvironment.Testnet` como padrão. O endereço da Testnet é
@@ -60,4 +68,7 @@ O registro no host de composição usa `AddBinanceSpotMarketClient`, com
 O cliente valida timeout, endereço absoluto HTTP(S), símbolo ASCII e respostas
 HTTP sem copiar o corpo de erro para exceções ou logs.
 
-Os testes usam `HttpMessageHandler` falso e não fazem chamadas à exchange.
+Os testes usam `HttpMessageHandler` falso e não fazem chamadas à exchange. A
+única execução externa autorizada é o probe manual
+`scripts/test-binance-testnet-auth-readonly.sh`, que grava apenas relatório
+redigido e mantém o gate em No-Go quando qualquer guarda falha.
