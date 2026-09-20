@@ -3,6 +3,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
@@ -23,10 +24,12 @@ internal sealed class AccountStreamHostedService(
     IBinanceUserDataStreamClient streamClient,
     IAccountStreamEventStore eventStore,
     ILocalOpenOrderStore openOrderStore,
+    IExecutionAccountingStore executionAccountingStore,
     IAsyncOperationalControl operationalControl,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reconciliationReportWriter,
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
+    CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
     ILogger<AccountStreamHostedService> logger) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -51,6 +54,13 @@ internal sealed class AccountStreamHostedService(
                 if (userEvent is BinanceExecutionReportEvent execution)
                 {
                     await AccountStreamOrderProjection.ApplyAsync(openOrderStore, execution, stoppingToken).ConfigureAwait(false);
+                    var accounting = AccountStreamExecutionAccounting.ToCommand(
+                        execution,
+                        new AccountId(options.Value.ReconciliationAccount));
+                    if (accounting is not null)
+                    {
+                        _ = await executionAccountingStore.RecordExecutionAsync(accounting, stoppingToken).ConfigureAwait(false);
+                    }
                 }
 
                 if (userEvent is BinanceUserDataStreamControlEvent control &&
@@ -68,11 +78,14 @@ internal sealed class AccountStreamHostedService(
                     {
                         await ReconcileAfterReconnectAsync(stoppingToken).ConfigureAwait(false);
                     }
+
+                    await runtimeSupervisor.MarkAccountStreamAsync(true, "account-stream-connected", stoppingToken).ConfigureAwait(false);
                 }
             }
 
             if (!stoppingToken.IsCancellationRequested)
             {
+                await runtimeSupervisor.MarkAccountStreamAsync(false, "account-stream-ended", stoppingToken).ConfigureAwait(false);
                 await EnterSafeModeAsync("ACCOUNT_STREAM_ENDED", stoppingToken).ConfigureAwait(false);
                 throw new InvalidOperationException("The account stream ended before host cancellation.");
             }
@@ -83,6 +96,7 @@ internal sealed class AccountStreamHostedService(
         }
         catch (Exception exception)
         {
+            await runtimeSupervisor.MarkAccountStreamAsync(false, "account-stream-failure", stoppingToken).ConfigureAwait(false);
             await EnterSafeModeAsync("ACCOUNT_STREAM_FAILURE", stoppingToken).ConfigureAwait(false);
             AccountStreamLog.Failed(logger, exception.GetType().Name);
             throw;

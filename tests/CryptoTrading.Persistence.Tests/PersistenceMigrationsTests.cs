@@ -23,11 +23,12 @@ public sealed class PersistenceMigrationsTests
                 "010_operational_control_audit.down.sql", "010_operational_control_audit.up.sql",
                 "011_experiment_governance.down.sql", "011_experiment_governance.up.sql",
                 "012_autonomy_checkpoints.down.sql", "012_autonomy_checkpoints.up.sql",
+                "013_execution_accounting.down.sql", "013_execution_accounting.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -65,5 +66,7 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("holdout_contamination_events", upMigrations[10].Sql, StringComparison.Ordinal);
         Assert.Contains("append_only", upMigrations[10].Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("autonomy_checkpoints", upMigrations[11].Sql, StringComparison.Ordinal);
+        Assert.Contains("execution_fills", upMigrations[12].Sql, StringComparison.Ordinal);
+        Assert.Contains("position_cost_basis", upMigrations[12].Sql, StringComparison.Ordinal);
     }
 }

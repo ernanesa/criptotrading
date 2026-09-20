@@ -21,6 +21,44 @@ namespace CryptoTrading.Persistence.IntegrationTests;
 public sealed class PostgresTradingStoreIntegrationTests
 {
     [Fact]
+    public async Task PersistsExecutionLedgerPositionAndRealizedPnlIdempotently()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
+        await store.ApplyMigrationsAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var symbol = new Symbol($"FOO{suffix}USDT");
+        var baseAsset = new Asset($"FOO{suffix}");
+        var quoteAsset = new Asset("USDT");
+        var wallet = new AccountId($"integration-execution-wallet-{suffix}");
+        var fees = new AccountId($"integration-execution-fees-{suffix}");
+        var first = ExecutionCommand("buy-" + suffix, 1001, OrderSide.Buy, 1m, 100m, .1m, symbol, baseAsset, quoteAsset, wallet, fees);
+        var firstResult = await store.RecordExecutionAsync(first);
+        var replay = await store.RecordExecutionAsync(first);
+        Assert.False(firstResult.IsDuplicate);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(firstResult.LedgerEntry.Id, replay.LedgerEntry.Id);
+
+        var sell = ExecutionCommand("sell-" + suffix, 1002, OrderSide.Sell, .5m, 120m, .05m, symbol, baseAsset, quoteAsset, wallet, fees);
+        var sellResult = await store.RecordExecutionAsync(sell);
+        Assert.Equal(9.9m, sellResult.RealizedPnlQuote);
+        Assert.Equal(.5m, (await store.GetBalanceAsync(wallet, baseAsset)).Amount);
+
+        static ExecutionAccountingCommand ExecutionCommand(
+            string id, long tradeId, OrderSide side, decimal quantity, decimal price, decimal commission,
+            Symbol symbol, Asset baseAsset, Asset quoteAsset, AccountId wallet, AccountId fees) => new(
+                id, tradeId, tradeId, symbol, baseAsset, quoteAsset, side, new Quantity(quantity), new Price(price),
+                new Money(commission, quoteAsset), wallet, fees, LedgerEntryId.New(), CorrelationId.New(),
+                new IdempotencyKey("integration-" + id), DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
     public async Task PersistsLedgerAndOutboxWithLeaseRetryAndIdempotency()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
