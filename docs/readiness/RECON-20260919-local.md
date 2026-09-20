@@ -16,6 +16,15 @@
 | Fills/trades/fees | modelo e drift detection disponíveis | endpoint não executado | rebuild do ledger ainda não evidenciado | PENDENTE |
 | PnL/positions | projeção local testável | sem valuation externa | não promover | PENDENTE |
 
+## Contrato de identidade de ativo
+
+O boundary autenticado Binance e `ReconciliationBalance.FromBinance` usam o
+mesmo normalizador bounded (`BinanceAssetNormalizer`). A identidade é trimada,
+convertida para maiúsculas e limitada a 2–20 caracteres ASCII alfanuméricos,
+alinhada ao `Domain.Asset` e ao schema do ledger. Valores fora desse contrato
+(incluindo hífen, underscore, controle, vazio ou um único caractere) são
+rejeitados antes de entrar no snapshot ou provocar uma decisão de reconciliação.
+
 ## Estado ambíguo e decisão
 
 Não houve ordem real, cancelamento, credencial privada ou consulta autenticada neste snapshot. Portanto não há autorização para inferir paridade com a exchange. A decisão é `No-New-Entries` para qualquer modo que possa emitir ordem; Paper continua permitido. Snapshots read-only antigos ou com timestamp futuro agora falham fechado e ativam `SafeMode` (`STALE_SNAPSHOT`).

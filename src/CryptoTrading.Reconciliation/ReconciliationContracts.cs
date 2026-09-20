@@ -87,14 +87,7 @@ public sealed record ReconciliationBalance(string Asset, decimal Available, deci
 
     private static string NormalizeAsset(string asset)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(asset);
-        var normalized = asset.Trim().ToUpperInvariant();
-        if (normalized.Length > 20 || normalized.Any(static character => !char.IsAsciiLetterOrDigit(character)))
-        {
-            throw new ArgumentException("Assets must contain only ASCII letters and digits and be at most 20 characters.", nameof(asset));
-        }
-
-        return normalized;
+        return BinanceAssetNormalizer.Normalize(asset, nameof(asset));
     }
 
     private static decimal ParseDecimal(string value, string parameterName)
