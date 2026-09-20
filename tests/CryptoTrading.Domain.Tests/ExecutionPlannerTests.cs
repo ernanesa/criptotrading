@@ -84,6 +84,62 @@ public sealed class ExecutionPlannerTests
     }
 
     [Fact]
+    public void BuyRequiresStrictHeadroomAfterConfiguredFeeReserve()
+    {
+        var request = Request(OrderSide.Buy);
+        var exactReserve = new ExecutionPlanRequest(
+            request.Intent,
+            request.Decision,
+            request.Market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            availableAccountLiquidityNotional: 1_010m,
+            feeReservePolicy: new FeeReservePolicy(100m));
+        var enoughHeadroom = new ExecutionPlanRequest(
+            request.Intent,
+            request.Decision,
+            request.Market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            availableAccountLiquidityNotional: 1_010.01m,
+            feeReservePolicy: new FeeReservePolicy(100m));
+
+        var blocked = ExecutionPlanner.Plan(exactReserve);
+        var allowed = ExecutionPlanner.Plan(enoughHeadroom);
+
+        Assert.True(blocked.IsNoTrade);
+        Assert.Equal(ExecutionPlanner.AccountLiquidityUnavailable, blocked.NoTradeReason);
+        Assert.False(allowed.IsNoTrade);
+    }
+
+    [Fact]
+    public void SellDoesNotConsumeConfiguredQuoteFeeReserve()
+    {
+        var request = Request(OrderSide.Sell);
+        var result = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            request.Intent,
+            request.Decision,
+            request.Market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            availableAccountLiquidityNotional: 0m,
+            feeReservePolicy: new FeeReservePolicy(FeeReservePolicy.MaximumReserveBps)));
+
+        Assert.False(result.IsNoTrade);
+    }
+
+    [Fact]
+    public void FeeReservePolicyRejectsUnsafeConfiguration()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new FeeReservePolicy(-1m));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new FeeReservePolicy(FeeReservePolicy.MaximumReserveBps + 1m));
+        Assert.False(new FeeReservePolicy().TryCalculate(decimal.MaxValue, out _));
+    }
+
+    [Fact]
     public void SellDoesNotRequireQuoteBalance()
     {
         var request = Request(OrderSide.Sell);

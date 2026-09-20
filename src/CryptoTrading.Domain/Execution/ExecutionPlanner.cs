@@ -54,7 +54,8 @@ public sealed record ExecutionPlanRequest
         TimeSpan maxMarketDataAge,
         TimeSpan timeToLive,
         int attempt = 0,
-        decimal? availableAccountLiquidityNotional = null)
+        decimal? availableAccountLiquidityNotional = null,
+        FeeReservePolicy? feeReservePolicy = null)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -90,6 +91,7 @@ public sealed record ExecutionPlanRequest
         TimeToLive = timeToLive;
         Attempt = attempt;
         AvailableAccountLiquidityNotional = availableAccountLiquidityNotional;
+        FeeReserve = feeReservePolicy ?? new FeeReservePolicy();
     }
 
     public OrderIntent Intent { get; }
@@ -100,6 +102,7 @@ public sealed record ExecutionPlanRequest
     public TimeSpan TimeToLive { get; }
     public int Attempt { get; }
     public decimal? AvailableAccountLiquidityNotional { get; }
+    public FeeReservePolicy FeeReserve { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -160,14 +163,27 @@ public static class ExecutionPlanner
             return new(null, LiquidityUnavailable);
         }
 
-        // A buy consumes quote balance, while a sell reduces the already
-        // reconciled base position. Never let a buy exceed free quote balance;
-        // the caller may reserve fees by passing a smaller available amount.
-        if (intent.Side == OrderSide.Buy &&
-            request.AvailableAccountLiquidityNotional is { } availableQuote &&
-            decision.AuthorizedTargetNotional >= availableQuote)
+        // A buy consumes quote balance and must leave a strict positive
+        // headroom after the configured fee reserve. A sell reduces the
+        // already reconciled base position and never consumes quote reserve.
+        if (intent.Side == OrderSide.Buy && request.AvailableAccountLiquidityNotional is { } availableQuote)
         {
-            return new(null, AccountLiquidityUnavailable);
+            if (!request.FeeReserve.TryCalculate(decision.AuthorizedTargetNotional, out var feeReserve))
+            {
+                return new(null, AccountLiquidityUnavailable);
+            }
+
+            try
+            {
+                if (decision.AuthorizedTargetNotional + feeReserve >= availableQuote)
+                {
+                    return new(null, AccountLiquidityUnavailable);
+                }
+            }
+            catch (OverflowException)
+            {
+                return new(null, AccountLiquidityUnavailable);
+            }
         }
 
         var limitPrice = intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk;
