@@ -22,7 +22,7 @@ internal sealed class AccountStreamHostedService(
     IOptions<WorkerRuntimeOptions> options,
     IBinanceUserDataStreamClient streamClient,
     IAccountStreamEventStore eventStore,
-    IOperationalControl operationalControl,
+    IAsyncOperationalControl operationalControl,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reconciliationReportWriter,
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
@@ -51,7 +51,7 @@ internal sealed class AccountStreamHostedService(
                 if (userEvent is BinanceUserDataStreamControlEvent control &&
                     control.EventType is "eventStreamTerminated" or "serverShutdown")
                 {
-                    EnterSafeMode($"ACCOUNT_STREAM_{control.EventType.ToUpperInvariant()}");
+                    await EnterSafeModeAsync($"ACCOUNT_STREAM_{control.EventType.ToUpperInvariant()}", stoppingToken).ConfigureAwait(false);
                 }
                 else if (userEvent is BinanceUserDataStreamControlEvent { EventType: "connectionEstablished" })
                 {
@@ -68,7 +68,7 @@ internal sealed class AccountStreamHostedService(
 
             if (!stoppingToken.IsCancellationRequested)
             {
-                EnterSafeMode("ACCOUNT_STREAM_ENDED");
+                await EnterSafeModeAsync("ACCOUNT_STREAM_ENDED", stoppingToken).ConfigureAwait(false);
                 throw new InvalidOperationException("The account stream ended before host cancellation.");
             }
         }
@@ -78,7 +78,7 @@ internal sealed class AccountStreamHostedService(
         }
         catch (Exception exception)
         {
-            EnterSafeMode("ACCOUNT_STREAM_FAILURE");
+            await EnterSafeModeAsync("ACCOUNT_STREAM_FAILURE", stoppingToken).ConfigureAwait(false);
             AccountStreamLog.Failed(logger, exception.GetType().Name);
             throw;
         }
@@ -110,15 +110,15 @@ internal sealed class AccountStreamHostedService(
         "Design",
         "CA1031",
         Justification = "SafeMode is a fail-closed boundary; control adapters are external and must not mask the original stream failure.")]
-    private void EnterSafeMode(string reason)
+    private async Task EnterSafeModeAsync(string reason, CancellationToken cancellationToken)
     {
         try
         {
-            _ = operationalControl.EnterSafeMode(new OperationalControlCommand(
+            _ = await operationalControl.EnterSafeModeAsync(new OperationalControlCommand(
                 "account-stream",
                 reason,
                 IdempotencyKey.New(),
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
             AccountStreamLog.SafeMode(logger, reason);
         }
         catch (InvalidOperationException exception)

@@ -163,7 +163,7 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
             serviceProvider.GetRequiredService<ILocalBalanceReader>(),
             serviceProvider.GetRequiredService<IKnownTradeReader>(),
             serviceProvider.GetRequiredService<IReconciliationEventSink>(),
-            serviceProvider.GetRequiredService<IOperationalControl>(),
+            serviceProvider.GetRequiredService<IAsyncOperationalControl>(),
             reconciliationOptions,
             localOpenOrderReader: serviceProvider.GetRequiredService<ILocalOpenOrderReader>());
     });

@@ -11,18 +11,28 @@ internal static class OperationalControlRegistration
 
         if (persistenceEnabled)
         {
-            _ = services.AddSingleton<IOperationalControlAuditSink>(serviceProvider =>
+            _ = services.AddSingleton<PostgresOperationalControlAuditSink>(serviceProvider =>
                 new PostgresOperationalControlAuditSink(
                     serviceProvider.GetRequiredService<PostgresTradingStore>()));
+            _ = services.AddSingleton<IOperationalControlAuditSink>(serviceProvider =>
+                serviceProvider.GetRequiredService<PostgresOperationalControlAuditSink>());
+            _ = services.AddSingleton<IAsyncOperationalControlAuditSink>(serviceProvider =>
+                serviceProvider.GetRequiredService<PostgresOperationalControlAuditSink>());
         }
         else
         {
             _ = services.AddSingleton<IOperationalControlAuditSink, InMemoryOperationalControlAuditSink>();
+            _ = services.AddSingleton<IAsyncOperationalControlAuditSink>(serviceProvider =>
+                serviceProvider.GetRequiredService<IOperationalControlAuditSink>() as IAsyncOperationalControlAuditSink
+                ?? throw new InvalidOperationException("The in-memory operational audit sink must support async append."));
         }
 
         _ = services.AddSingleton<IOperationalControl>(serviceProvider =>
             new InMemoryOperationalControl(
                 new DenyOperationalControlResetAuthorizer(),
-                serviceProvider.GetRequiredService<IOperationalControlAuditSink>()));
+                serviceProvider.GetRequiredService<IOperationalControlAuditSink>(),
+                serviceProvider.GetRequiredService<IAsyncOperationalControlAuditSink>()));
+        _ = services.AddSingleton<IAsyncOperationalControl>(serviceProvider =>
+            (IAsyncOperationalControl)serviceProvider.GetRequiredService<IOperationalControl>());
     }
 }

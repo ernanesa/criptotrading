@@ -1953,13 +1953,24 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
 }
 
 /// <summary>
-/// Compatibility adapter for the synchronous domain sink. The preferred boundary
-/// is <see cref="IOperationalControlAuditStore.AppendOperationalControlAuditEventAsync"/>;
-/// this adapter is fail-closed and intended only where the domain control contract
-/// still exposes a synchronous sink.
+/// Operational-control audit adapter. Its async append is the preferred boundary
+/// for hosted services; the synchronous append remains only for legacy callers
+/// whose domain contract still exposes a synchronous sink.
 /// </summary>
-public sealed class PostgresOperationalControlAuditSink(PostgresTradingStore store) : IOperationalControlAuditSink
+public sealed class PostgresOperationalControlAuditSink(PostgresTradingStore store) : IOperationalControlAuditSink, IAsyncOperationalControlAuditSink
 {
+    public async Task AppendAsync(OperationalControlAuditEvent auditEvent, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(auditEvent);
+        ArgumentNullException.ThrowIfNull(store);
+        _ = await store.AppendOperationalControlAuditEventAsync(auditEvent, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Compatibility path for legacy synchronous callers. Hosted Worker
+    /// transitions use <see cref="IAsyncOperationalControlAuditSink"/> and do
+    /// not block a thread on PostgreSQL I/O.
+    /// </summary>
     public void Append(OperationalControlAuditEvent auditEvent)
     {
         ArgumentNullException.ThrowIfNull(auditEvent);
