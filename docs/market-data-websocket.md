@@ -96,10 +96,12 @@ The legacy `listenKey` adapter below remains
 available only as a compatibility/test fixture and is not wired into the
 Worker.
 
-Enable the authenticated consumer only in a local, read-only process with
+Enable the authenticated consumer only in a local process with
 `WORKER_ACCOUNT_STREAM_ENABLED=true`, `WORKER_RECONCILIATION_ENABLED=true`,
-`WORKER_PERSISTENCE_ENABLED=true`, `WORKER_APPLY_MIGRATIONS=true` and
-`WORKER_NO_TRADE=true`. The service starts after migrations and the initial
+`WORKER_PERSISTENCE_ENABLED=true`, `WORKER_APPLY_MIGRATIONS=true` and an
+approved active `WORKER_RISK_POLICY_REQUIRED=true`. In PAPER, keep
+`WORKER_NO_TRADE=true`; in Testnet execution, `WORKER_NO_TRADE=false` is
+allowed only with every explicit Testnet gate. The service starts after migrations and the initial
 reconciliation, persists an append-only event
 envelope, and enters SafeMode on stream termination or storage failure.
 The same read-only reconciliation also runs every 15 minutes by default

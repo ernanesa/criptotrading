@@ -164,6 +164,36 @@ Todo PBI deve atender DoD e seus critérios específicos. Para código live, acc
 
 **Given** uma iniciativa AWS futura explicitamente aprovada, **when** qualquer recurso pago puder ser criado, **then** eligibility/account plan/region/pricing, budget baixo, TTL, owner, estimativa e teardown estão aprovados; sem essa aprovação, nenhum recurso ou credencial AWS faz parte do ambiente.
 
+## AC-AUTONOMY-02 Lifecycle e readiness
+**Given** processo iniciado, **when** startup, reconnect, falha transitória ou KillSwitch ocorrer, **then** lifecycle persistido bloqueia entradas fora de `Ready` e não reseta KillSwitch automaticamente.
+
+## AC-AUTONOMY-03 Market-data acionável
+**Given** snapshot/deltas e candles, **when** gap, duplicata, atraso ou clock drift ocorrer, **then** o pipeline deduplica/ordena, reaquece e bloqueia contexto stale.
+
+## AC-AUTONOMY-04 Ciclo baseline idempotente
+**Given** candle BTCUSDT fechado, **when** o trigger for repetido, **then** estratégia, target, risco e outbox usam o mesmo `DecisionId` sem ordem duplicada.
+
+## AC-AUTONOMY-05 Risk obrigatório
+**Given** Testnet com execução habilitada, **when** RiskPolicy ou guard estiver inválido, **then** startup falha seguro ou o ciclo rejeita/SafeMode sem submit.
+
+## AC-AUTONOMY-06 OMS e projeções
+**Given** eventos REST/user-data duplicados ou fora de ordem, **when** a projeção atualizar, **then** OMS/ledger são idempotentes e não regridem nem geram overfill.
+
+## AC-AUTONOMY-07 User stream e reconciliação
+**Given** `NO_TRADE=false`, **when** startup, reconnect, gap ou submit ambíguo ocorrer, **then** stream e reconciliação coexistem e mismatch bloqueia novas entradas.
+
+## AC-AUTONOMY-08 Planner determinístico
+**Given** target autorizado e preço/depth recentes, **when** houver partial fill/timeout/custo excessivo, **then** somente residual é planejado com attempt determinístico ou `NO_TRADE`.
+
+## AC-AUTONOMY-09 Self-healing fail-safe
+**Given** dependência falhando, **when** o supervisor classificar o incidente, **then** retry/breaker é bounded e o runtime entra em SafeMode quando a integridade for incerta.
+
+## AC-AUTONOMY-10 Prova de autonomia
+**Given** qualquer ciclo/falha, **when** consultado por `DecisionId`, **then** versões, motivos, métricas, transições e evidência são reconstruíveis sem segredo.
+
+## AC-AUTONOMY-11 Promotion ladder A2
+**Given** uma fase A2 concluída, **when** a próxima fase for avaliada, **then** promoção exige critérios, evidence bundle, aprovação, capability correta e rollback testado.
+
 ## Critério para release canary
 
 - todos os ACs críticos vinculados explicitamente na `PromotionReadinessMatrix`;

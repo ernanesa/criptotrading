@@ -73,6 +73,13 @@ Critério: operação Spot observável/reconciliável e **sem intervenção huma
 
 O R1.0 corresponde ao nível A2: sinal, risk, execução, monitoramento e recuperação automáticos para uma baseline. Não depende de Regime Detection, multi-strategy ou ML para ser operacionalmente autônomo.
 
+### Gate complementar E-19 — A2 decision-complete
+
+Antes de considerar o R1.0 estável, US-190…US-199 devem fechar o loop
+market-data→decisão→risco→OMS→reconciliação. Testnet só pode executar com
+RiskPolicy ativa, account stream e reconciliation simultâneos, e nenhum estado
+`Unknown`. Paper, Shadow e Testnet exigem evidence bundle e rollback ensaiado.
+
 ## R1.1 - Multi-Strategy e Regime Adaptativo
 
 - Momentum/Breakout como challengers isolados;
