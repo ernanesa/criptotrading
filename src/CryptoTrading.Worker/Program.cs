@@ -30,6 +30,8 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.PostgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"] ?? string.Empty;
         options.ExecutionMode = builder.Configuration["WORKER_EXECUTION_MODE"] ?? "PAPER";
         options.NoTrade = builder.Configuration.GetValue("WORKER_NO_TRADE", true);
+        options.TestnetExecutionAcknowledged = builder.Configuration.GetValue("WORKER_TESTNET_EXECUTION_ACKNOWLEDGED", false);
+        options.TestnetOrderExecutionEnabled = builder.Configuration.GetValue("WORKER_TESTNET_ORDER_EXECUTION_ENABLED", false);
         options.ShadowEnabled = builder.Configuration.GetValue("WORKER_SHADOW_ENABLED", false);
         options.ShadowReportDirectory = builder.Configuration["WORKER_SHADOW_REPORT_DIRECTORY"] ?? "artifacts/shadow";
         options.PollIntervalMilliseconds = builder.Configuration.GetValue("WORKER_POLL_INTERVAL_MS", 1_000);
@@ -94,7 +96,7 @@ builder.Services.AddSingleton<CryptoTrading.Observability.ITradingAlertSink>(ser
 builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher>();
 builder.Services.AddSingleton<CryptoTrading.Shadow.ShadowReportWriter>(serviceProvider =>
     new CryptoTrading.Shadow.ShadowReportWriter(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ShadowReportDirectory));
-builder.Services.AddSingleton<IOutboxMessageExecutor, PaperOutboxMessageExecutor>();
+_ = builder.Services.AddOutboxExecution(builder.Configuration);
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
     _ = builder.Services.AddPostgresTradingStore(
