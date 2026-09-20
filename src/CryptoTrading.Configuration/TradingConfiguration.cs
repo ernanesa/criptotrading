@@ -124,8 +124,8 @@ public static class TradingConfigurationExtensions
                 {
                     RestBaseUrl = Uri.TryCreate(configuration["BINANCE_REST_BASE_URL"], UriKind.Absolute, out var restUri) ? restUri : null,
                     WebSocketBaseUrl = Uri.TryCreate(configuration["BINANCE_WS_BASE_URL"], UriKind.Absolute, out var wsUri) ? wsUri : null,
-                    ApiKey = configuration["BINANCE_API_KEY"] ?? string.Empty,
-                    ApiSecret = configuration["BINANCE_API_SECRET"] ?? string.Empty,
+                    ApiKey = ResolveSecret(configuration, "BINANCE_API_KEY", "BINANCE_API_KEY_FILE"),
+                    ApiSecret = ResolveSecret(configuration, "BINANCE_API_SECRET", "BINANCE_API_SECRET_FILE"),
                     WithdrawalsEnabled = bool.TryParse(configuration["BINANCE_WITHDRAWALS_ENABLED"], out var withdrawals) && withdrawals,
                     AllowedSymbols = configuration["BINANCE_ALLOWED_SYMBOLS"] ?? string.Empty
                 };
@@ -147,5 +147,66 @@ public static class TradingConfigurationExtensions
         }
 
         return null;
+    }
+
+    private static string ResolveSecret(IConfiguration configuration, string valueKey, string fileKey)
+    {
+        var directValue = configuration[valueKey];
+        if (!string.IsNullOrWhiteSpace(directValue))
+        {
+            return directValue.Trim();
+        }
+
+        var path = configuration[fileKey];
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            var file = new FileInfo(path);
+            if (!file.Exists || !HasSafeSecretPermissions(file))
+            {
+                return string.Empty;
+            }
+
+            var value = File.ReadAllText(file.FullName).Trim();
+            return value.Length == 0 || value.Any(char.IsWhiteSpace) ? string.Empty : value;
+        }
+        catch (IOException)
+        {
+            return string.Empty;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool HasSafeSecretPermissions(FileInfo file)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return true;
+        }
+
+        var fileMode = File.GetUnixFileMode(file.FullName);
+        const UnixFileMode groupOrOtherBits = UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                                               UnixFileMode.GroupExecute | UnixFileMode.OtherRead |
+                                               UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+        if ((fileMode & groupOrOtherBits) != 0)
+        {
+            return false;
+        }
+
+        var directory = file.Directory;
+        if (directory is null)
+        {
+            return false;
+        }
+
+        var directoryMode = File.GetUnixFileMode(directory.FullName);
+        return (directoryMode & groupOrOtherBits) == 0;
     }
 }

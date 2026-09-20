@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CryptoTrading.Configuration.Tests;
@@ -89,5 +91,122 @@ public sealed class TradingOptionsValidatorTests
 
         Assert.True(result.Failed);
         Assert.True(result.Failures!.Count() >= 2);
+    }
+
+    [Fact]
+    public void ExternalCredentialFilesAreLoadedWhenDirectValuesAreAbsent()
+    {
+        using var directory = new TemporarySecretDirectory();
+        var keyPath = directory.Write("api-key", "file-api-key");
+        var secretPath = directory.Write("api-secret", "file-api-secret");
+        var configuration = CreateConfiguration(new Dictionary<string, string?>
+        {
+            ["TRADING_ENVIRONMENT"] = "TESTNET",
+            ["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/api",
+            ["BINANCE_WS_BASE_URL"] = "wss://testnet.binance.vision/ws",
+            ["BINANCE_API_KEY_FILE"] = keyPath,
+            ["BINANCE_API_SECRET_FILE"] = secretPath,
+            ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
+            ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT"
+        });
+
+        using var provider = new ServiceCollection()
+            .AddTradingConfiguration(configuration)
+            .BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<TradingOptions>>().Value;
+
+        Assert.Equal("file-api-key", options.Binance.ApiKey);
+        Assert.Equal("file-api-secret", options.Binance.ApiSecret);
+    }
+
+    [Fact]
+    public void DirectCredentialValuesTakePrecedenceOverFilePaths()
+    {
+        using var directory = new TemporarySecretDirectory();
+        var keyPath = directory.Write("api-key", "file-api-key");
+        var secretPath = directory.Write("api-secret", "file-api-secret");
+        var configuration = CreateConfiguration(new Dictionary<string, string?>
+        {
+            ["TRADING_ENVIRONMENT"] = "TESTNET",
+            ["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/api",
+            ["BINANCE_WS_BASE_URL"] = "wss://testnet.binance.vision/ws",
+            ["BINANCE_API_KEY"] = "direct-api-key",
+            ["BINANCE_API_SECRET"] = "direct-api-secret",
+            ["BINANCE_API_KEY_FILE"] = keyPath,
+            ["BINANCE_API_SECRET_FILE"] = secretPath,
+            ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
+            ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT"
+        });
+
+        using var provider = new ServiceCollection()
+            .AddTradingConfiguration(configuration)
+            .BuildServiceProvider();
+        var options = provider.GetRequiredService<IOptions<TradingOptions>>().Value;
+
+        Assert.Equal("direct-api-key", options.Binance.ApiKey);
+        Assert.Equal("direct-api-secret", options.Binance.ApiSecret);
+    }
+
+    [Fact]
+    public void InsecureExternalCredentialFileIsRejectedOnUnix()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        using var directory = new TemporarySecretDirectory();
+        var keyPath = directory.Write("api-key", "file-api-key");
+        var secretPath = directory.Write("api-secret", "file-api-secret");
+        File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.GroupRead);
+        var configuration = CreateConfiguration(new Dictionary<string, string?>
+        {
+            ["TRADING_ENVIRONMENT"] = "TESTNET",
+            ["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/api",
+            ["BINANCE_WS_BASE_URL"] = "wss://testnet.binance.vision/ws",
+            ["BINANCE_API_KEY_FILE"] = keyPath,
+            ["BINANCE_API_SECRET_FILE"] = secretPath,
+            ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
+            ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT"
+        });
+
+        using var provider = new ServiceCollection()
+            .AddTradingConfiguration(configuration)
+            .BuildServiceProvider();
+        var exception = Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<TradingOptions>>().Value);
+
+        Assert.Contains("credentials", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("file-api-key", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static IConfiguration CreateConfiguration(IReadOnlyDictionary<string, string?> values) =>
+        new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+
+    private sealed class TemporarySecretDirectory : IDisposable
+    {
+        private readonly string path = Path.Combine(Path.GetTempPath(), $"cryptotrading-secrets-{Guid.NewGuid():N}");
+
+        public TemporarySecretDirectory()
+        {
+            Directory.CreateDirectory(path);
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+        }
+
+        public string Write(string name, string value)
+        {
+            var file = Path.Combine(path, name);
+            File.WriteAllText(file, value);
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+
+            return file;
+        }
+
+        public void Dispose() => Directory.Delete(path, recursive: true);
     }
 }

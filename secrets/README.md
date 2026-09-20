@@ -30,6 +30,14 @@ The directory must be mode `700` and each file mode `600`. The application
 should receive file paths, not secret values, and fail closed when the path,
 environment, endpoint or permissions do not match.
 
+O runtime implementa `BINANCE_API_KEY_FILE` e `BINANCE_API_SECRET_FILE`. Os
+caminhos precisam ser absolutos; em Linux/macOS, o arquivo não pode ter bits de
+leitura/escrita/execução para grupo ou outros, e o diretório pai também deve
+ser privado. Se um valor direto `BINANCE_API_KEY`/`BINANCE_API_SECRET` estiver
+presente, ele tem precedência para manter compatibilidade com o contrato `.env`.
+Valores de arquivo contendo whitespace, arquivos inexistentes ou permissões
+inseguras são tratados como credenciais ausentes e falham na validação.
+
 Create the files with the repository helper:
 
 ```bash
