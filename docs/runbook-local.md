@@ -93,6 +93,7 @@ Para validar somente a fronteira autenticada, depois de revogar as chaves
 expostas e criar uma chave Spot Testnet nova com permissões mínimas, use:
 
 ```bash
+./scripts/check-testnet-secret-storage.sh
 ./scripts/test-binance-testnet-auth-readonly.sh
 ```
 
