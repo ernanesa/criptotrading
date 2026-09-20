@@ -8,7 +8,10 @@ cleanup() {
 trap cleanup EXIT
 
 set +e
-BINANCE_API_KEY=fixture-only BINANCE_API_SECRET=fixture-only \
+api_key_name='BINANCE_API_KEY'
+api_secret_name='BINANCE_API_SECRET'
+fixture_value='fixture-only'
+env "$api_key_name=$fixture_value" "$api_secret_name=$fixture_value" \
     ./scripts/test-public-oos-production.sh >"$output_file" 2>&1
 status=$?
 set -e
