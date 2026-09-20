@@ -14,6 +14,7 @@ public sealed class TradingTelemetryTests
         TradingTelemetry.RecordOutboxDispatch(succeeded: true);
         TradingTelemetry.RecordOutboxDispatch(succeeded: false);
         TradingTelemetry.RecordOutboxDispatch(succeeded: false, deadLettered: true);
+        TradingTelemetry.RecordInvalidMarketDataPayload();
 
         var after = TradingTelemetry.Snapshot();
 
@@ -22,6 +23,7 @@ public sealed class TradingTelemetryTests
         Assert.Equal(before.OutboxDispatches + 3, after.OutboxDispatches);
         Assert.Equal(before.OutboxDispatchFailures + 2, after.OutboxDispatchFailures);
         Assert.Equal(before.OutboxDeadLetters + 1, after.OutboxDeadLetters);
+        Assert.Equal(before.InvalidMarketDataPayloads + 1, after.InvalidMarketDataPayloads);
     }
 
     [Fact]
