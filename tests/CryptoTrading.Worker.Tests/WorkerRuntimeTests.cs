@@ -302,6 +302,49 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void AutonomyRequiresACompleteDurableSafetyEnvelope()
+    {
+        var valid = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            ExecutionMode = "PAPER",
+            NoTrade = true
+        };
+        valid.Validate();
+
+        var missingStream = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = false
+        };
+        Assert.Throws<OptionsValidationException>(() => missingStream.Validate());
+
+        var invalidInterval = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomyInterval = "30s"
+        };
+        Assert.Throws<OptionsValidationException>(() => invalidInterval.Validate());
+    }
+
+    [Fact]
     public void RiskPolicyGateRequiresPersistence()
     {
         Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions

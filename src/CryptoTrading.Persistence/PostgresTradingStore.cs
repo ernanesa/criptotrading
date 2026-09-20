@@ -55,6 +55,10 @@ public sealed record LocalOpenOrderRecord(
 /// <summary>Durable outbox operations required by a dispatcher.</summary>
 public interface IOutboxStore
 {
+    Task<OutboxRecord> EnqueueAsync(
+        OutboxRecord record,
+        CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<LeasedOutboxMessage>> ClaimOutboxAsync(
         string leaseOwner,
         DateTimeOffset nowUtc,

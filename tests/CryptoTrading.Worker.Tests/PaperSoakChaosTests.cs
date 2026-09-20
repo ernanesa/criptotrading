@@ -172,8 +172,9 @@ public sealed class PaperSoakChaosTests
 
         public IEnumerable<int> AttemptCounts => entries.Values.Select(entry => entry.Attempts);
 
-        public Task EnqueueAsync(OutboxRecord record)
+        public Task<OutboxRecord> EnqueueAsync(OutboxRecord record, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (entries.TryGetValue(record.IdempotencyKey, out var existing))
             {
                 if (!string.Equals(JsonSerializer.Serialize(existing.Record.Command), JsonSerializer.Serialize(record.Command), StringComparison.Ordinal))
@@ -181,11 +182,11 @@ public sealed class PaperSoakChaosTests
                     throw new InvalidOperationException("Idempotency key was reused with a different payload.");
                 }
 
-                return Task.CompletedTask;
+                return Task.FromResult(existing.Record);
             }
 
             entries.Add(record.IdempotencyKey, new ChaosEntry(record));
-            return Task.CompletedTask;
+            return Task.FromResult(record);
         }
 
         public Task<IReadOnlyList<LeasedOutboxMessage>> ClaimOutboxAsync(
