@@ -93,6 +93,37 @@ public sealed class TradingOptionsValidatorTests
         Assert.True(result.Failures!.Count() >= 2);
     }
 
+    [Theory]
+    [InlineData("https://testnet.binance.vision:8443/api")]
+    [InlineData("https://ignored@testnet.binance.vision/api")]
+    [InlineData("https://testnet.binance.vision/api?redirect=1")]
+    [InlineData("https://testnet.binance.vision/api/v3")]
+    public void AmbiguousOrNonCanonicalRestEndpointIsRejected(string endpoint)
+    {
+        var options = ValidOptions();
+        options.Binance.RestBaseUrl = new Uri(endpoint);
+
+        var result = new TradingOptionsValidator().Validate(Options.DefaultName, options);
+
+        Assert.Contains(result.Failures!, failure => failure.Contains("REST", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("ws://testnet.binance.vision/ws")]
+    [InlineData("wss://testnet.binance.vision:8443/ws")]
+    [InlineData("wss://ignored@testnet.binance.vision/ws")]
+    [InlineData("wss://testnet.binance.vision/ws?streams=btcusdt")]
+    [InlineData("wss://testnet.binance.vision/stream")]
+    public void AmbiguousOrNonCanonicalWebSocketEndpointIsRejected(string endpoint)
+    {
+        var options = ValidOptions();
+        options.Binance.WebSocketBaseUrl = new Uri(endpoint);
+
+        var result = new TradingOptionsValidator().Validate(Options.DefaultName, options);
+
+        Assert.Contains(result.Failures!, failure => failure.Contains("WS", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void ExternalCredentialFilesAreLoadedWhenDirectValuesAreAbsent()
     {
