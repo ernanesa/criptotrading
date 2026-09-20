@@ -161,6 +161,15 @@ public interface IAutonomyRiskContextStore
         Asset quoteAsset,
         DateTimeOffset dayStartUtc,
         CancellationToken cancellationToken = default);
+
+    Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(
+        string scope,
+        Symbol symbol,
+        Asset quoteAsset,
+        DateTimeOffset dayStartUtc,
+        decimal? currentEquityNotional,
+        DateTimeOffset valuationAtUtc,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record AutonomyRiskContextSnapshot(
@@ -168,7 +177,13 @@ public sealed record AutonomyRiskContextSnapshot(
     decimal PositionCostNotional,
     decimal PositionQuantity,
     bool HasPositionBasis,
-    DateTimeOffset AsOfUtc);
+    DateTimeOffset AsOfUtc,
+    decimal? CurrentEquityNotional = null,
+    decimal? HighWaterMarkNotional = null,
+    decimal? DrawdownNotional = null,
+    bool HasHighWaterMark = false,
+    bool RiskContextComplete = false,
+    string? RiskContextUnavailableReason = null);
 
 /// <summary>Durable append-only store for KillSwitch/SafeMode transitions.</summary>
 public interface IOperationalControlAuditStore
@@ -1188,6 +1203,185 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
             reader.GetDecimal(1),
             reader.GetBoolean(3),
             DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// Atomically reads accounting inputs and advances the restart-safe equity
+    /// high-water-mark projection. The first observation is persisted but is
+    /// intentionally incomplete, requiring one subsequent coherent valuation
+    /// before autonomous entries can be authorized.
+    /// </summary>
+    public async Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(
+        string scope,
+        Symbol symbol,
+        Asset quoteAsset,
+        DateTimeOffset dayStartUtc,
+        decimal? currentEquityNotional,
+        DateTimeOffset valuationAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        if (dayStartUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Risk-context boundaries must be UTC.", nameof(dayStartUtc));
+        }
+
+        if (valuationAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Equity valuations must be UTC.", nameof(valuationAtUtc));
+        }
+
+        if (currentEquityNotional is < 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(currentEquityNotional), "Equity cannot be negative.");
+        }
+
+        var dayEndUtc = dayStartUtc.AddDays(1);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+
+        decimal realizedDailyLoss;
+        decimal positionCost;
+        decimal positionQuantity;
+        bool hasPositionBasis;
+        await using (var accountingCommand = new NpgsqlCommand(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0),
+                COALESCE((SELECT quantity FROM trading.position_cost_basis WHERE symbol = @symbol), 0),
+                COALESCE((SELECT cost_quote FROM trading.position_cost_basis WHERE symbol = @symbol), 0),
+                EXISTS (SELECT 1 FROM trading.position_cost_basis WHERE symbol = @symbol)
+            FROM trading.execution_fills
+            WHERE symbol = @symbol
+              AND quote_asset = @quote_asset
+              AND occurred_at >= @day_start
+              AND occurred_at < @day_end;
+            """, connection, transaction))
+        {
+            accountingCommand.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol.Value));
+            accountingCommand.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, quoteAsset.Value));
+            accountingCommand.Parameters.Add(Parameter("day_start", NpgsqlDbType.TimestampTz, dayStartUtc.UtcDateTime));
+            accountingCommand.Parameters.Add(Parameter("day_end", NpgsqlDbType.TimestampTz, dayEndUtc.UtcDateTime));
+            await using var reader = await accountingCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException("PostgreSQL returned no autonomy risk-context row.");
+            }
+
+            realizedDailyLoss = reader.GetDecimal(0);
+            positionQuantity = reader.GetDecimal(1);
+            positionCost = reader.GetDecimal(2);
+            hasPositionBasis = reader.GetBoolean(3);
+        }
+
+        EquityHighWaterMarkState? existingState = null;
+        await using (var hwmCommand = new NpgsqlCommand(
+            """
+            SELECT equity_notional, high_water_mark_notional, drawdown_notional,
+                   last_valuation_at, observation_count
+            FROM trading.autonomy_equity_high_water_marks
+            WHERE scope = @scope
+            FOR UPDATE;
+            """, connection, transaction))
+        {
+            hwmCommand.Parameters.Add(Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()));
+            await using var reader = await hwmCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                existingState = new EquityHighWaterMarkState(
+                    reader.GetDecimal(0),
+                    reader.GetDecimal(1),
+                    reader.GetDecimal(2),
+                    new DateTimeOffset(DateTime.SpecifyKind(reader.GetDateTime(3), DateTimeKind.Utc)),
+                    reader.GetInt64(4));
+            }
+        }
+
+        EquityHighWaterMarkUpdate? update = null;
+        if (currentEquityNotional is { } equity)
+        {
+            update = EquityHighWaterMarkCalculator.Apply(equity, valuationAtUtc, existingState);
+            if (update.IsComplete || existingState is null)
+            {
+                if (existingState is null)
+                {
+                    await ExecuteAsync(connection, transaction,
+                        """
+                        INSERT INTO trading.autonomy_equity_high_water_marks
+                            (scope, equity_notional, high_water_mark_notional, drawdown_notional,
+                             last_valuation_at, observation_count)
+                        VALUES
+                            (@scope, @equity, @high_water_mark, @drawdown, @valuation_at, @observation_count);
+                        """,
+                        [
+                            Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()),
+                            Parameter("equity", NpgsqlDbType.Numeric, update.State.EquityNotional),
+                            Parameter("high_water_mark", NpgsqlDbType.Numeric, update.State.HighWaterMarkNotional),
+                            Parameter("drawdown", NpgsqlDbType.Numeric, update.State.DrawdownNotional),
+                            Parameter("valuation_at", NpgsqlDbType.TimestampTz, update.State.LastValuationAtUtc.UtcDateTime),
+                            Parameter("observation_count", NpgsqlDbType.Bigint, update.State.ObservationCount),
+                        ], cancellationToken).ConfigureAwait(false);
+                }
+                else if (update.State != existingState)
+                {
+                    await ExecuteAsync(connection, transaction,
+                        """
+                        UPDATE trading.autonomy_equity_high_water_marks
+                        SET equity_notional = @equity,
+                            high_water_mark_notional = @high_water_mark,
+                            drawdown_notional = @drawdown,
+                            last_valuation_at = @valuation_at,
+                            observation_count = @observation_count,
+                            updated_at = transaction_timestamp()
+                        WHERE scope = @scope;
+                        """,
+                        [
+                            Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()),
+                            Parameter("equity", NpgsqlDbType.Numeric, update.State.EquityNotional),
+                            Parameter("high_water_mark", NpgsqlDbType.Numeric, update.State.HighWaterMarkNotional),
+                            Parameter("drawdown", NpgsqlDbType.Numeric, update.State.DrawdownNotional),
+                            Parameter("valuation_at", NpgsqlDbType.TimestampTz, update.State.LastValuationAtUtc.UtcDateTime),
+                            Parameter("observation_count", NpgsqlDbType.Bigint, update.State.ObservationCount),
+                        ], cancellationToken).ConfigureAwait(false);
+                }
+
+                if (existingState is null || update.State != existingState)
+                {
+                    await ExecuteAsync(connection, transaction,
+                        """
+                        INSERT INTO trading.autonomy_equity_observations
+                            (scope, equity_notional, high_water_mark_notional, drawdown_notional, valuation_at)
+                        VALUES
+                            (@scope, @equity, @high_water_mark, @drawdown, @valuation_at);
+                        """,
+                        [
+                            Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()),
+                            Parameter("equity", NpgsqlDbType.Numeric, update.State.EquityNotional),
+                            Parameter("high_water_mark", NpgsqlDbType.Numeric, update.State.HighWaterMarkNotional),
+                            Parameter("drawdown", NpgsqlDbType.Numeric, update.State.DrawdownNotional),
+                            Parameter("valuation_at", NpgsqlDbType.TimestampTz, update.State.LastValuationAtUtc.UtcDateTime),
+                        ], cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var state = update?.State ?? existingState;
+        var complete = update?.IsComplete == true;
+        var reason = update?.UnavailableReason
+            ?? (state is null ? "EQUITY_VALUATION_UNAVAILABLE" : "EQUITY_VALUATION_UNAVAILABLE");
+        return new(
+            realizedDailyLoss,
+            positionCost,
+            positionQuantity,
+            hasPositionBasis,
+            DateTimeOffset.UtcNow,
+            state?.EquityNotional,
+            state?.HighWaterMarkNotional,
+            state?.DrawdownNotional,
+            state is not null,
+            complete,
+            complete ? null : reason);
     }
 
     public async Task<Money> GetBalanceAsync(
