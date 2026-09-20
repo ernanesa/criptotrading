@@ -14,6 +14,11 @@ public interface IBinanceSpotMarketClient
         int limit = 500,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads the public best bid/ask book ticker; it never submits an order.</summary>
+    Task<BinanceBookTicker> GetBookTickerAsync(
+        string symbol,
+        CancellationToken cancellationToken = default);
+
     Task<BinanceExchangeInfo> GetExchangeInfoAsync(
         string? symbol = null,
         CancellationToken cancellationToken = default);

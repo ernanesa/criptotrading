@@ -130,6 +130,9 @@ public sealed class BinancePreTradeValidationTests
         public Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc = null, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<BinanceSpotKline>>([]);
 
+        public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BinanceBookTicker("BTCUSDT", 100m, 1m, 101m, 1m, DateTimeOffset.UtcNow));
+
         public Task<BinanceExchangeInfo> GetExchangeInfoAsync(string? symbol = null, CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceExchangeInfo("UTC", 0, []));
     }

@@ -93,6 +93,52 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         return result;
     }
 
+    public async Task<BinanceBookTicker> GetBookTickerAsync(
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        using var response = await httpClient.GetAsync(
+            new Uri($"v3/ticker/bookTicker?symbol={Uri.EscapeDataString(normalizedSymbol)}", UriKind.Relative),
+            cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "bookTicker", cancellationToken).ConfigureAwait(false);
+        using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(contentStream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        if (root.ValueKind is not JsonValueKind.Object ||
+            !root.TryGetProperty("symbol", out var symbolElement) ||
+            !root.TryGetProperty("bidPrice", out var bidPriceElement) ||
+            !root.TryGetProperty("bidQty", out var bidQuantityElement) ||
+            !root.TryGetProperty("askPrice", out var askPriceElement) ||
+            !root.TryGetProperty("askQty", out var askQuantityElement))
+        {
+            throw new JsonException("Binance book ticker response is incomplete.");
+        }
+
+        var responseSymbol = symbolElement.GetString();
+        if (!string.Equals(responseSymbol, normalizedSymbol, StringComparison.Ordinal))
+        {
+            throw new JsonException("Binance book ticker symbol does not match the requested symbol.");
+        }
+
+        var bidPrice = ParseDecimal(bidPriceElement);
+        var bidQuantity = ParseDecimal(bidQuantityElement);
+        var askPrice = ParseDecimal(askPriceElement);
+        var askQuantity = ParseDecimal(askQuantityElement);
+        if (bidPrice <= 0m || bidQuantity <= 0m || askPrice <= 0m || askQuantity <= 0m || askPrice < bidPrice)
+        {
+            throw new JsonException("Binance book ticker contains an invalid top-of-book quote.");
+        }
+
+        return new BinanceBookTicker(
+            normalizedSymbol,
+            bidPrice,
+            bidQuantity,
+            askPrice,
+            askQuantity,
+            DateTimeOffset.UtcNow);
+    }
+
     public Task<BinanceExchangeInfo> GetExchangeInfoAsync(
         string? symbol = null,
         CancellationToken cancellationToken = default)

@@ -15,6 +15,23 @@ public sealed record BinanceSpotKline(
     decimal Volume,
     string Interval);
 
+/// <summary>
+/// Public top-of-book evidence. Binance does not include an observation timestamp
+/// in this REST payload; the adapter stamps the UTC receive time after validation.
+/// </summary>
+public sealed record BinanceBookTicker(
+    string Symbol,
+    decimal BidPrice,
+    decimal BidQuantity,
+    decimal AskPrice,
+    decimal AskQuantity,
+    DateTimeOffset ObservedAtUtc)
+{
+    public decimal BidLiquidityNotional => BidPrice * BidQuantity;
+
+    public decimal AskLiquidityNotional => AskPrice * AskQuantity;
+}
+
 public sealed record BinanceExchangeInfo(
     [property: JsonPropertyName("timezone")] string Timezone,
     [property: JsonPropertyName("serverTime")] long ServerTime,

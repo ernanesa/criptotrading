@@ -1,6 +1,8 @@
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
+using CryptoTrading.Domain.Execution;
+using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using System.Globalization;
@@ -66,6 +68,34 @@ public sealed class BaselineDecisionCycleTests
         Assert.NotNull(result.Execution);
         Assert.False(result.Execution!.IsDispatchable);
         Assert.Contains(RiskReasonCodes.RiskContextUnavailable, result.Execution.Decision.ReasonCodes);
+    }
+
+    [Fact]
+    public void FreshExecutionMarketEvidenceProducesPassiveLimitWithBalancedNotional()
+    {
+        var request = NewRequest(OperationalControlSnapshot.Initial) with
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(99m),
+                new Price(101m),
+                10_000m,
+                Start.AddMinutes(3).AddSeconds(1)),
+            ExecutionMarketMaxAge = TimeSpan.FromSeconds(5),
+            ExecutionTimeToLive = TimeSpan.FromMinutes(1),
+        };
+
+        var result = new BaselineDecisionCycle(
+            new TrendFollowingParameters("baseline", "1.0.0", BtcUsdt, 2, 3, 0m, 0m))
+            .Evaluate(request);
+
+        Assert.NotNull(result.Intent);
+        Assert.Equal(OrderType.Limit, result.Intent!.Type);
+        Assert.Equal(new Price(99m), result.Intent.ReferencePrice);
+        Assert.NotNull(result.Execution);
+        Assert.True(result.Execution!.IsDispatchable);
+        Assert.Equal(
+            result.Intent.Quantity.Value * result.Intent.ReferencePrice.Value,
+            result.Execution.Command!.AuthorizedNotional);
     }
 
     [Fact]
