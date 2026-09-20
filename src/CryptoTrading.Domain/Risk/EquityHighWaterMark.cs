@@ -66,9 +66,14 @@ public static class EquityHighWaterMarkCalculator
 
         if (valuationAtUtc == existing.LastValuationAtUtc)
         {
-            return equityNotional == existing.EquityNotional
+            if (equityNotional != existing.EquityNotional)
+            {
+                return new(existing, false, ValuationConflict);
+            }
+
+            return existing.ObservationCount > 1
                 ? new(existing, true, null)
-                : new(existing, false, ValuationConflict);
+                : new(existing, false, InitialObservationRequired);
         }
 
         var highWaterMark = Math.Max(existing.HighWaterMarkNotional, equityNotional);

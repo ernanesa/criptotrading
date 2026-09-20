@@ -131,7 +131,7 @@ internal sealed class AutonomyCycleHostedService(
             quoteAsset,
             dayStartUtc,
             currentEquityNotional,
-            latest.CloseTimeUtc,
+            now,
             cancellationToken).ConfigureAwait(false);
         var bookTicker = await marketClient.GetBookTickerAsync(
             runtime.AutonomySymbol,
