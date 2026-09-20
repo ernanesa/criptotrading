@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `6570b13`
+**Commit de código auditado:** `640d0a9`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -45,8 +45,8 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Public OOS runner | `dotnet run --project tools/CryptoTrading.PublicOosRunner -c Release --no-build -- ...` | PASS — 179 barras, 5 janelas OOS, fingerprint do manifesto igual ao replay reaberto, `promotion_authorized=false`; resultado não é decisão de promoção |
 | Public OOS production gate | `./scripts/test-public-oos-production.sh` | PASS — coleta e walk-forward descartáveis reproduzidos com 179 barras/5 janelas; guard de credenciais recusou ambiente contaminado; `promotion_authorized=false` |
 | Public OOS CI guard | `./scripts/test-public-oos-production-guard.sh` | PASS — credenciais fictícias foram recusadas antes da rede; o job foi adicionado ao workflow de qualidade |
-| External secret-file loading | `dotnet test tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj --configuration Release --no-restore` | PASS — arquivos externos privados carregam sem ecoar valores; precedência direta e permissões inseguras cobertas por 9 testes |
-| Dotenv permission gate | `dotnet test tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj --configuration Release --no-restore` | PASS — `.env` inseguro/symlink é ignorado em Unix; contrato coberto por 11 testes Configuration |
+| External secret-file loading | `dotnet test tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj --configuration Release --no-restore` | PASS — arquivos externos privados carregam sem ecoar valores; precedência direta e permissões inseguras cobertas por 10 testes |
+| Dotenv permission gate | `dotnet test tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj --configuration Release --no-restore` | PASS — `.env` inseguro/executável/symlink é ignorado em Unix; contrato coberto por 12 testes Configuration |
 | Probe external-secret integration | `dotnet build tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj --configuration Release --no-restore` | PASS — probe compartilha resolução de arquivos protegidos com o runtime; build sem warnings, sem chamadas mutáveis |
 | README/runtime alignment | revisão de `README.md` + `./scripts/scan-secrets.sh` | PASS — fronteiras pública/autenticada, opt-in e `canWithdraw=true` fail-closed estão documentados sem credenciais |
 | Redacted probe diagnostic | `./scripts/test-binance-testnet-auth-readonly.sh` | PASS/No-Go — relatório registrou somente a razão segura da etapa `account` (`canWithdraw=true`); corpos, headers, assinaturas e chaves foram omitidos |
