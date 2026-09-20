@@ -146,9 +146,15 @@ OperationalControlRegistration.Add(
     builder.Services,
     builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false));
 
-builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(serviceProvider =>
+builder.Services.AddSingleton<RuntimeTransitionJournal>(serviceProvider =>
     new RuntimeTransitionJournal(serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value.RuntimeAuditPath));
-builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeSupervisor, CryptoTrading.Domain.Runtime.RuntimeSupervisor>();
+builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(serviceProvider =>
+    serviceProvider.GetRequiredService<RuntimeTransitionJournal>());
+builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeSupervisor>(serviceProvider =>
+{
+    var journal = serviceProvider.GetRequiredService<RuntimeTransitionJournal>();
+    return new CryptoTrading.Domain.Runtime.RuntimeSupervisor(journal, initialRevision: journal.LastRevision);
+});
 builder.Services.AddHostedService<RuntimeSupervisorHostedService>();
 
 // Hosted services are started in registration order. Migrations must complete

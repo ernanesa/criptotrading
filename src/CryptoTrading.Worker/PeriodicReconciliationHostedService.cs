@@ -13,6 +13,7 @@ internal sealed class PeriodicReconciliationHostedService(
     ReconciliationReportWriter reportWriter,
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     IAsyncOperationalControl operationalControl,
+    CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
     ILogger<PeriodicReconciliationHostedService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -37,6 +38,10 @@ internal sealed class PeriodicReconciliationHostedService(
                     result.UnknownTradeIds.Count,
                     result.OpenOrderCount), stoppingToken).ConfigureAwait(false);
                 _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, stoppingToken).ConfigureAwait(false);
+                await runtimeSupervisor.MarkReconciliationAsync(
+                    result.IsHealthy,
+                    result.IsHealthy ? "periodic-reconciliation-healthy" : "periodic-reconciliation-mismatch",
+                    stoppingToken).ConfigureAwait(false);
 
                 if (result.IsHealthy)
                 {
