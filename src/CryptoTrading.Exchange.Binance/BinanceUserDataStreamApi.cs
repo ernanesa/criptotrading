@@ -30,15 +30,7 @@ public sealed class BinanceUserDataStreamApiOptions
         };
         var defaultPath = "/ws-api/v3";
         var address = WebSocketApiBaseAddress ?? new Uri($"wss://{expectedHost}{defaultPath}");
-        if (!address.IsAbsoluteUri || address.Scheme != "wss" ||
-            !string.Equals(address.Host, expectedHost, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(address.AbsolutePath, defaultPath, StringComparison.Ordinal) ||
-            !string.IsNullOrEmpty(address.Query) || !string.IsNullOrEmpty(address.Fragment))
-        {
-            throw new InvalidOperationException($"Binance WebSocket API address must be the allowlisted {Environment} endpoint.");
-        }
-
-        return address;
+        return BinanceEndpointPolicy.ValidateWebSocket(address, expectedHost, defaultPath, $"WebSocket API {Environment} address");
     }
 
     internal void Validate()

@@ -22,12 +22,13 @@ public sealed class BinanceMarketDataOptions
         };
 
         var address = WebSocketBaseAddress ?? defaultAddress;
-        if (!address.IsAbsoluteUri || address.Scheme is not ("ws" or "wss"))
+        var expectedHost = Environment switch
         {
-            throw new InvalidOperationException("Binance market data address must be an absolute WebSocket URI.");
-        }
-
-        return address;
+            BinanceEnvironment.Testnet => "stream.testnet.binance.vision",
+            BinanceEnvironment.Demo => "demo-stream.binance.com",
+            _ => throw new ArgumentOutOfRangeException(nameof(Environment), Environment, "Unsupported Binance environment.")
+        };
+        return BinanceEndpointPolicy.ValidateWebSocket(address, expectedHost, "/stream", "market data address");
     }
 
     internal void Validate()

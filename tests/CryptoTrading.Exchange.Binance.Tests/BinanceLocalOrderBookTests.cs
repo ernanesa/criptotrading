@@ -110,7 +110,7 @@ public sealed class BinanceLocalOrderBookTests
         var client = new BinanceSpotMarketDataClient(
             new BinanceMarketDataOptions
             {
-                WebSocketBaseAddress = new Uri("wss://stream.test.invalid/stream"),
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
                 InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
                 MaxReconnectDelay = TimeSpan.FromMilliseconds(1)
             },
