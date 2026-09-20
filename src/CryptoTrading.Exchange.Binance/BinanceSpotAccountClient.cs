@@ -47,7 +47,9 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     {
         await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
         var account = await SendSignedAsync<BinanceAccountSnapshot>("v3/account", [], cancellationToken).ConfigureAwait(false);
-        return BinanceAuthenticatedResponseValidator.Validate(account);
+        var allowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet &&
+                                             options.AllowTestnetWithdrawCapability;
+        return BinanceAuthenticatedResponseValidator.Validate(account, allowTestnetWithdrawCapability);
     }
 
     public async Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(

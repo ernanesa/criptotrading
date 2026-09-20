@@ -63,8 +63,10 @@ O projeto `CryptoTrading.Exchange.Binance` possui duas fronteiras separadas:
 Não existem endpoints de submit/cancel de ordens, saques, transferências,
 margin ou Futures no adapter autenticado. O registro autenticado não ocorre por
 default; exige Testnet, `NO_TRADE`, persistência quando aplicável e credenciais
-locais protegidas. A validação da resposta rejeita qualquer conta que reporte
-`canWithdraw=true`.
+locais protegidas. Em runtime, a validação rejeita qualquer conta que reporte
+`canWithdraw=true`. Exclusivamente o probe manual de Testnet registra essa
+capacidade para permitir a verificação completa das leituras autenticadas: a
+Testnet não expõe `/sapi` e o cliente continua sem qualquer endpoint mutável.
 
 O registro no host de composição usa `AddBinanceSpotMarketClient`, com
 `BinanceEnvironment.Testnet` como padrão. O endereço da Testnet é

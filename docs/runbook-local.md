@@ -102,10 +102,11 @@ fora do endpoint HTTPS exato da Testnet e `BINANCE_WITHDRAWALS_ENABLED` diferent
 de `false`. Account, open orders e trades são os únicos recursos chamados. A
 execução grava apenas um relatório redigido em `artifacts/binance/`; stdout e
 stderr brutos não são copiados, mas uma única linha de diagnóstico com prefixo
-controlado pode registrar etapa/status/razão segura (por exemplo,
-`canWithdraw=true`). Corpos, headers, assinaturas e credenciais nunca entram no
-relatório. Ausência de um resultado privado bem-sucedido mantém o gate em
-`No-Go`.
+controlado pode registrar etapa/status/razão segura. Na Spot Testnet,
+`canWithdraw` é somente uma capability observada: a Testnet não expõe `/sapi`
+e este adapter não possui endpoint de saque. Corpos, headers, assinaturas e
+credenciais nunca entram no relatório. Ausência de um resultado privado bem-
+sucedido mantém o gate em `No-Go`.
 
 Para persistir alertas operacionais locais redigidos, defina
 `WORKER_ALERT_FILE_DIRECTORY=artifacts/alerts`. Cada alerta será acrescentado

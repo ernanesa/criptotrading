@@ -103,6 +103,34 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [Fact]
+    public async Task TestnetProbeCanObserveWithdrawCapabilityWithoutAddingMutation()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":true,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[]}"));
+        var client = CreateClient(handler, allowTestnetWithdrawCapability: true);
+
+        var account = await client.GetAccountAsync();
+
+        Assert.True(account.CanWithdraw);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.All(handler.Requests, request => Assert.Equal(HttpMethod.Get, request.Method));
+    }
+
+    [Fact]
+    public async Task AccountAcceptsTestnetAssetAliasWithoutWeakeningTradingSymbolValidation()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"TEST-ASSET_1\",\"free\":\"1\",\"locked\":\"0\"}]}"));
+        var client = CreateClient(handler);
+
+        var account = await client.GetAccountAsync();
+
+        Assert.Equal("TEST-ASSET_1", account.Balances.Single().Asset);
+    }
+
+    [Fact]
     public async Task UnexpectedAccountPermissionFailsClosed()
     {
         using var handler = new RecordingHandler(
@@ -198,7 +226,7 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test handler owns the HttpClient lifetime for the duration of each test.")]
-    private static BinanceSpotAccountClient CreateClient(RecordingHandler handler)
+    private static BinanceSpotAccountClient CreateClient(RecordingHandler handler, bool allowTestnetWithdrawCapability = false)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
         var options = new BinanceAuthenticatedClientOptions
@@ -206,7 +234,8 @@ public sealed class BinanceSpotAccountClientTests
             RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
             ApiKey = "test-api-key",
             ApiSecret = "test-api-secret",
-            ClockDriftTolerance = TimeSpan.FromSeconds(5)
+            ClockDriftTolerance = TimeSpan.FromSeconds(5),
+            AllowTestnetWithdrawCapability = allowTestnetWithdrawCapability
         };
         return new BinanceSpotAccountClient(httpClient, options, timeProvider: new FixedTimeProvider(FixedNow));
     }
