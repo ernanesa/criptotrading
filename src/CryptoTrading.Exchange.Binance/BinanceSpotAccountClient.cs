@@ -103,9 +103,9 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     public async Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default)
     {
         var sentAt = timeProvider.GetUtcNow();
-        using var response = await httpClient.GetAsync(new Uri("time", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await httpClient.GetAsync(new Uri("v3/time", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         var receivedAt = timeProvider.GetUtcNow();
-        await EnsureSuccessAsync(response, "time").ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "v3/time").ConfigureAwait(false);
         var serverTime = await response.Content.ReadFromJsonAsync<BinanceServerTime>(JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? throw new JsonException("Binance returned an empty server-time response.");
 
