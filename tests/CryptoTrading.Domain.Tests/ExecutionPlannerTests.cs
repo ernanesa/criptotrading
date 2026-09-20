@@ -67,6 +67,38 @@ public sealed class ExecutionPlannerTests
         Assert.Equal(ExecutionPlanner.LiquidityUnavailable, result.NoTradeReason);
     }
 
+    [Fact]
+    public void BuyAtOrAboveFreeQuoteBalanceFailsClosed()
+    {
+        var result = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            Request(OrderSide.Buy).Intent,
+            Request(OrderSide.Buy).Decision,
+            Request(OrderSide.Buy).Market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            availableAccountLiquidityNotional: 1_000m));
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal(ExecutionPlanner.AccountLiquidityUnavailable, result.NoTradeReason);
+    }
+
+    [Fact]
+    public void SellDoesNotRequireQuoteBalance()
+    {
+        var request = Request(OrderSide.Sell);
+        var result = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            request.Intent,
+            request.Decision,
+            request.Market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            availableAccountLiquidityNotional: 0m));
+
+        Assert.False(result.IsNoTrade);
+    }
+
     private static ExecutionPlanRequest Request(
         OrderSide side,
         ExecutionMarketSnapshot? market = null,
