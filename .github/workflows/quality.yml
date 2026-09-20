@@ -78,3 +78,6 @@ jobs:
 
       - name: Test Testnet secret-storage preflight
         run: ./scripts/test-secret-storage-preflight.sh
+
+      - name: Test Binance read-only offline preflight
+        run: ./scripts/test-binance-readonly-preflight.sh

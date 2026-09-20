@@ -50,7 +50,7 @@ set +e
 probe_status=$?
 set -e
 
-if (( probe_status != 2 )) || ! grep -q 'API_KEY and BINANCE_API_SECRET must be supplied' "$probe_log"; then
+if (( probe_status != 2 )) || ! grep -q 'Binance credentials must be supplied through local values or protected credential files' "$probe_log"; then
     echo 'Refusing to pass: probe did not fail closed on missing credentials.' >&2
     exit 1
 fi
