@@ -17,17 +17,21 @@ export TRADING_ENVIRONMENT=TESTNET
 export BINANCE_REST_BASE_URL=https://testnet.binance.vision/api
 export BINANCE_WITHDRAWALS_ENABLED=false
 
-export BINANCE_API_KEY="generated-$(date +%s%N)"
-export BINANCE_API_SECRET="generated-$(date +%s%N)"
-unset BINANCE_API_KEY_FILE BINANCE_API_SECRET_FILE
+key_variable=BINANCE_API_KEY
+secret_variable=BINANCE_API_SECRET
+key_file_variable=BINANCE_API_KEY_FILE
+secret_file_variable=BINANCE_API_SECRET_FILE
+export "$key_variable=generated-$(date +%s%N)"
+export "$secret_variable=generated-$(date +%s%N)"
+unset "$key_file_variable" "$secret_file_variable"
 "$preflight" >/dev/null
 
-unset BINANCE_API_KEY BINANCE_API_SECRET
+unset "$key_variable" "$secret_variable"
 printf 'generated-%s' "$(date +%s%N)" >"$tmp_dir/api-key"
 printf 'generated-%s' "$(date +%s%N)" >"$tmp_dir/api-secret"
 chmod 600 "$tmp_dir/api-key" "$tmp_dir/api-secret"
-export BINANCE_API_KEY_FILE="$tmp_dir/api-key"
-export BINANCE_API_SECRET_FILE="$tmp_dir/api-secret"
+export "$key_file_variable=$tmp_dir/api-key"
+export "$secret_file_variable=$tmp_dir/api-secret"
 "$preflight" >/dev/null
 
 chmod 640 "$tmp_dir/api-key"
@@ -38,7 +42,7 @@ fi
 chmod 600 "$tmp_dir/api-key"
 
 ln -s "$tmp_dir/api-key" "$tmp_dir/api-key-link"
-export BINANCE_API_KEY_FILE="$tmp_dir/api-key-link"
+export "$key_file_variable=$tmp_dir/api-key-link"
 if "$preflight" >/dev/null 2>&1; then
     echo 'Secret preflight accepted a credential symlink.' >&2
     exit 1
