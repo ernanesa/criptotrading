@@ -73,5 +73,10 @@ fi
     echo '- Expected behavior: authenticated probe refused before network client creation'
     echo '- Probe exit code: `2`'
 } >"$report_file"
+chmod 600 "$report_file"
+[[ "$(stat -c '%a' -- "$report_file")" == "600" ]] || {
+    echo 'Read-only offline preflight report permissions could not be restricted to mode 600.' >&2
+    exit 1
+}
 
 echo "Read-only offline preflight report: $report_file"

@@ -80,6 +80,11 @@ fi
     echo "a controlled local terminal if troubleshooting is required; never paste"
     echo "credentials, signed URLs, headers, or raw exchange responses into logs."
 } > "$report_file"
+chmod 600 "$report_file"
+[[ "$(stat -c '%a' -- "$report_file")" == "600" ]] || {
+    echo 'Read-only probe report permissions could not be restricted to mode 600.' >&2
+    exit 1
+}
 
 echo "Read-only probe report: $report_file"
 if (( probe_status != 0 )); then
