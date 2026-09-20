@@ -5,6 +5,7 @@ using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Exchange.Paper;
 using CryptoTrading.Persistence;
 using CryptoTrading.Reconciliation;
+using CryptoTrading.Observability;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using CryptoTrading.Worker;
@@ -18,6 +19,15 @@ builder.Logging.AddJsonConsole(options =>
     options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
 });
 builder.Configuration.AddLocalDotEnv();
+LocalOpenTelemetryOptions.AddLocalOpenTelemetry(
+    builder.Services,
+    new LocalOpenTelemetryOptions
+    {
+        Endpoint = builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? string.Empty,
+        AllowedHosts = builder.Configuration["OTEL_EXPORTER_OTLP_ALLOWED_HOSTS"] ?? string.Empty,
+        Protocol = builder.Configuration["OTEL_EXPORTER_OTLP_PROTOCOL"] ?? "grpc"
+    },
+    serviceName: $"{TradingTelemetry.ServiceName}.Worker");
 builder.Services.AddTradingConfiguration(builder.Configuration);
 // The worker's default PAPER/NO_TRADE mode does not require Binance credentials.
 // The authenticated account client is registered only when the explicit,

@@ -2,6 +2,7 @@
 
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
+using CryptoTrading.Configuration;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.Options;
@@ -15,6 +16,7 @@ namespace CryptoTrading.Worker;
 public sealed class TestnetOutboxMessageExecutor(
     IBinanceSpotOrderClient client,
     IOptions<WorkerRuntimeOptions> options,
+    IOptions<TradingOptions> tradingOptions,
     ILogger<TestnetOutboxMessageExecutor> logger) : IOutboxMessageExecutor
 {
     public string MessageType => OrderExecutionPipeline.SubmitOrderMessageType;
@@ -39,6 +41,11 @@ public sealed class TestnetOutboxMessageExecutor(
         if (command.CorrelationId != message.CorrelationId || command.IdempotencyKey != message.IdempotencyKey)
         {
             throw new InvalidOperationException("The outbox envelope does not match the command identity.");
+        }
+
+        if (!tradingOptions.Value.Binance.ParsedAllowedSymbols.Contains(command.Symbol.Value, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
         }
 
         var request = new BinanceSpotOrderRequest(
