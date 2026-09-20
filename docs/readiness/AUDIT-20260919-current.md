@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `3626cde`
+**Commit de código auditado:** `947c4b2`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -44,6 +44,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Public kline quality adapter | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — journal `kline-rest` convertido em `ClosedBarEnvelope` e validado com hash/availability/símbolo; 49 testes Backtesting |
 | Public OOS runner | `dotnet run --project tools/CryptoTrading.PublicOosRunner -c Release --no-build -- ...` | PASS — 179 barras, 5 janelas OOS, fingerprint do manifesto igual ao replay reaberto, `promotion_authorized=false`; resultado não é decisão de promoção |
 | Public OOS production gate | `./scripts/test-public-oos-production.sh` | PASS — coleta e walk-forward descartáveis reproduzidos com 179 barras/5 janelas; guard de credenciais recusou ambiente contaminado; `promotion_authorized=false` |
+| Public OOS CI guard | `./scripts/test-public-oos-production-guard.sh` | PASS — credenciais fictícias foram recusadas antes da rede; o job foi adicionado ao workflow de qualidade |
 | Governed evidence projection | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — preregistration/dataset/estratégia lineage e trial budget validados antes do bundle; 51 testes Backtesting |
 | Governed evidence runner | `dotnet build tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj --configuration Release --no-restore` + guard tests | PASS — snapshot PostgreSQL read-only, sem migrations/ordens; credencial e connection string ausentes falham antes da rede |
 | Governed evidence PostgreSQL integration | `./scripts/test-postgres-integration.sh` | PASS — 10/10, incluindo persistência/restart e bundle governado com `promotion_authorized=false`; container efêmero encerrado ao final |
