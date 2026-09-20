@@ -5,6 +5,9 @@ using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Paper;
+using CryptoTrading.Exchange.Binance;
+using CryptoTrading.Configuration;
+using Microsoft.Extensions.Configuration;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -27,6 +30,129 @@ public sealed class WorkerRuntimeTests
         Assert.False(options.PersistenceEnabled);
         Assert.False(options.ReconciliationEnabled);
         Assert.False(options.RiskPolicyRequired);
+    }
+
+    [Fact]
+    public void TestnetExecutionRequiresAllExplicitSafetyGates()
+    {
+        var valid = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "TESTNET",
+            NoTrade = false,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true
+        };
+
+        valid.Validate();
+
+        foreach (var invalid in new[]
+        {
+            new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET", NoTrade = true, PersistenceEnabled = true,
+                ApplyMigrations = true, PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+            },
+            new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = false,
+                ApplyMigrations = true, TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+            },
+            new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true,
+                ApplyMigrations = false, PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+            },
+            new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true,
+                ApplyMigrations = true, PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = false, TestnetOrderExecutionEnabled = true
+            },
+            new WorkerRuntimeOptions
+            {
+                ExecutionMode = "PAPER", NoTrade = true,
+                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+            }
+        })
+        {
+            Assert.Throws<OptionsValidationException>(() => invalid.Validate());
+        }
+    }
+
+    [Fact]
+    public async Task TestnetExecutorLooksUpAmbiguousSubmitBeforeDurableRetry()
+    {
+        var command = NewCommand();
+        var exchange = new AmbiguousTestnetClient(command);
+        var executor = new TestnetOutboxMessageExecutor(
+            exchange,
+            Options.Create(new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET",
+                NoTrade = false,
+                PersistenceEnabled = true,
+                ApplyMigrations = true,
+                PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = true,
+                TestnetOrderExecutionEnabled = true
+            }),
+            NullLogger<TestnetOutboxMessageExecutor>.Instance);
+
+        await executor.ExecuteAsync(MessageFor(command));
+
+        Assert.Equal(1, exchange.SubmitCalls);
+        Assert.Equal(1, exchange.QueryCalls);
+    }
+
+    [Fact]
+    public async Task ExecutionRegistrationKeepsPaperDefaultAndSelectsTestnetOnlyWhenConfigured()
+    {
+        var paperServices = new ServiceCollection();
+        paperServices.AddLogging();
+        paperServices.AddSingleton<IPaperExchange, PaperExchange>();
+        paperServices.AddSingleton(Options.Create(new WorkerRuntimeOptions()));
+        _ = paperServices.AddOutboxExecution(new ConfigurationBuilder().AddInMemoryCollection().Build());
+        await using (var paperProvider = paperServices.BuildServiceProvider())
+        {
+            Assert.IsType<PaperOutboxMessageExecutor>(paperProvider.GetRequiredService<IOutboxMessageExecutor>());
+        }
+
+        var testnetValues = new Dictionary<string, string?>
+        {
+            ["WORKER_EXECUTION_MODE"] = "TESTNET",
+            ["TRADING_ENVIRONMENT"] = "TESTNET",
+            ["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/api",
+            ["BINANCE_WS_BASE_URL"] = "wss://testnet.binance.vision/ws",
+            ["BINANCE_API_KEY"] = "test-key",
+            ["BINANCE_API_SECRET"] = "test-secret",
+            ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
+            ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT"
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(testnetValues).Build();
+        var testnetServices = new ServiceCollection();
+        testnetServices.AddLogging();
+        testnetServices.AddTradingConfiguration(configuration);
+        testnetServices.AddSingleton(Options.Create(new WorkerRuntimeOptions
+        {
+            ExecutionMode = "TESTNET",
+            NoTrade = false,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true
+        }));
+        _ = testnetServices.AddOutboxExecution(configuration);
+        _ = testnetServices.AddSingleton<IBinanceSpotOrderClient>(_ => new AmbiguousTestnetClient(NewCommand()));
+        await using var testnetProvider = testnetServices.BuildServiceProvider();
+
+        _ = testnetProvider.GetRequiredService<IOptions<TradingOptions>>().Value;
+        Assert.IsType<TestnetOutboxMessageExecutor>(testnetProvider.GetRequiredService<IOutboxMessageExecutor>());
     }
 
     [Fact]
@@ -373,5 +499,36 @@ public sealed class WorkerRuntimeTests
         public IReadOnlyCollection<PaperOrderSnapshot> OpenOrders => [];
 
         public IReadOnlyCollection<PaperFill> Fills => [];
+    }
+
+    private sealed class AmbiguousTestnetClient(SubmitOrderCommand command) : IBinanceSpotOrderClient
+    {
+        public int SubmitCalls { get; private set; }
+        public int QueryCalls { get; private set; }
+
+        public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default)
+        {
+            SubmitCalls++;
+            throw new BinanceOrderSubmissionAmbiguousException(
+                request.ClientOrderId,
+                new IOException("simulated response loss"));
+        }
+
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            QueryCalls++;
+            return Task.FromResult(new BinanceSpotOrderResult(
+                42,
+                command.Symbol.Value,
+                command.ClientOrderId.Value,
+                "NEW",
+                command.ReferencePrice.Value,
+                command.Quantity.Value,
+                0m,
+                DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        }
+
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

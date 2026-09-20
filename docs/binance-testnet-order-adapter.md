@@ -23,3 +23,20 @@ nenhum fluxo atual.
 
 Este contrato não autoriza produção, não envia ordens durante testes e ainda
 não constitui aprovação para conectar o adaptador ao Worker.
+
+## Gate adicional do Worker
+
+O Worker só registra o executor Testnet quando todos os gates abaixo são
+verdadeiros:
+
+```text
+WORKER_EXECUTION_MODE=TESTNET
+WORKER_NO_TRADE=false
+WORKER_PERSISTENCE_ENABLED=true
+WORKER_APPLY_MIGRATIONS=true
+WORKER_TESTNET_EXECUTION_ACKNOWLEDGED=true
+WORKER_TESTNET_ORDER_EXECUTION_ENABLED=true
+```
+
+O modo padrão permanece `PAPER` + `NO_TRADE=true`; qualquer configuração
+incompleta falha no startup. Demo e Live não possuem caminho de DI.

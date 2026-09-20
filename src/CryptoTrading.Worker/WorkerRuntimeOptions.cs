@@ -21,6 +21,12 @@ public sealed class WorkerRuntimeOptions
 
     public bool NoTrade { get; set; } = true;
 
+    /// <summary>Explicit second factor for the isolated Binance Spot Testnet adapter.</summary>
+    public bool TestnetExecutionAcknowledged { get; set; }
+
+    /// <summary>Explicit opt-in that maps the Worker outbox to Testnet order execution.</summary>
+    public bool TestnetOrderExecutionEnabled { get; set; }
+
     /// <summary>Runs one deterministic local Shadow drill at worker startup when enabled.</summary>
     public bool ShadowEnabled { get; set; }
 
@@ -67,10 +73,48 @@ public sealed class WorkerRuntimeOptions
 
     public void Validate()
     {
-        if (!string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase))
+        var isPaper = string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase);
+        var isTestnet = string.Equals(ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase);
+        if (!isPaper && !isTestnet)
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
-                ["WORKER_EXECUTION_MODE must be PAPER until a separately approved live adapter exists."]);
+                ["WORKER_EXECUTION_MODE must be PAPER or TESTNET; live/demo modes are not supported."]);
+        }
+
+        if (isPaper && (TestnetExecutionAcknowledged || TestnetOrderExecutionEnabled))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["Testnet execution flags require WORKER_EXECUTION_MODE=TESTNET."]);
+        }
+
+        if (isTestnet && NoTrade)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_EXECUTION_MODE=TESTNET requires WORKER_NO_TRADE=false."]);
+        }
+
+        if (isTestnet && !PersistenceEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_EXECUTION_MODE=TESTNET requires WORKER_PERSISTENCE_ENABLED=true."]);
+        }
+
+        if (isTestnet && !ApplyMigrations)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_EXECUTION_MODE=TESTNET requires WORKER_APPLY_MIGRATIONS=true."]);
+        }
+
+        if (isTestnet && !TestnetExecutionAcknowledged)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_TESTNET_EXECUTION_ACKNOWLEDGED=true is required for Testnet execution."]);
+        }
+
+        if (isTestnet && !TestnetOrderExecutionEnabled)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_TESTNET_ORDER_EXECUTION_ENABLED=true is required for Testnet execution."]);
         }
 
         if (PollIntervalMilliseconds is < 100 or > 60_000)
