@@ -86,12 +86,14 @@ internal sealed class AutonomyCycleHostedService(
             runtime.AutonomyInterval,
             limit: runtime.AutonomyKlineLimit,
             cancellationToken: cancellationToken).ConfigureAwait(false);
-        var closed = klines
-            .Where(kline => kline.CloseTimeUtc <= now)
-            .Select(kline => new CloseBar(new Symbol(runtime.AutonomySymbol), kline.CloseTimeUtc, kline.Close))
-            .OrderBy(bar => bar.CloseTimeUtc)
-            .ToArray();
-        if (closed.Length == 0 || lastProcessedCloseUtc is { } previous && closed[^1].CloseTimeUtc <= previous)
+        var closed = ValidateAndMapKlines(
+            klines,
+            runtime.AutonomySymbol,
+            runtime.AutonomyInterval,
+            policyDocument.Policy.MaxMarketDataAge,
+            now,
+            lastProcessedCloseUtc);
+        if (closed.Count == 0 || lastProcessedCloseUtc is { } previous && closed[^1].CloseTimeUtc <= previous)
         {
             return;
         }
@@ -147,6 +149,61 @@ internal sealed class AutonomyCycleHostedService(
         decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0m
             ? parsed
             : 0m;
+
+    private static List<CloseBar> ValidateAndMapKlines(
+        IReadOnlyList<BinanceSpotKline> klines,
+        string symbol,
+        string interval,
+        TimeSpan maximumStaleness,
+        DateTimeOffset nowUtc,
+        DateTimeOffset? previousCloseUtc)
+    {
+        ArgumentNullException.ThrowIfNull(klines);
+        var guard = new BinanceClosedKlineGuard(symbol, interval, maximumStaleness);
+        var accepted = new List<CloseBar>(klines.Count);
+        foreach (var kline in klines.OrderBy(static item => item.OpenTimeUtc))
+        {
+            // REST returns the currently open candle as the last row. It is not
+            // an error; it is simply not eligible for a closed-bar decision.
+            if (kline.CloseTimeUtc.AddMilliseconds(1) > nowUtc)
+            {
+                continue;
+            }
+
+            var decision = guard.Evaluate(kline, nowUtc);
+            if (!decision.IsAccepted || decision.Kline is null)
+            {
+                throw new InvalidOperationException(
+                    $"Binance kline quality gate rejected the REST snapshot: {decision.RejectionReason}.");
+            }
+
+            accepted.Add(new CloseBar(
+                new Symbol(decision.Kline.Symbol),
+                decision.Kline.CloseTimeUtc,
+                decision.Kline.Close));
+        }
+
+        if (previousCloseUtc is { } previous && accepted.Count > 0)
+        {
+            var expectedNext = AddInterval(previous, interval);
+            var firstAfterCheckpoint = accepted.FirstOrDefault(bar => bar.CloseTimeUtc > previous);
+            if (firstAfterCheckpoint is not null && firstAfterCheckpoint.CloseTimeUtc > expectedNext)
+            {
+                throw new InvalidOperationException("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.");
+            }
+        }
+
+        return accepted;
+    }
+
+    private static DateTimeOffset AddInterval(DateTimeOffset value, string interval) => interval switch
+    {
+        "1m" => value.AddMinutes(1),
+        "5m" => value.AddMinutes(5),
+        "15m" => value.AddMinutes(15),
+        "1h" => value.AddHours(1),
+        _ => throw new InvalidOperationException($"Unsupported autonomy interval '{interval}'.")
+    };
 }
 
 internal static partial class AutonomyCycleLog

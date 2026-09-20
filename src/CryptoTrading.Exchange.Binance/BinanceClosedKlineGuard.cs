@@ -202,6 +202,41 @@ public sealed class BinanceClosedKlineGuard
         return BinanceKlineGuardDecision.Accepted(normalized);
     }
 
+    /// <summary>Admits a REST kline through the same closed-bar contract as WebSocket data.</summary>
+    public BinanceKlineGuardDecision Evaluate(BinanceSpotKline source, DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.OpenTimeUtc.Offset != TimeSpan.Zero || source.CloseTimeUtc.Offset != TimeSpan.Zero)
+        {
+            return BinanceKlineGuardDecision.Rejected(BinanceKlineRejectionReason.Invalid);
+        }
+
+        BinanceKlineEvent eventRecord;
+        try
+        {
+            eventRecord = new BinanceKlineEvent(
+                $"rest:{symbol}",
+                symbol,
+                source.CloseTimeUtc.ToUnixTimeMilliseconds(),
+                nowUtc,
+                source.OpenTimeUtc.ToUnixTimeMilliseconds(),
+                source.CloseTimeUtc.ToUnixTimeMilliseconds(),
+                source.Interval,
+                source.Open,
+                source.Close,
+                source.High,
+                source.Low,
+                source.Volume,
+                IsClosed: true);
+        }
+        catch (ArgumentException)
+        {
+            return BinanceKlineGuardDecision.Rejected(BinanceKlineRejectionReason.Invalid);
+        }
+
+        return Evaluate(eventRecord, nowUtc);
+    }
+
     /// <summary>Marks the stream healthy after an authoritative backfill.</summary>
     public void Reset(DateTimeOffset? lastRecoveredOpenTimeUtc = null)
     {

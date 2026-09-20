@@ -57,6 +57,27 @@ public sealed class BinanceClosedKlineGuardTests
             guard.Evaluate(invalid, open.AddMinutes(2)).RejectionReason);
     }
 
+    [Fact]
+    public void AppliesTheSameContractToRestKlines()
+    {
+        var guard = new BinanceClosedKlineGuard("BTCUSDT", "1m", TimeSpan.FromMinutes(3));
+        var open = DateTimeOffset.Parse("2026-01-01T00:00:00Z", CultureInfo.InvariantCulture);
+        var restKline = new BinanceSpotKline(
+            open,
+            open.AddMinutes(1).AddMilliseconds(-1),
+            100m,
+            102m,
+            99m,
+            101m,
+            10m,
+            "1m");
+
+        var decision = guard.Evaluate(restKline, open.AddMinutes(1));
+
+        Assert.True(decision.IsAccepted);
+        Assert.Equal(open.AddMinutes(1), decision.Kline!.CloseTimeUtc);
+    }
+
     private static BinanceKlineEvent Event(DateTimeOffset open, bool isClosed) => new(
         "btcusdt@kline_1m",
         "BTCUSDT",
