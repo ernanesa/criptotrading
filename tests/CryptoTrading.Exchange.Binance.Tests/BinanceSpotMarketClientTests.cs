@@ -35,6 +35,26 @@ public sealed class BinanceSpotMarketClientTests
         Assert.Equal("/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=100&startTime=0&endTime=172800000", handler.Request!.RequestUri!.PathAndQuery);
     }
 
+    [Fact]
+    public async Task GetBookTickerParsesStringDecimalsAndStampsObservation()
+    {
+        using var handler = new RecordingHandler(
+            "{\"symbol\":\"BTCUSDT\",\"bidPrice\":\"60000.00\",\"bidQty\":\"0.25\",\"askPrice\":\"60001.00\",\"askQty\":\"0.10\"}");
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        var before = DateTimeOffset.UtcNow;
+        var client = new BinanceSpotMarketClient(httpClient);
+
+        var result = await client.GetBookTickerAsync(" btcusdt ");
+
+        Assert.Equal("BTCUSDT", result.Symbol);
+        Assert.Equal(60000m, result.BidPrice);
+        Assert.Equal(0.25m, result.BidQuantity);
+        Assert.Equal(60001m, result.AskPrice);
+        Assert.Equal(0.10m, result.AskQuantity);
+        Assert.InRange(result.ObservedAtUtc, before, DateTimeOffset.UtcNow);
+        Assert.Equal("/api/v3/ticker/bookTicker?symbol=BTCUSDT", handler.Request!.RequestUri!.PathAndQuery);
+    }
+
     [Theory]
     [InlineData("2d")]
     [InlineData("1D")]

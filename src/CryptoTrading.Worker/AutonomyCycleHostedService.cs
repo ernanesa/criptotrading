@@ -5,6 +5,7 @@ using System.Globalization;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
+using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
@@ -111,22 +112,35 @@ internal sealed class AutonomyCycleHostedService(
         var quoteAsset = new Asset("USDT");
         var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
         var availableQuoteLiquidity = ParseBalance(quote?.Free);
+        var totalQuoteBalance = availableQuoteLiquidity + ParseBalance(quote?.Locked);
+        var latest = closed[^1];
+        var unsupportedAssetBalance = account.Balances
+            .Where(balance => !string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase))
+            .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
+        var currentEquityNotional = unsupportedAssetBalance
+            ? null
+            : totalQuoteBalance + (btcQuantity * latest.ClosePrice.Value);
         var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
-        var accounting = await riskContextStore.ReadAutonomyRiskContextAsync(
+        var accounting = await riskContextStore.RecordAutonomyRiskContextAsync(
+            checkpointScope,
             new Symbol(runtime.AutonomySymbol),
             quoteAsset,
             dayStartUtc,
+            currentEquityNotional,
+            latest.CloseTimeUtc,
             cancellationToken).ConfigureAwait(false);
-        var latest = closed[^1];
+        var bookTicker = await marketClient.GetBookTickerAsync(
+            runtime.AutonomySymbol,
+            cancellationToken).ConfigureAwait(false);
+        var executionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker);
         var positionBasisConsistent = btcQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
             : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m;
-        // A high-water mark is not yet persisted. Keeping the context incomplete
-        // deliberately blocks new exposure instead of treating drawdown as zero.
-        var riskContextComplete = false;
+        var riskContextComplete = positionBasisConsistent && accounting.RiskContextComplete;
         var riskContextReason = !positionBasisConsistent
             ? "POSITION_BASIS_DRIFT"
-            : "HIGH_WATER_MARK_UNAVAILABLE";
+            : accounting.RiskContextUnavailableReason;
         var portfolio = new PortfolioSnapshot(
             new Dictionary<Asset, Money>
             {
@@ -135,7 +149,7 @@ internal sealed class AutonomyCycleHostedService(
             },
             btcQuantity * latest.ClosePrice.Value,
             accounting.RealizedDailyLossNotional,
-            0m,
+            accounting.DrawdownNotional ?? 0m,
             accounting.PositionCostNotional,
             riskContextComplete,
             riskContextReason);
@@ -159,8 +173,11 @@ internal sealed class AutonomyCycleHostedService(
             policyDocument.Policy,
             effectiveControl,
             runtime.AutonomyEntryTargetNotional,
-            now,
-            marketRisk);
+            DateTimeOffset.UtcNow,
+            marketRisk,
+            executionMarket,
+            policyDocument.Policy.MaxMarketDataAge,
+            TimeSpan.FromMinutes(1));
         var result = cycle.Evaluate(request);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
@@ -172,7 +189,10 @@ internal sealed class AutonomyCycleHostedService(
 
         if (result.Execution is not { IsDispatchable: true, OutboxRecord: { } outbox })
         {
-            AutonomyCycleLog.Blocked(logger, latest.CloseTimeUtc, string.Join(',', result.Execution?.Decision.ReasonCodes ?? []));
+            AutonomyCycleLog.Blocked(
+                logger,
+                latest.CloseTimeUtc,
+                result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []));
             return;
         }
 

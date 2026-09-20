@@ -17,7 +17,10 @@ public sealed record BaselineDecisionCycleRequest(
     OperationalControlSnapshot OperationalControl,
     decimal EntryTargetNotional,
     DateTimeOffset EvaluatedAtUtc,
-    MarketRiskSnapshot? MarketRisk = null)
+    MarketRiskSnapshot? MarketRisk = null,
+    ExecutionMarketSnapshot? ExecutionMarket = null,
+    TimeSpan? ExecutionMarketMaxAge = null,
+    TimeSpan? ExecutionTimeToLive = null)
 {
     public void Validate()
     {
@@ -38,6 +41,16 @@ public sealed record BaselineDecisionCycleRequest(
         if (EvaluatedAtUtc.Offset != TimeSpan.Zero)
         {
             throw new ArgumentException("Evaluation time must be UTC.", nameof(EvaluatedAtUtc));
+        }
+
+        if (ExecutionMarketMaxAge is { } maxAge && maxAge <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ExecutionMarketMaxAge));
+        }
+
+        if (ExecutionTimeToLive is { } ttl && ttl <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ExecutionTimeToLive));
         }
     }
 }
@@ -117,6 +130,58 @@ public sealed class BaselineDecisionCycle
             requestRisk,
             decision.CloseTimeUtc);
         var execution = OrderExecutionPipeline.Evaluate(intent, request.RiskPolicy, request.OperationalControl);
+
+        // The strategy/risk decision remains pure. When a fresh top-of-book
+        // snapshot is supplied, replace the provisional market intent with one
+        // deterministic passive-limit attempt. No exchange or persistence I/O
+        // occurs in this layer.
+        if (execution.IsDispatchable && request.ExecutionMarket is not null)
+        {
+            var plan = ExecutionPlanner.Plan(
+                new ExecutionPlanRequest(
+                    intent,
+                    execution.Decision,
+                    request.ExecutionMarket,
+                    request.EvaluatedAtUtc,
+                    request.ExecutionMarketMaxAge ?? request.RiskPolicy.MaxMarketDataAge,
+                    request.ExecutionTimeToLive ?? TimeSpan.FromMinutes(1)));
+            if (plan.Plan is null)
+            {
+                return new(
+                    decision,
+                    intent,
+                    new OrderExecutionResult(
+                        execution.Decision,
+                        null,
+                        null),
+                    plan.NoTradeReason);
+            }
+
+            var passiveRisk = new RiskEvaluationRequest(
+                plan.Plan.AuthorizedNotional,
+                request.Portfolio.GrossExposureNotional,
+                request.Portfolio.DailyLossNotional,
+                request.Portfolio.Drawdown,
+                decision.CloseTimeUtc,
+                request.EvaluatedAtUtc,
+                marketRisk: request.MarketRisk,
+                riskContextComplete: request.Portfolio.RiskContextComplete);
+            var passiveIntent = new OrderIntent(
+                plan.Plan.OrderId,
+                plan.Plan.ClientOrderId,
+                decision.Symbol,
+                plan.Plan.Side,
+                OrderType.Limit,
+                plan.Plan.Quantity,
+                plan.Plan.LimitPrice,
+                intent.CorrelationId,
+                plan.Plan.IdempotencyKey,
+                passiveRisk,
+                request.EvaluatedAtUtc);
+            execution = OrderExecutionPipeline.Evaluate(passiveIntent, request.RiskPolicy, request.OperationalControl);
+            return new(decision, passiveIntent, execution, execution.IsDispatchable ? null : string.Join(',', execution.Decision.ReasonCodes));
+        }
+
         return new(decision, intent, execution, execution.IsDispatchable ? null : string.Join(',', execution.Decision.ReasonCodes));
     }
 
