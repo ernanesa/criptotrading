@@ -183,18 +183,14 @@ internal static class BinanceAuthenticatedResponseValidator
 
     private static string NormalizeAsset(string? value, string fieldName)
     {
-        // An account asset is exchange-supplied metadata, not a trading symbol.
-        // The Spot account schema represents it as a string and Testnet may
-        // include non-symbol asset aliases. Preserve its spelling while
-        // bounding it and rejecting control characters before it crosses into
-        // application state or logs.
-        var normalized = RequireText(value, fieldName);
-        if (normalized.Length > 128 || normalized.Any(char.IsControl))
+        try
         {
-            throw Invalid($"{fieldName} must be at most 128 characters and cannot contain control characters");
+            return BinanceAssetNormalizer.Normalize(value, fieldName);
         }
-
-        return normalized;
+        catch (ArgumentException exception)
+        {
+            throw Invalid(exception.Message);
+        }
     }
 
     private static decimal ParseNonNegativeDecimal(string? value, string fieldName)

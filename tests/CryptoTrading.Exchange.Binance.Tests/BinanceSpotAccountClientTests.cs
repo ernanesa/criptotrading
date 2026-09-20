@@ -118,16 +118,27 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [Fact]
-    public async Task AccountAcceptsTestnetAssetAliasWithoutWeakeningTradingSymbolValidation()
+    public async Task AccountAcceptsCanonicalTestnetAssetAliasWithoutWeakeningTradingSymbolValidation()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"testasset1\",\"free\":\"1\",\"locked\":\"0\"}]}"));
+        var client = CreateClient(handler);
+
+        var account = await client.GetAccountAsync();
+
+        Assert.Equal("testasset1", account.Balances.Single().Asset);
+    }
+
+    [Fact]
+    public async Task AccountRejectsAssetOutsideReconciliationContract()
     {
         using var handler = new RecordingHandler(
             ("time", "{\"serverTime\":1789819200000}"),
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"TEST-ASSET_1\",\"free\":\"1\",\"locked\":\"0\"}]}"));
         var client = CreateClient(handler);
 
-        var account = await client.GetAccountAsync();
-
-        Assert.Equal("TEST-ASSET_1", account.Balances.Single().Asset);
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
     }
 
     [Fact]

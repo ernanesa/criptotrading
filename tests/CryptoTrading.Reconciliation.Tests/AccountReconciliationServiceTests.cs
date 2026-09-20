@@ -9,6 +9,30 @@ public sealed class AccountReconciliationServiceTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
 
+    [Theory]
+    [InlineData("usdt", "USDT")]
+    [InlineData(" testasset1 ", "TESTASSET1")]
+    public void BinanceBalanceFlowsIntoReconciliationWithSharedAssetIdentity(string exchangeAsset, string expectedAsset)
+    {
+        var balance = new BinanceBalance(exchangeAsset, "100.00", "0.00");
+
+        var reconciliationBalance = ReconciliationBalance.FromBinance(balance);
+
+        Assert.Equal(expectedAsset, reconciliationBalance.Asset);
+        Assert.Equal(100m, reconciliationBalance.Total);
+    }
+
+    [Theory]
+    [InlineData("TEST-ASSET_1")]
+    [InlineData("X")]
+    [InlineData("ASSET\u0001")]
+    public void BinanceBalanceRejectsAssetOutsideSharedContract(string exchangeAsset)
+    {
+        var balance = new BinanceBalance(exchangeAsset, "1", "0");
+
+        Assert.Throws<ArgumentException>(() => ReconciliationBalance.FromBinance(balance));
+    }
+
     [Fact]
     public void ReconciliationOptionsRejectsUnsafeSnapshotAge()
     {
