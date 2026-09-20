@@ -121,8 +121,12 @@ internal sealed class AutonomyCycleHostedService(
             ? null
             : totalQuoteBalance + (btcQuantity * latest.ClosePrice.Value);
         var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        // Unlike the decision checkpoint, the equity scope must survive
+        // strategy-version changes; otherwise a new strategy could reset the
+        // historical drawdown protection after only one baseline observation.
+        var riskContextScope = $"equity:{runtime.ReconciliationAccount}:{runtime.AutonomySymbol}:{quoteAsset.Value}";
         var accounting = await riskContextStore.RecordAutonomyRiskContextAsync(
-            checkpointScope,
+            riskContextScope,
             new Symbol(runtime.AutonomySymbol),
             quoteAsset,
             dayStartUtc,
