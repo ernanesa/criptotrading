@@ -19,10 +19,13 @@ internal sealed class RuntimeTransitionJournal : IRuntimeTransitionSink, IDispos
     private readonly SemaphoreSlim gate = new(1, 1);
     private string previousHash = string.Empty;
 
+    public long LastRevision { get; }
+
     public RuntimeTransitionJournal(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         this.path = Path.GetFullPath(path.Trim());
+        LastRevision = LoadExistingJournal();
     }
 
     public async ValueTask AppendAsync(RuntimeStateTransition transition, CancellationToken cancellationToken = default)
@@ -79,4 +82,53 @@ internal sealed class RuntimeTransitionJournal : IRuntimeTransitionSink, IDispos
         string PreviousHash,
         string PayloadSha256,
         string ChainSha256);
+
+    private long LoadExistingJournal()
+    {
+        if (!File.Exists(path))
+        {
+            return 0;
+        }
+
+        var expectedPreviousHash = string.Empty;
+        long lastRevision = 0;
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            RuntimeTransitionJournalEntry entry;
+            try
+            {
+                entry = JsonSerializer.Deserialize<RuntimeTransitionJournalEntry>(line, JsonOptions)
+                    ?? throw new InvalidDataException("Runtime journal entry was null.");
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidDataException("Runtime lifecycle journal is not valid JSON.", exception);
+            }
+
+            if (entry.Transition.Revision <= lastRevision || !string.Equals(entry.PreviousHash, expectedPreviousHash, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("Runtime lifecycle journal revision or chain continuity is invalid.");
+            }
+
+            var canonical = JsonSerializer.Serialize(entry.Transition, JsonOptions);
+            var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+            var chainHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(entry.PreviousHash + payloadHash)));
+            if (!string.Equals(entry.PayloadSha256, payloadHash, StringComparison.Ordinal) ||
+                !string.Equals(entry.ChainSha256, chainHash, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("Runtime lifecycle journal hash validation failed.");
+            }
+
+            lastRevision = entry.Transition.Revision;
+            expectedPreviousHash = entry.ChainSha256;
+        }
+
+        previousHash = expectedPreviousHash;
+        return lastRevision;
+    }
 }
