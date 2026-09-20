@@ -1,3 +1,4 @@
+using System.Net.WebSockets;
 using System.Text;
 using Xunit;
 
@@ -45,6 +46,29 @@ public sealed class BinanceMarketDataClientTests
     }
 
     [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns both test transports for the duration of this test.")]
+    public async Task ReadAsyncReconnectsWhenEstablishedSocketFailsWhileReading()
+    {
+        var first = new ThrowingTransport(new WebSocketException("simulated receive failure"));
+        var second = new FakeTransport(
+            "{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"t\":43,\"p\":\"101.50\",\"q\":\"0.010\",\"m\":false}}");
+        var transports = new Queue<IBinanceWebSocketTransport>([first, second]);
+        var client = new BinanceSpotMarketDataClient(
+            new BinanceMarketDataOptions
+            {
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectAttempts = 2
+            },
+            () => transports.Dequeue());
+
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)]).GetAsyncEnumerator();
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(43, Assert.IsType<BinanceTradeEvent>(enumerator.Current).TradeId);
+    }
+
+    [Fact]
     public void BackoffIsBounded()
     {
         var initial = TimeSpan.FromSeconds(1);
@@ -78,4 +102,21 @@ public sealed class BinanceMarketDataClientTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
+
+#pragma warning disable CA1812 // Test transport is instantiated through the interface queue.
+    private sealed class ThrowingTransport(Exception exception) : IBinanceWebSocketTransport
+    {
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            yield return ReadOnlyMemory<byte>.Empty;
+            throw exception;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+#pragma warning restore CA1812
 }
