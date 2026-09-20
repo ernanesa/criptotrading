@@ -23,6 +23,46 @@ public sealed record RuntimeStateTransition(
     DateTimeOffset OccurredAtUtc,
     string? CorrelationId = null);
 
+/// <summary>Append-only boundary for runtime lifecycle evidence.</summary>
+public interface IRuntimeTransitionSink
+{
+    ValueTask AppendAsync(RuntimeStateTransition transition, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Deterministic process-local sink used by tests and paper mode.</summary>
+public sealed class InMemoryRuntimeTransitionSink : IRuntimeTransitionSink
+{
+    private readonly object gate = new();
+    private readonly List<RuntimeStateTransition> transitions = [];
+
+    public IReadOnlyList<RuntimeStateTransition> Transitions
+    {
+        get
+        {
+            lock (gate)
+            {
+                return transitions.ToArray();
+            }
+        }
+    }
+
+    public ValueTask AppendAsync(RuntimeStateTransition transition, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (transitions.Any(existing => existing.Revision == transition.Revision))
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            transitions.Add(transition);
+        }
+
+        return ValueTask.CompletedTask;
+    }
+}
+
 /// <summary>
 /// Pure fail-closed runtime state machine. It deliberately does not know about
 /// exchanges, persistence or hosting, so every adapter can test the same gates.
