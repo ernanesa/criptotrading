@@ -1,6 +1,8 @@
 using CryptoTrading.Domain.Accounting;
+using System.Diagnostics;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
+using CryptoTrading.Observability;
 using Xunit;
 
 namespace CryptoTrading.Reconciliation.Tests;
@@ -31,6 +33,34 @@ public sealed class AccountReconciliationServiceTests
         var balance = new BinanceBalance(exchangeAsset, "1", "0");
 
         Assert.Throws<ArgumentException>(() => ReconciliationBalance.FromBinance(balance));
+    }
+
+    [Fact]
+    public async Task ReconciliationActivityContainsOnlyBoundedOutcomeTags()
+    {
+        var activities = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == TradingTelemetry.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => activities.Add(activity)
+        };
+        ActivitySource.AddActivityListener(listener);
+        var service = CreateService(
+            new ReconciliationSnapshot(Now, [new ReconciliationBalance("USDT", 100m, 0m)], []),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            CreateControl(),
+            new InMemoryReconciliationEventSink());
+
+        var result = await service.ReconcileAsync();
+
+        var activity = Assert.Single(activities);
+        Assert.Equal("reconciliation", activity.GetTagItem("crypto.operation"));
+        Assert.Equal("healthy", activity.GetTagItem("crypto.outcome"));
+        Assert.Equal(0, activity.GetTagItem("crypto.mismatch_count"));
+        Assert.Equal(ActivityStatusCode.Ok, activity.Status);
+        Assert.DoesNotContain(activity.Tags, tag => tag.Key is "asset" or "symbol" or "clientOrderId");
+        Assert.True(result.IsHealthy);
     }
 
     [Fact]
@@ -232,7 +262,7 @@ public sealed class AccountReconciliationServiceTests
     private static AccountReconciliationService CreateService(
         ReconciliationSnapshot snapshot,
         IReadOnlyDictionary<string, decimal> balances,
-        IOperationalControl control,
+        IAsyncOperationalControl control,
         IReconciliationEventSink sink,
         IReadOnlyList<ReconciliationOpenOrder>? localOpenOrders = null) => new(
         new FakeSnapshotProvider(snapshot),

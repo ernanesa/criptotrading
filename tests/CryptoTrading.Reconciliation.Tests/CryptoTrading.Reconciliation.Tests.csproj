@@ -18,5 +18,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/CryptoTrading.Reconciliation/CryptoTrading.Reconciliation.csproj" />
+    <ProjectReference Include="../../src/CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
   </ItemGroup>
 </Project>

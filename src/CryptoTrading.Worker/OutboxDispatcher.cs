@@ -2,6 +2,7 @@
 #pragma warning disable CA1031 // Dispatch boundary converts all non-cancellation failures into durable retries.
 
 using System.Text.Json;
+using System.Diagnostics;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
@@ -233,6 +234,10 @@ public sealed class OutboxDispatcher(
         Dictionary<string, IOutboxMessageExecutor> executors,
         CancellationToken cancellationToken)
     {
+        using var activity = TradingTelemetry.ActivitySource.StartActivity(
+            "cryptotrading.outbox.dispatch",
+            ActivityKind.Internal);
+        activity?.SetTag("crypto.operation", "outbox_dispatch");
         try
         {
             if (!executors.TryGetValue(message.MessageType, out var executor))
@@ -247,6 +252,7 @@ public sealed class OutboxDispatcher(
             }
             else
             {
+                activity?.SetStatus(ActivityStatusCode.Ok);
                 TradingTelemetry.RecordOutboxDispatch(succeeded: true);
                 DispatcherLog.Processed(logger, message.MessageId, message.MessageType);
             }
@@ -257,6 +263,8 @@ public sealed class OutboxDispatcher(
         }
         catch (Exception exception)
         {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.SetTag("error.type", exception.GetType().Name);
             var delaySeconds = Math.Min(300d, Math.Pow(2d, Math.Min(message.Attempts - 1, 8)));
             if (message.Attempts >= options.Value.MaxOutboxAttempts)
             {
