@@ -70,7 +70,7 @@ internal sealed class AutonomyCycleHostedService(
     private async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}";
+        var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}:{cycle.StrategyVersion}";
         var lastProcessedCloseUtc = await checkpointStore
             .GetLastProcessedCloseAsync(checkpointScope, cancellationToken)
             .ConfigureAwait(false);

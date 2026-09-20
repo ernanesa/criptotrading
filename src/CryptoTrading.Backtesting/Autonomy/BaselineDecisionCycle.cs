@@ -65,6 +65,9 @@ public sealed class BaselineDecisionCycle
         strategy = new TrendFollowingStrategy(parameters ?? throw new ArgumentNullException(nameof(parameters)));
     }
 
+    /// <summary>Version participates in the durable checkpoint scope and decision identity.</summary>
+    public string StrategyVersion => strategy.Parameters.Version;
+
     public BaselineDecisionCycleResult Evaluate(BaselineDecisionCycleRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
