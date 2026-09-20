@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `640d0a9`
+**Commit de código auditado:** `62f1db5`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -50,6 +50,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Probe external-secret integration | `dotnet build tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj --configuration Release --no-restore` | PASS — probe compartilha resolução de arquivos protegidos com o runtime; build sem warnings, sem chamadas mutáveis |
 | README/runtime alignment | revisão de `README.md` + `./scripts/scan-secrets.sh` | PASS — fronteiras pública/autenticada, opt-in e `canWithdraw=true` fail-closed estão documentados sem credenciais |
 | Redacted probe diagnostic | `./scripts/test-binance-testnet-auth-readonly.sh` | PASS/No-Go — relatório registrou somente a razão segura da etapa `account` (`canWithdraw=true`); corpos, headers, assinaturas e chaves foram omitidos |
+| Probe secret-file wrapper guard | execução do wrapper em `/tmp` com paths inexistentes | PASS — wrapper aceitou o formato por arquivo e o probe falhou fechado antes da rede, sem credenciais no relatório |
 | Governed evidence projection | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — preregistration/dataset/estratégia lineage e trial budget validados antes do bundle; 51 testes Backtesting |
 | Governed evidence runner | `dotnet build tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj --configuration Release --no-restore` + guard tests | PASS — snapshot PostgreSQL read-only, sem migrations/ordens; credencial e connection string ausentes falham antes da rede |
 | Governed evidence PostgreSQL integration | `./scripts/test-postgres-integration.sh` | PASS — 10/10, incluindo persistência/restart e bundle governado com `promotion_authorized=false`; container efêmero encerrado ao final |
