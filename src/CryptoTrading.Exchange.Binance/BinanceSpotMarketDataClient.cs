@@ -45,13 +45,13 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
         {
             var transport = transportFactory();
             var connected = false;
+            var receivedValidEvent = false;
             try
             {
                 try
                 {
                     await transport.ConnectAsync(uri, cancellationToken).ConfigureAwait(false);
                     connected = true;
-                    attempt = 0;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -68,23 +68,67 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
 
                 if (connected)
                 {
-                    await foreach (var item in transport.ReadMessagesAsync(cancellationToken).ConfigureAwait(false))
+                    var enumerator = transport.ReadMessagesAsync(cancellationToken)
+                        .GetAsyncEnumerator(cancellationToken);
+                    try
                     {
-                        var parsed = BinanceMarketDataParser.TryParse(item.Span, timeProvider.GetUtcNow());
-                        if (parsed is null)
+                        while (!cancellationToken.IsCancellationRequested)
                         {
-                            // One bad event must not tear down a healthy feed, but it must remain observable.
-                            TradingTelemetry.RecordInvalidMarketDataPayload();
-                            continue;
-                        }
+                            ReadOnlyMemory<byte> item;
+                            try
+                            {
+                                if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                                {
+                                    break;
+                                }
 
-                        yield return parsed;
+                                item = enumerator.Current;
+                            }
+                            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                            {
+                                // A transport-side cancellation (for example a session watchdog)
+                                // is a reconnectable failure, not a caller shutdown.
+                                break;
+                            }
+                            catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
+                            {
+                                // Reconnect after an established socket fails while reading.
+                                break;
+                            }
+                            catch (IOException) when (!cancellationToken.IsCancellationRequested)
+                            {
+                                // Reconnect after a receive/read I/O failure.
+                                break;
+                            }
+
+                            var parsed = BinanceMarketDataParser.TryParse(item.Span, timeProvider.GetUtcNow());
+                            if (parsed is null)
+                            {
+                                // One bad event must not tear down a healthy feed, but it must remain observable.
+                                TradingTelemetry.RecordInvalidMarketDataPayload();
+                                continue;
+                            }
+
+                            // A valid payload proves that this session is healthy. The
+                            // next reconnect may therefore start at the initial delay.
+                            receivedValidEvent = true;
+                            yield return parsed;
+                        }
+                    }
+                    finally
+                    {
+                        await enumerator.DisposeAsync().ConfigureAwait(false);
                     }
                 }
             }
             finally
             {
                 await transport.DisposeAsync().ConfigureAwait(false);
+            }
+
+            if (receivedValidEvent)
+            {
+                attempt = 0;
             }
 
             if (options.MaxReconnectAttempts > 0 && attempt >= options.MaxReconnectAttempts)
