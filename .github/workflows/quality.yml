@@ -44,6 +44,9 @@ jobs:
       - name: Verify formatting
         run: dotnet format CryptoTrading.slnx --no-restore --verify-no-changes
 
+      - name: Start Worker with ephemeral PostgreSQL
+        run: ./scripts/test-worker-persistence-startup.sh
+
   secret-scan:
     name: Tracked-file secret scan
     runs-on: ubuntu-latest
