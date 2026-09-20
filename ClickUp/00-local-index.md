@@ -38,6 +38,13 @@ ReconciliationReports, ExperimentCards, DatasetCards, ModelCards e incidentes.
 | Importar futuramente | [06-import-manifest.yaml](06-import-manifest.yaml) |
 | Usar templates | [templates/README.md](templates/README.md) |
 
+## Incremento E-19
+
+O épico `E-19` adiciona `US-190`…`US-199`, com cinco tasks e três subtasks
+verificáveis por story. O objetivo é fechar o runtime A2 sem misturar o hot
+path com LLM/RAG/MCP e sem promover capital real automaticamente. A fonte
+detalhada é [`plan/31-autonomous-runtime-completion.md`](../plan/31-autonomous-runtime-completion.md).
+
 ## Parent map
 
 ```text

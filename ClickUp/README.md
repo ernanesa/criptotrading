@@ -24,12 +24,12 @@ evidências, riscos e Definition of Done.
 
 | Tipo | Quantidade | IDs |
 |---|---:|---|
-| Epic | 19 | `E-00` … `E-18` |
-| Story | 96 | `US-001` … `US-183` |
-| Technical Task | 233 | `TASK-US-XXX-NN` |
-| Verifiable Subtask | 523 | `SUBTASK-TASK-US-XXX-NN-NN` |
-| Total de cartões | 871 | contêineres não incluídos |
-| Acceptance Criteria | 43 | `AC-*` |
+| Epic | 20 | `E-00` … `E-19` |
+| Story | 106 | `US-001` … `US-199` |
+| Technical Task | 283 | `TASK-US-XXX-NN` |
+| Verifiable Subtask | 673 | `SUBTASK-TASK-US-XXX-NN-NN` |
+| Total de cartões | 1.082 | contêineres não incluídos |
+| Acceptance Criteria | 53 | `AC-*` |
 
 ## Convenção de cartão
 
@@ -57,6 +57,7 @@ anexada após executar o comando e inspecionar sua saída.
 - [Casos de uso e contratos](04-use-cases-and-requirements.md)
 - [Aceite e rastreabilidade](05-acceptance-and-traceability.md)
 - [Manifesto de importação](06-import-manifest.yaml)
+- [Runtime autônomo fechado — E-19](07-autonomous-runtime-completion.md)
 - [Templates aplicáveis](templates/README.md)
 - [Snapshot completo da documentação canônica](canonical/README.md)
 

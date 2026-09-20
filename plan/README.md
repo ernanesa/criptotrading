@@ -55,6 +55,7 @@ Lucro bruto, win rate ou quantidade de operações não são objetivos isolados.
 - [28 - Autonomia, autoaprendizado e resiliência](28-autonomy-continuous-learning.md)
 - [29 - Research Plane: RAG híbrido e GraphRAG](29-research-rag.md)
 - [30 - Rastreabilidade e entrega assistida por agentes](30-traceability-and-agent-delivery.md)
+- [31 - Complemento: runtime autônomo fechado A2](31-autonomous-runtime-completion.md)
 - [Manifesto inicial de rastreabilidade](traceability.yaml)
 - [Pacote de publicação ClickUp](clickup/README.md)
 

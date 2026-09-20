@@ -1,7 +1,7 @@
 schema_version: 1
 export_name: CryptoTrading
 source_of_truth: ../plan
-source_commit: 158d084
+source_commit: working-tree-2026-09-20
 workspace:
   name: CryptoTrading
   type: space
@@ -26,12 +26,12 @@ item_hierarchy:
   - Technical Task
   - Verifiable Subtask
 inventory:
-  epics: 19
-  stories: 96
-  tasks: 233
-  subtasks: 523
-  total_cards: 871
-  acceptance_criteria: 43
+  epics: 20
+  stories: 106
+  tasks: 283
+  subtasks: 673
+  total_cards: 1082
+  acceptance_criteria: 53
 identity:
   epic: E-XX
   story: US-XXX
@@ -68,4 +68,6 @@ files:
   - 03-quant-research.md
   - 04-use-cases-and-requirements.md
   - 05-acceptance-and-traceability.md
+  - 07-autonomous-runtime-completion.md
+  - canonical/31-autonomous-runtime-completion.md
   - templates/
