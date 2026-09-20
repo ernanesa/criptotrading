@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Collections.ObjectModel;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Primitives;
@@ -261,7 +262,7 @@ public sealed class AccountReconciliationService
     private readonly IKnownTradeReader knownTradeReader;
     private readonly ILocalOpenOrderReader localOpenOrderReader;
     private readonly IReconciliationEventSink eventSink;
-    private readonly IOperationalControl operationalControl;
+    private readonly IAsyncOperationalControl operationalControl;
     private readonly ReconciliationOptions options;
     private readonly TimeProvider timeProvider;
 
@@ -270,7 +271,7 @@ public sealed class AccountReconciliationService
         ILocalBalanceReader balanceReader,
         IKnownTradeReader knownTradeReader,
         IReconciliationEventSink eventSink,
-        IOperationalControl operationalControl,
+        IAsyncOperationalControl operationalControl,
         ReconciliationOptions options,
         TimeProvider? timeProvider = null,
         ILocalOpenOrderReader? localOpenOrderReader = null)
@@ -286,6 +287,28 @@ public sealed class AccountReconciliationService
     }
 
     public async Task<ReconciliationRunResult> ReconcileAsync(CancellationToken cancellationToken = default)
+    {
+        using var activity = TradingTelemetry.ActivitySource.StartActivity(
+            "cryptotrading.reconciliation",
+            ActivityKind.Internal);
+        activity?.SetTag("crypto.operation", "reconciliation");
+        try
+        {
+            var result = await ReconcileCoreAsync(cancellationToken).ConfigureAwait(false);
+            activity?.SetTag("crypto.outcome", result.IsHealthy ? "healthy" : "mismatch");
+            activity?.SetTag("crypto.mismatch_count", result.MismatchCount);
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            return result;
+        }
+        catch (Exception exception)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error);
+            activity?.SetTag("error.type", exception.GetType().Name);
+            throw;
+        }
+    }
+
+    private async Task<ReconciliationRunResult> ReconcileCoreAsync(CancellationToken cancellationToken)
     {
         var snapshot = await snapshotProvider.GetSnapshotAsync(cancellationToken).ConfigureAwait(false);
         var knownTradeIds = await knownTradeReader.GetKnownTradeIdsAsync(cancellationToken).ConfigureAwait(false);
@@ -388,11 +411,10 @@ public sealed class AccountReconciliationService
                 $"Account reconciliation drift detected (correlation {correlationId}).",
                 new IdempotencyKey($"reconciliation:{correlationId}"),
                 timeProvider.GetUtcNow());
-            _ = operationalControl.EnterSafeMode(command);
+            _ = await operationalControl.EnterSafeModeAsync(command, cancellationToken).ConfigureAwait(false);
         }
 
         TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
-
         return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count);
     }
 }

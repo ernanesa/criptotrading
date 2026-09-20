@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CryptoTrading.Observability;
 
 namespace CryptoTrading.Exchange.Binance;
 
@@ -241,6 +243,7 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         ArgumentNullException.ThrowIfNull(request);
         EnsureExecutionEnabled();
         cancellationToken.ThrowIfCancellationRequested();
+        using var activity = StartFinancialActivity("submit");
 
         var parameters = new List<KeyValuePair<string, string>>
         {
@@ -262,39 +265,57 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         }
         catch (BinanceApiException exception) when ((int?)exception.StatusCode >= 500)
         {
+            MarkActivityError(activity, exception);
             throw new BinanceOrderSubmissionAmbiguousException(request.ClientOrderId, exception);
         }
         catch (OperationCanceledException exception)
         {
+            MarkActivityError(activity, exception);
             throw new BinanceOrderSubmissionAmbiguousException(request.ClientOrderId, exception);
         }
         catch (HttpRequestException exception)
         {
+            MarkActivityError(activity, exception);
             throw new BinanceOrderSubmissionAmbiguousException(request.ClientOrderId, exception);
         }
         catch (IOException exception)
         {
+            MarkActivityError(activity, exception);
             throw new BinanceOrderSubmissionAmbiguousException(request.ClientOrderId, exception);
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
         }
     }
 
-    public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(
+    public async Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(
         string symbol,
         string clientOrderId,
         CancellationToken cancellationToken = default)
     {
         var normalizedSymbol = BinanceSpotOrderRequest.NormalizeSymbol(symbol);
         var normalizedClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(clientOrderId);
-        return SendSignedAsync(
-            HttpMethod.Get,
-            "v3/order",
-            [new("symbol", normalizedSymbol), new("origClientOrderId", normalizedClientOrderId)],
-            normalizedSymbol,
-            normalizedClientOrderId,
-            cancellationToken);
+        using var activity = StartFinancialActivity("query");
+        try
+        {
+            return await SendSignedAsync(
+                HttpMethod.Get,
+                "v3/order",
+                [new("symbol", normalizedSymbol), new("origClientOrderId", normalizedClientOrderId)],
+                normalizedSymbol,
+                normalizedClientOrderId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
+        }
     }
 
-    public Task<BinanceSpotOrderResult> CancelAsync(
+    public async Task<BinanceSpotOrderResult> CancelAsync(
         string symbol,
         string clientOrderId,
         CancellationToken cancellationToken = default)
@@ -302,13 +323,36 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         EnsureExecutionEnabled();
         var normalizedSymbol = BinanceSpotOrderRequest.NormalizeSymbol(symbol);
         var normalizedClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(clientOrderId);
-        return SendSignedAsync(
-            HttpMethod.Delete,
-            "v3/order",
-            [new("symbol", normalizedSymbol), new("origClientOrderId", normalizedClientOrderId)],
-            normalizedSymbol,
-            normalizedClientOrderId,
-            cancellationToken);
+        using var activity = StartFinancialActivity("cancel");
+        try
+        {
+            return await SendSignedAsync(
+                HttpMethod.Delete,
+                "v3/order",
+                [new("symbol", normalizedSymbol), new("origClientOrderId", normalizedClientOrderId)],
+                normalizedSymbol,
+                normalizedClientOrderId,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
+        }
+    }
+
+    private static Activity? StartFinancialActivity(string operation)
+    {
+        var activity = TradingTelemetry.ActivitySource.StartActivity("cryptotrading.binance.order", ActivityKind.Client);
+        activity?.SetTag("crypto.exchange", "binance");
+        activity?.SetTag("crypto.operation", operation);
+        return activity;
+    }
+
+    private static void MarkActivityError(Activity? activity, Exception exception)
+    {
+        activity?.SetStatus(ActivityStatusCode.Error);
+        activity?.SetTag("error.type", exception.GetType().Name);
     }
 
     private async Task<BinanceSpotOrderResult> SendSignedAsync(

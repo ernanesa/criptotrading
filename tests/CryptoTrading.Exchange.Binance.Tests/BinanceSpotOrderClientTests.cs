@@ -1,6 +1,8 @@
 using System.Net;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using CryptoTrading.Observability;
 using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
@@ -66,6 +68,41 @@ public sealed class BinanceSpotOrderClientTests
         {
             Assert.Contains("origClientOrderId=ct-test-1", request.RequestUri!.Query, StringComparison.Ordinal);
             AssertSignatureIsValid(request, "test-api-secret");
+        });
+    }
+
+    [Fact]
+    public async Task FinancialOrderActivitiesExposeOnlyBoundedOperationTags()
+    {
+        var activities = new List<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == TradingTelemetry.ActivitySourceName,
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity => activities.Add(activity)
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var handler = new RecordingHandler(
+            "{\"serverTime\":1789905600000}",
+            "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-test-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"NEW\",\"transactTime\":1789905600000}",
+            "{\"serverTime\":1789905600000}",
+            "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-test-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"CANCELED\",\"transactTime\":1789905600000}",
+            "{\"serverTime\":1789905600000}",
+            "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-test-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"CANCELED\",\"transactTime\":1789905600000}");
+        var client = CreateClient(handler, enableExecution: true);
+
+        _ = await client.SubmitAsync(Request());
+        _ = await client.QueryByClientOrderIdAsync("BTCUSDT", "ct-test-1");
+        _ = await client.CancelAsync("BTCUSDT", "ct-test-1");
+
+        Assert.Equal(["submit", "query", "cancel"], activities
+            .Select(activity => activity.GetTagItem("crypto.operation")?.ToString() ?? string.Empty)
+            .ToArray());
+        Assert.All(activities, activity =>
+        {
+            Assert.Equal("binance", activity.GetTagItem("crypto.exchange"));
+            Assert.DoesNotContain(activity.Tags, tag => tag.Key is "symbol" or "clientOrderId" or "client_order_id");
+            Assert.Equal(ActivityStatusCode.Unset, activity.Status);
         });
     }
 
