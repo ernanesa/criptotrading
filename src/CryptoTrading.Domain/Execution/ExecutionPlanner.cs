@@ -53,7 +53,8 @@ public sealed record ExecutionPlanRequest
         DateTimeOffset evaluatedAtUtc,
         TimeSpan maxMarketDataAge,
         TimeSpan timeToLive,
-        int attempt = 0)
+        int attempt = 0,
+        decimal? availableAccountLiquidityNotional = null)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -76,6 +77,11 @@ public sealed record ExecutionPlanRequest
             throw new ArgumentOutOfRangeException(nameof(attempt));
         }
 
+        if (availableAccountLiquidityNotional is < 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(availableAccountLiquidityNotional));
+        }
+
         Intent = intent;
         Decision = decision;
         Market = market;
@@ -83,6 +89,7 @@ public sealed record ExecutionPlanRequest
         MaxMarketDataAge = maxMarketDataAge;
         TimeToLive = timeToLive;
         Attempt = attempt;
+        AvailableAccountLiquidityNotional = availableAccountLiquidityNotional;
     }
 
     public OrderIntent Intent { get; }
@@ -92,6 +99,7 @@ public sealed record ExecutionPlanRequest
     public TimeSpan MaxMarketDataAge { get; }
     public TimeSpan TimeToLive { get; }
     public int Attempt { get; }
+    public decimal? AvailableAccountLiquidityNotional { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -122,6 +130,7 @@ public static class ExecutionPlanner
     public const string MarketDataStale = "EXECUTION_MARKET_DATA_STALE";
     public const string LiquidityUnavailable = "EXECUTION_LIQUIDITY_UNAVAILABLE";
     public const string TargetNotAuthorized = "EXECUTION_TARGET_NOT_AUTHORIZED";
+    public const string AccountLiquidityUnavailable = "EXECUTION_ACCOUNT_LIQUIDITY_UNAVAILABLE";
 
     public static ExecutionPlanResult Plan(ExecutionPlanRequest request)
     {
@@ -149,6 +158,16 @@ public static class ExecutionPlanner
         if (market.AvailableLiquidityNotional < decision.AuthorizedTargetNotional)
         {
             return new(null, LiquidityUnavailable);
+        }
+
+        // A buy consumes quote balance, while a sell reduces the already
+        // reconciled base position. Never let a buy exceed free quote balance;
+        // the caller may reserve fees by passing a smaller available amount.
+        if (intent.Side == OrderSide.Buy &&
+            request.AvailableAccountLiquidityNotional is { } availableQuote &&
+            decision.AuthorizedTargetNotional >= availableQuote)
+        {
+            return new(null, AccountLiquidityUnavailable);
         }
 
         var limitPrice = intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk;

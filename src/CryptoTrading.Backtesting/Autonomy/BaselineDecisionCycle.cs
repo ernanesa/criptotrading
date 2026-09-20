@@ -20,7 +20,8 @@ public sealed record BaselineDecisionCycleRequest(
     MarketRiskSnapshot? MarketRisk = null,
     ExecutionMarketSnapshot? ExecutionMarket = null,
     TimeSpan? ExecutionMarketMaxAge = null,
-    TimeSpan? ExecutionTimeToLive = null)
+    TimeSpan? ExecutionTimeToLive = null,
+    decimal? AvailableAccountLiquidityNotional = null)
 {
     public void Validate()
     {
@@ -51,6 +52,11 @@ public sealed record BaselineDecisionCycleRequest(
         if (ExecutionTimeToLive is { } ttl && ttl <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(ExecutionTimeToLive));
+        }
+
+        if (AvailableAccountLiquidityNotional is < 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(AvailableAccountLiquidityNotional));
         }
     }
 }
@@ -144,7 +150,8 @@ public sealed class BaselineDecisionCycle
                     request.ExecutionMarket,
                     request.EvaluatedAtUtc,
                     request.ExecutionMarketMaxAge ?? request.RiskPolicy.MaxMarketDataAge,
-                    request.ExecutionTimeToLive ?? TimeSpan.FromMinutes(1)));
+                    request.ExecutionTimeToLive ?? TimeSpan.FromMinutes(1),
+                    availableAccountLiquidityNotional: request.AvailableAccountLiquidityNotional));
             if (plan.Plan is null)
             {
                 return new(

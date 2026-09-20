@@ -180,7 +180,8 @@ internal sealed class AutonomyCycleHostedService(
             marketRisk,
             executionMarket,
             policyDocument.Policy.MaxMarketDataAge,
-            TimeSpan.FromMinutes(1));
+            TimeSpan.FromMinutes(1),
+            availableQuoteLiquidity);
         var result = cycle.Evaluate(request);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
