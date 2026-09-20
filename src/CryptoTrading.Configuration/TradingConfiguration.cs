@@ -37,16 +37,12 @@ public sealed class TradingOptionsValidator : IValidateOptions<TradingOptions>
             errors.Add("TRADING_ENVIRONMENT must be TESTNET.");
         }
 
-        if (options.Binance.RestBaseUrl is not { IsAbsoluteUri: true } restUri ||
-            !string.Equals(restUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(restUri.Host, "testnet.binance.vision", StringComparison.OrdinalIgnoreCase))
+        if (!IsTestnetRestEndpoint(options.Binance.RestBaseUrl))
         {
             errors.Add("BINANCE_REST_BASE_URL must be the HTTPS Binance Spot Testnet endpoint.");
         }
 
-        if (options.Binance.WebSocketBaseUrl is not { IsAbsoluteUri: true } wsUri ||
-            !string.Equals(wsUri.Scheme, "wss", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(wsUri.Host, "testnet.binance.vision", StringComparison.OrdinalIgnoreCase))
+        if (!IsTestnetWebSocketEndpoint(options.Binance.WebSocketBaseUrl))
         {
             errors.Add("BINANCE_WS_BASE_URL must be the WSS Binance Spot Testnet endpoint.");
         }
@@ -70,6 +66,26 @@ public sealed class TradingOptionsValidator : IValidateOptions<TradingOptions>
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(errors);
     }
+
+    private static bool IsTestnetRestEndpoint(Uri? endpoint) =>
+        endpoint is { IsAbsoluteUri: true } &&
+        string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(endpoint.Host, "testnet.binance.vision", StringComparison.OrdinalIgnoreCase) &&
+        endpoint.IsDefaultPort &&
+        string.IsNullOrEmpty(endpoint.UserInfo) &&
+        string.Equals(endpoint.AbsolutePath.Trim('/'), "api", StringComparison.Ordinal) &&
+        string.IsNullOrEmpty(endpoint.Query) &&
+        string.IsNullOrEmpty(endpoint.Fragment);
+
+    private static bool IsTestnetWebSocketEndpoint(Uri? endpoint) =>
+        endpoint is { IsAbsoluteUri: true } &&
+        string.Equals(endpoint.Scheme, "wss", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(endpoint.Host, "testnet.binance.vision", StringComparison.OrdinalIgnoreCase) &&
+        endpoint.IsDefaultPort &&
+        string.IsNullOrEmpty(endpoint.UserInfo) &&
+        string.Equals(endpoint.AbsolutePath.TrimEnd('/'), "/ws", StringComparison.Ordinal) &&
+        string.IsNullOrEmpty(endpoint.Query) &&
+        string.IsNullOrEmpty(endpoint.Fragment);
 }
 
 public static class TradingConfigurationExtensions
