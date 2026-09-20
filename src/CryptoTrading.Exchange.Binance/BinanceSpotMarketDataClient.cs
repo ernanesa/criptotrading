@@ -150,6 +150,7 @@ internal sealed class ClientWebSocketTransport : IBinanceWebSocketTransport
                 yield break;
             }
 
+            BinanceWebSocketLimits.EnsureWithinLimit(message.Length, result.Count);
             await message.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken).ConfigureAwait(false);
             if (!result.EndOfMessage)
             {

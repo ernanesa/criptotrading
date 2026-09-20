@@ -30,19 +30,7 @@ public sealed class BinanceClientOptions
             BinanceEnvironment.Demo => "demo-api.binance.com",
             _ => throw new ArgumentOutOfRangeException(nameof(Environment), Environment, "Unsupported Binance environment.")
         };
-        if (!address.IsAbsoluteUri ||
-            address.Scheme != Uri.UriSchemeHttps ||
-            !string.Equals(address.Host, expectedHost, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(address.AbsolutePath.Trim('/'), "api", StringComparison.OrdinalIgnoreCase) ||
-            !string.IsNullOrEmpty(address.Query) ||
-            !string.IsNullOrEmpty(address.Fragment))
-        {
-            throw new InvalidOperationException($"Binance REST base address must be the HTTPS {Environment} API endpoint.");
-        }
-
-        return address.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
-            ? address
-            : new Uri(address.AbsoluteUri + "/");
+        return BinanceEndpointPolicy.ValidateRest(address, expectedHost, "/api", $"{Environment} REST base address");
     }
 
     internal void Validate()

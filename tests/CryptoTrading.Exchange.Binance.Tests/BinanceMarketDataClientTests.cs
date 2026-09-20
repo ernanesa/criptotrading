@@ -14,9 +14,9 @@ public sealed class BinanceMarketDataClientTests
         Assert.Equal("btcusdt@trade", trade.ToStreamName());
         Assert.Equal("btcusdt@kline_1m", kline.ToStreamName());
         Assert.Equal(
-            "wss://stream.test.invalid/stream?streams=btcusdt%40trade/btcusdt%40kline_1m",
+            "wss://stream.testnet.binance.vision/stream?streams=btcusdt%40trade/btcusdt%40kline_1m",
             BinanceSpotMarketDataClient.BuildStreamUri(
-                new Uri("wss://stream.test.invalid/stream"),
+                new Uri("wss://stream.testnet.binance.vision/stream"),
                 [trade.ToStreamName(), kline.ToStreamName()]).ToString());
     }
 
@@ -30,7 +30,7 @@ public sealed class BinanceMarketDataClientTests
         var client = new BinanceSpotMarketDataClient(
             new BinanceMarketDataOptions
             {
-                WebSocketBaseAddress = new Uri("wss://stream.test.invalid/stream"),
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
                 InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
                 MaxReconnectDelay = TimeSpan.FromMilliseconds(1)
             },

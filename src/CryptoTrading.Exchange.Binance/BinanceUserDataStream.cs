@@ -25,16 +25,10 @@ public sealed class BinanceUserDataStreamOptions
             _ => throw new ArgumentOutOfRangeException(nameof(Environment), Environment, "Unsupported Binance environment.")
         };
         var address = WebSocketBaseAddress ?? new Uri($"wss://{expectedHost}/ws/");
-        if (!address.IsAbsoluteUri || address.Scheme != "wss" ||
-            !string.Equals(address.Host, expectedHost, StringComparison.OrdinalIgnoreCase) ||
-            !string.IsNullOrEmpty(address.Query) || !string.IsNullOrEmpty(address.Fragment))
-        {
-            throw new InvalidOperationException($"Binance user stream address must be the allowlisted wss {Environment} endpoint.");
-        }
-
-        return address.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
-            ? address
-            : new Uri(address.AbsoluteUri + "/");
+        var validated = BinanceEndpointPolicy.ValidateWebSocket(address, expectedHost, "/ws", $"user stream {Environment} address");
+        return validated.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
+            ? validated
+            : new Uri(validated.AbsoluteUri + "/");
     }
 
     internal void Validate()
@@ -201,17 +195,7 @@ public sealed class BinanceUserDataStreamRestOptions
             _ => throw new ArgumentOutOfRangeException(nameof(Environment), Environment, "Unsupported Binance environment.")
         };
         var address = RestBaseAddress ?? new Uri($"https://{expectedHost}/api/");
-        if (!address.IsAbsoluteUri || address.Scheme != Uri.UriSchemeHttps ||
-            !string.Equals(address.Host, expectedHost, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(address.AbsolutePath.Trim('/'), "api", StringComparison.OrdinalIgnoreCase) ||
-            !string.IsNullOrEmpty(address.Query) || !string.IsNullOrEmpty(address.Fragment))
-        {
-            throw new InvalidOperationException($"Binance user-data REST address must be the HTTPS {Environment} API endpoint.");
-        }
-
-        return address.AbsoluteUri.EndsWith('/', StringComparison.Ordinal)
-            ? address
-            : new Uri(address.AbsoluteUri + "/");
+        return BinanceEndpointPolicy.ValidateRest(address, expectedHost, "/api", $"user-data REST {Environment} address");
     }
 
     internal void Validate()
@@ -419,6 +403,7 @@ internal sealed class UserDataClientWebSocketTransport : IBinanceWebSocketTransp
                 yield break;
             }
 
+            BinanceWebSocketLimits.EnsureWithinLimit(message.Length, result.Count);
             await message.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken).ConfigureAwait(false);
             if (result.EndOfMessage)
             {
