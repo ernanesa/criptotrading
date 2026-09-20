@@ -357,9 +357,15 @@ task está em `ClickUp/07-autonomous-runtime-completion.md`.
 ### US-190…US-199
 
 US-190 lifecycle/readiness; US-191 market-data acionável; US-192 ciclo baseline;
-US-193 risk obrigatório; US-194 OMS/projeções; US-195 user stream e
-reconciliação; US-196 execution planner; US-197 self-healing/fail-safe;
-US-198 prova de autonomia; US-199 Paper→Shadow→Testnet com gates e rollback.
+US-193 risk obrigatório e comissão efetiva; US-194 OMS/projeções; US-195 user
+stream e reconciliação; US-196 execution planner e custo líquido; US-197
+self-healing/fail-safe; US-198 prova de autonomia; US-199 Paper→Shadow→Testnet
+com gates e rollback.
+
+O E-19 também exige que a comissão efetiva por símbolo seja consultada e
+versionada antes da exposição, que descontos/fees especiais não sejam presumidos
+e que o desvio entre comissão estimada e fill real alimente PnL líquido,
+execution drift e `NO_TRADE`/`SafeMode` quando não for explicável.
 
 **Critério de entrada:** nenhuma story é Ready sem contrato, invariantes,
 dependências, comandos de validação e condição explícita de não concluído.

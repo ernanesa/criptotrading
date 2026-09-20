@@ -27,9 +27,9 @@ evidências, riscos e Definition of Done.
 | Epic | 20 | `E-00` … `E-19` |
 | Story | 106 | `US-001` … `US-199` |
 | Technical Task | 283 | `TASK-US-XXX-NN` |
-| Verifiable Subtask | 673 | `SUBTASK-TASK-US-XXX-NN-NN` |
-| Total de cartões | 1.082 | contêineres não incluídos |
-| Acceptance Criteria | 53 | `AC-*` |
+| Verifiable Subtask | 683 | `SUBTASK-TASK-US-XXX-NN-NN` |
+| Total de cartões | 1.092 | contêineres não incluídos |
+| Acceptance Criteria | 54 | `AC-*` |
 
 ## Convenção de cartão
 

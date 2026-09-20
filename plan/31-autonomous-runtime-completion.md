@@ -95,6 +95,44 @@ Execução Testnet exige persistence/migrations, RiskPolicy ativa/aprovada/não 
 
 Cada entrada verifica notional, exposição pós-ordem, saldo/fee reserve, risco por trade, daily loss/drawdown, turnover/fees, spread/slippage/volatilidade/liquidez, idade do dado, clock, rate limit, saúde de DB/fila/reconciliação/estratégia e edge líquido. Risk pode reduzir ou rejeitar, nunca aumentar target.
 
+### 6.1 Comissão efetiva da Binance e custo líquido
+
+O valor configurado de `WORKER_AUTONOMY_FEE_RESERVE_BPS` é somente um fallback
+conservador de sizing. Antes de liberar uma nova exposição, o runtime deverá
+consultar a comissão vigente para o símbolo no endpoint autenticado de comissão
+da Binance Spot (`GET /api/v3/account/commission`, com `symbol`) e construir um
+`EffectiveCommissionSnapshot` versionado. O snapshot deve preservar:
+
+- taxas `maker`, `taker`, `buyer` e `seller`;
+- componentes `standard`, `special` e `tax`, quando fornecidos;
+- habilitação do desconto, ativo do desconto e percentual de desconto BNB;
+- símbolo, ambiente, account scope, fonte, timestamp de observação, validade,
+  clock/freshness e hash canônico do payload normalizado.
+
+Regras obrigatórias:
+
+1. A tática passive-limit usa a taxa maker somente quando o plano e a política
+   comprovarem que a ordem pode ser maker; caso contrário, usa a taxa taker ou
+   o pior caso permitido pelo envelope.
+2. `buyer`/`seller`, `special`, `tax`, rebate e BNB não podem ser ignorados nem
+   presumidos. Desconto BNB só reduz o custo quando a conta e o símbolo o
+   declararem habilitado e houver saldo/valuation seguro do ativo de desconto.
+3. Snapshot ausente, stale, inconsistente, sem ativo/valuation ou com schema
+   desconhecido resulta em `NO_TRADE`/`SafeMode` para novas entradas; não há
+   fallback silencioso para uma taxa otimista.
+4. O sizing reserva o maior custo aplicável dentro da policy e persiste a
+   regra usada junto à decisão, RiskDecision e outbox.
+5. Cada fill registra a comissão real e compara estimativa versus realizado.
+   Desvio acima do limite gera `EXECUTION_FEE_DRIFT`, alerta e bloqueia novas
+   entradas até reconciliação; nunca corrige o ledger por update destrutivo.
+
+O contrato deve ser testado com maker/taker, buyer/seller, desconto BNB ativo e
+inativo, special/tax commission, comissão em base/quote/BNB, snapshot stale,
+resposta parcial, mudança de taxa entre ciclos e divergência entre estimativa e
+fill. A fonte oficial versionada usada para a implementação é o repositório de
+documentação Spot da Binance; a URL e a data de verificação devem acompanhar a
+evidência do card.
+
 ## 7. Falhas e self-healing
 
 | Falha | Ação automática |
@@ -159,11 +197,14 @@ Cada cartão deve ser executado na ordem `contrato → migration/store → imple
 ## 13. Estado de implementação em 2026-09-20
 
 As seguintes fatias já possuem código e testes locais, mas não encerram o gate
-de promoção: reserva de taxa no sizing (`2bab4c1`), resolução autoritativa de
+de promoção: reserva de taxa no sizing (`2bab4c1`/`379fb01`), resolução autoritativa de
 ordens ambíguas por snapshot fresco (`cf34b65`) e política pura de TTL,
 cancelamento pendente e residual (`aae53e1`). O cancelamento mutável ainda não
 está conectado ao outbox/adapter Testnet; resoluções terminais dependem de
-fills/user-data e a reconciliação append-only dedicada ainda não existe.
+fills/user-data e a reconciliação append-only dedicada ainda não existe. A
+consulta dinâmica da comissão efetiva, sua validade, aplicação ao edge/sizing e
+o detector de desvio estimado-versus-realizado continuam planejados, não
+implementados.
 
 O contexto dos agentes é parte do controle operacional: `AGENTS.md`,
 `.agents/rules/context-state.md` e a skill `context-state-manager` exigem

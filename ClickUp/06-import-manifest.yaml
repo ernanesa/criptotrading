@@ -29,9 +29,9 @@ inventory:
   epics: 20
   stories: 106
   tasks: 283
-  subtasks: 673
-  total_cards: 1082
-  acceptance_criteria: 53
+  subtasks: 683
+  total_cards: 1092
+  acceptance_criteria: 54
 identity:
   epic: E-XX
   story: US-XXX
