@@ -10,14 +10,14 @@ public sealed class LocalDiagnosticsAccessPolicyTests
     [InlineData("::1")]
     [InlineData("::ffff:127.0.0.1")]
     public void LoopbackAddressesAreAllowed(string address) =>
-        Assert.True(LocalDiagnosticsAccessPolicy.IsLoopback(IPAddress.Parse(address)));
+        Assert.True(LocalDiagnosticsAccessPolicy.IsLoopback(System.Net.IPAddress.Parse(address)));
 
     [Theory]
     [InlineData("10.0.0.1")]
     [InlineData("192.168.1.1")]
     [InlineData("::ffff:192.168.1.1")]
     public void NonLoopbackAddressesAreDenied(string address) =>
-        Assert.False(LocalDiagnosticsAccessPolicy.IsLoopback(IPAddress.Parse(address)));
+        Assert.False(LocalDiagnosticsAccessPolicy.IsLoopback(System.Net.IPAddress.Parse(address)));
 
     [Fact]
     public void MissingRemoteAddressIsDenied() =>

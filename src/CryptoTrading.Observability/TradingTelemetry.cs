@@ -19,6 +19,11 @@ public static class TradingTelemetry
     private static long alertDeliveries;
     private static long alertDeliveryFailures;
     private static long alertDeduplicated;
+    private static long reconciliationRuns;
+    private static long reconciliationMismatches;
+    private static long outboxDispatches;
+    private static long outboxDispatchFailures;
+    private static long outboxDeadLetters;
 
     public static readonly Meter Meter = new(MeterName);
     public static readonly ActivitySource ActivitySource = new(ActivitySourceName);
@@ -50,6 +55,22 @@ public static class TradingTelemetry
         "cryptotrading.alert.deduplicated",
         unit: "{alert}",
         description: "Alerts suppressed by deduplication key.");
+    public static readonly Counter<long> ReconciliationRuns = Meter.CreateCounter<long>(
+        "cryptotrading.reconciliation.runs",
+        unit: "{run}",
+        description: "Completed account reconciliation runs.");
+    public static readonly Counter<long> ReconciliationMismatches = Meter.CreateCounter<long>(
+        "cryptotrading.reconciliation.mismatches",
+        unit: "{mismatch}",
+        description: "Reconciliation mismatches that entered the fail-closed path.");
+    public static readonly Counter<long> OutboxDispatches = Meter.CreateCounter<long>(
+        "cryptotrading.outbox.dispatches",
+        unit: "{message}",
+        description: "Outbox dispatch attempts by outcome.");
+    public static readonly Histogram<double> OutboxQueueLag = Meter.CreateHistogram<double>(
+        "cryptotrading.outbox.queue_lag",
+        unit: "ms",
+        description: "Elapsed time between an outbox message becoming available and being claimed.");
 
     public static void RecordApiRequest(int statusCode, double durationMilliseconds)
     {
@@ -90,6 +111,45 @@ public static class TradingTelemetry
         Interlocked.Increment(ref alertDeduplicated);
     }
 
+    public static void RecordReconciliation(bool healthy, int mismatchCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(mismatchCount);
+        var outcome = healthy ? "healthy" : "mismatch";
+        ReconciliationRuns.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
+        Interlocked.Increment(ref reconciliationRuns);
+        if (mismatchCount > 0)
+        {
+            ReconciliationMismatches.Add(mismatchCount);
+            Interlocked.Add(ref reconciliationMismatches, mismatchCount);
+        }
+    }
+
+    public static void RecordOutboxQueueLag(TimeSpan lag)
+    {
+        if (lag < TimeSpan.Zero)
+        {
+            return;
+        }
+
+        OutboxQueueLag.Record(lag.TotalMilliseconds);
+    }
+
+    public static void RecordOutboxDispatch(bool succeeded, bool deadLettered = false)
+    {
+        var outcome = succeeded ? "processed" : deadLettered ? "dead_lettered" : "retry";
+        OutboxDispatches.Add(1, new KeyValuePair<string, object?>("outcome", outcome));
+        Interlocked.Increment(ref outboxDispatches);
+        if (!succeeded)
+        {
+            Interlocked.Increment(ref outboxDispatchFailures);
+        }
+
+        if (deadLettered)
+        {
+            Interlocked.Increment(ref outboxDeadLetters);
+        }
+    }
+
     public static TradingMetricsSnapshot Snapshot() => new(
         Interlocked.Read(ref apiRequests),
         Interlocked.Read(ref apiErrors),
@@ -97,7 +157,12 @@ public static class TradingTelemetry
         Interlocked.Read(ref apiDurationMilliseconds),
         Interlocked.Read(ref alertDeliveries),
         Interlocked.Read(ref alertDeliveryFailures),
-        Interlocked.Read(ref alertDeduplicated));
+        Interlocked.Read(ref alertDeduplicated),
+        Interlocked.Read(ref reconciliationRuns),
+        Interlocked.Read(ref reconciliationMismatches),
+        Interlocked.Read(ref outboxDispatches),
+        Interlocked.Read(ref outboxDispatchFailures),
+        Interlocked.Read(ref outboxDeadLetters));
 }
 
 public sealed record TradingMetricsSnapshot(
@@ -107,7 +172,12 @@ public sealed record TradingMetricsSnapshot(
     long ApiDurationMilliseconds,
     long AlertDeliveries,
     long AlertDeliveryFailures,
-    long AlertDeduplicated);
+    long AlertDeduplicated,
+    long ReconciliationRuns,
+    long ReconciliationMismatches,
+    long OutboxDispatches,
+    long OutboxDispatchFailures,
+    long OutboxDeadLetters);
 
 public static class SecretRedactor
 {

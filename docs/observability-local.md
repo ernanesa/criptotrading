@@ -7,6 +7,7 @@ O runtime local expõe um baseline sem dependência de cloud:
 - liveness em `GET /health/live`;
 - readiness em `GET /health/ready`, que valida configuração mínima do Testnet sem revelar credenciais;
 - snapshot local em `GET /metrics` com requests, erros 5xx, latência acumulada e heartbeats do Worker;
+- métricas de reconciliação (execuções e divergências), despacho da outbox (processado/retry/dead-letter) e atraso de fila;
 - `Meter` e `ActivitySource` em `CryptoTrading.Runtime` para futura exportação OpenTelemetry.
 - `TradingAlertDispatcher` com envelope operacional obrigatório, deduplicação por
   chave e `InMemoryTradingAlertSink` para drills/testes determinísticos locais.
