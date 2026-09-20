@@ -1,0 +1,4 @@
+interface:
+  display_name: Software Development
+  short_description: Implement, test, and review approved software changes
+  default_prompt: Implement this approved requirement incrementally, following repository conventions, adding tests, validating the result, and reporting changed files and risks.

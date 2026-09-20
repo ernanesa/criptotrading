@@ -1,0 +1,4 @@
+interface:
+  display_name: Financial Observability
+  short_description: Instrument and investigate observable trading systems
+  default_prompt: Review this trading workflow for logs, metrics, traces, auditability, latency, redaction, retention, and incident investigation gaps.

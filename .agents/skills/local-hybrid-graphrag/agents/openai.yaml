@@ -1,0 +1,4 @@
+interface:
+  display_name: Local Hybrid Graph RAG
+  short_description: Preserve project context with local hybrid retrieval
+  default_prompt: Retrieve a compact, version-compatible context pack using lexical search, semantic search, and relevant graph relationships; cite sources and flag conflicts.

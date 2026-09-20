@@ -1,0 +1,4 @@
+interface:
+  display_name: "Binance Spot Engineering"
+  short_description: "Design and validate safe Binance Spot trading systems"
+  default_prompt: "Use $binance-spot-engineering to design or review a Binance Spot trading workflow."

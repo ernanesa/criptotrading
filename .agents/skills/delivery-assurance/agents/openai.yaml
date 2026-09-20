@@ -1,0 +1,4 @@
+interface:
+  display_name: Delivery Assurance
+  short_description: Trace requirements through tests and delivery evidence
+  default_prompt: Verify this change from acceptance criteria through code, tests, review, documentation, and delivery evidence. Report missing links and failed gates.
