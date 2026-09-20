@@ -43,6 +43,8 @@ case "$BINANCE_WITHDRAWALS_ENABLED" in
     *) echo 'Refusing to run: BINANCE_WITHDRAWALS_ENABLED must be false.' >&2; exit 2 ;;
 esac
 
+"$repo_root/scripts/check-testnet-secret-storage.sh" >/dev/null
+
 set +e
 "$dotnet_command" run \
     --project "$repo_root/tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj" \
