@@ -187,6 +187,7 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
     _ = builder.Services.AddSingleton<ILocalBalanceReader, PostgresLocalBalanceReader>();
     _ = builder.Services.AddSingleton<IKnownTradeReader, PostgresKnownTradeReader>();
     _ = builder.Services.AddSingleton<ILocalOpenOrderReader, PostgresLocalOpenOrderReader>();
+    _ = builder.Services.AddSingleton<ILocalOpenOrderResolutionSink, PostgresLocalOpenOrderResolutionSink>();
     _ = builder.Services.AddSingleton<IReconciliationEventSink, InMemoryReconciliationEventSink>();
     _ = builder.Services.AddSingleton<AccountReconciliationService>(serviceProvider =>
     {
@@ -202,7 +203,8 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
             serviceProvider.GetRequiredService<IReconciliationEventSink>(),
             serviceProvider.GetRequiredService<IAsyncOperationalControl>(),
             reconciliationOptions,
-            localOpenOrderReader: serviceProvider.GetRequiredService<ILocalOpenOrderReader>());
+            localOpenOrderReader: serviceProvider.GetRequiredService<ILocalOpenOrderReader>(),
+            openOrderResolutionSink: serviceProvider.GetRequiredService<ILocalOpenOrderResolutionSink>());
     });
     builder.Services.AddHostedService<ReconciliationStartupHostedService>();
     builder.Services.AddHostedService<PeriodicReconciliationHostedService>();

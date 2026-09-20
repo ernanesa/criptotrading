@@ -192,6 +192,21 @@ public interface ILocalOpenOrderReader
     Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Applies an exchange-authoritative open-order snapshot to an ambiguous local
+/// projection. Implementations must be idempotent and must never infer a
+/// terminal state from absence in the open-order snapshot.
+/// </summary>
+public interface ILocalOpenOrderResolutionSink
+{
+    Task ResolveAsync(
+        ReconciliationOpenOrder authoritativeOrder,
+        string previousLocalStatus,
+        CorrelationId correlationId,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IReconciliationEventSink
 {
     Task PublishAsync(ReconciliationEvent reconciliationEvent, CancellationToken cancellationToken = default);
@@ -239,6 +254,17 @@ public sealed record OpenOrderReconciliationMismatch(
     string ReasonCode)
     : ReconciliationEvent(EventId, CorrelationId, OccurredAtUtc);
 
+public sealed record OpenOrderReconciled(
+    Guid EventId,
+    CorrelationId CorrelationId,
+    DateTimeOffset OccurredAtUtc,
+    string Symbol,
+    string ClientOrderId,
+    string PreviousLocalStatus,
+    string AuthoritativeStatus,
+    long ExchangeOrderId)
+    : ReconciliationEvent(EventId, CorrelationId, OccurredAtUtc);
+
 public sealed record ReconciliationRunResult(
     CorrelationId CorrelationId,
     DateTimeOffset ObservedAtUtc,
@@ -262,6 +288,7 @@ public sealed class AccountReconciliationService
     private readonly IKnownTradeReader knownTradeReader;
     private readonly ILocalOpenOrderReader localOpenOrderReader;
     private readonly IReconciliationEventSink eventSink;
+    private readonly ILocalOpenOrderResolutionSink? openOrderResolutionSink;
     private readonly IAsyncOperationalControl operationalControl;
     private readonly ReconciliationOptions options;
     private readonly TimeProvider timeProvider;
@@ -274,7 +301,8 @@ public sealed class AccountReconciliationService
         IAsyncOperationalControl operationalControl,
         ReconciliationOptions options,
         TimeProvider? timeProvider = null,
-        ILocalOpenOrderReader? localOpenOrderReader = null)
+        ILocalOpenOrderReader? localOpenOrderReader = null,
+        ILocalOpenOrderResolutionSink? openOrderResolutionSink = null)
     {
         this.snapshotProvider = snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
         this.balanceReader = balanceReader ?? throw new ArgumentNullException(nameof(balanceReader));
@@ -284,6 +312,7 @@ public sealed class AccountReconciliationService
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.localOpenOrderReader = localOpenOrderReader ?? new NoLocalOpenOrdersReader();
+        this.openOrderResolutionSink = openOrderResolutionSink;
     }
 
     public async Task<ReconciliationRunResult> ReconcileAsync(CancellationToken cancellationToken = default)
@@ -332,10 +361,47 @@ public sealed class AccountReconciliationService
         {
             externalOpenOrders.TryGetValue(clientOrderId, out var exchangeOrder);
             localOpenOrdersByClientId.TryGetValue(clientOrderId, out var localOrder);
-            var reason = exchangeOrder is null
-                ? "LOCAL_OPEN_ORDER_MISSING_ON_EXCHANGE"
+            var ambiguousLocalStatus = localOrder?.Status is not null
+                && IsAmbiguousLocalStatus(localOrder.Status);
+            var authoritativeOpenStatus = exchangeOrder is not null
+                && IsAuthoritativeOpenStatus(exchangeOrder.Status);
+            if (snapshotIsFresh && ambiguousLocalStatus && exchangeOrder is not null && localOrder is not null
+                && string.Equals(exchangeOrder.Symbol, localOrder.Symbol, StringComparison.Ordinal)
+                && authoritativeOpenStatus &&
+                !string.Equals(exchangeOrder.Status, "PENDING_CANCEL", StringComparison.OrdinalIgnoreCase) &&
+                openOrderResolutionSink is not null)
+            {
+                await openOrderResolutionSink.ResolveAsync(
+                    exchangeOrder,
+                    localOrder!.Status,
+                    correlationId,
+                    snapshot.ObservedAtUtc,
+                    cancellationToken).ConfigureAwait(false);
+                var resolved = new OpenOrderReconciled(
+                    Guid.NewGuid(), correlationId, snapshot.ObservedAtUtc,
+                    exchangeOrder.Symbol, clientOrderId, localOrder.Status,
+                    exchangeOrder.Status, exchangeOrder.OrderId);
+                events.Add(resolved);
+                await eventSink.PublishAsync(resolved, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            var reason = !snapshotIsFresh
+                ? "STALE_SNAPSHOT"
+                : exchangeOrder is null
+                ? ambiguousLocalStatus
+                    ? localOrder!.Status.Equals("PENDING_CANCEL", StringComparison.OrdinalIgnoreCase)
+                        ? "CANCEL_OUTCOME_UNKNOWN"
+                        : "UNKNOWN_ORDER_NOT_FOUND_ON_EXCHANGE"
+                    : "LOCAL_OPEN_ORDER_MISSING_ON_EXCHANGE"
                 : localOrder is null
                     ? "EXCHANGE_OPEN_ORDER_UNKNOWN_LOCALLY"
+                    : ambiguousLocalStatus && openOrderResolutionSink is null
+                        ? "AMBIGUOUS_ORDER_RESOLUTION_UNAVAILABLE"
+                        : ambiguousLocalStatus && !authoritativeOpenStatus
+                            ? "EXCHANGE_OPEN_ORDER_STATUS_UNSUPPORTED"
+                            : string.Equals(exchangeOrder.Status, "PENDING_CANCEL", StringComparison.OrdinalIgnoreCase)
+                                ? "ORDER_CANCEL_PENDING"
                     : !string.Equals(exchangeOrder.Symbol, localOrder.Symbol, StringComparison.Ordinal)
                         ? "OPEN_ORDER_SYMBOL_DRIFT"
                         : !string.Equals(exchangeOrder.Status, localOrder.Status, StringComparison.OrdinalIgnoreCase)
@@ -401,7 +467,7 @@ public sealed class AccountReconciliationService
             await eventSink.PublishAsync(reconciliationEvent, cancellationToken).ConfigureAwait(false);
         }
 
-        var healthy = events.All(static item => item is BalanceReconciled)
+        var healthy = events.All(static item => item is BalanceReconciled or OpenOrderReconciled)
             && unknownTradeIds.Length == 0
             && !events.Any(static item => item is OpenOrderReconciliationMismatch);
         if (!healthy)
@@ -417,6 +483,15 @@ public sealed class AccountReconciliationService
         TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
         return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count);
     }
+
+    private static bool IsAmbiguousLocalStatus(string status) =>
+        status.Trim().Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase)
+        || status.Trim().Equals("PENDING_CANCEL", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAuthoritativeOpenStatus(string status) =>
+        status.Trim().Equals("NEW", StringComparison.OrdinalIgnoreCase)
+        || status.Trim().Equals("PARTIALLY_FILLED", StringComparison.OrdinalIgnoreCase)
+        || status.Trim().Equals("PENDING_CANCEL", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Read-only Binance adapter for the generic reconciliation contract.</summary>
