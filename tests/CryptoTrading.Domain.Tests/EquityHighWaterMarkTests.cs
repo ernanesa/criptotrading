@@ -46,4 +46,15 @@ public sealed class EquityHighWaterMarkTests
         Assert.Equal(EquityHighWaterMarkCalculator.ValuationConflict, conflict.UnavailableReason);
         Assert.Equal(current, older.State);
     }
+
+    [Fact]
+    public void IdempotentFirstObservationDoesNotCountAsSecondValuation()
+    {
+        var initial = EquityHighWaterMarkCalculator.Apply(1_000m, First, null).State;
+
+        var replay = EquityHighWaterMarkCalculator.Apply(1_000m, First, initial);
+
+        Assert.False(replay.IsComplete);
+        Assert.Equal(EquityHighWaterMarkCalculator.InitialObservationRequired, replay.UnavailableReason);
+    }
 }
