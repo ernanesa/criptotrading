@@ -19,6 +19,8 @@ trap cleanup EXIT
 dotnet_command="dotnet"
 if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
     dotnet_command="$repo_root/.tools/dotnet/dotnet"
+elif [[ -x "$HOME/.dotnet/dotnet" ]]; then
+    dotnet_command="$HOME/.dotnet/dotnet"
 elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
     dotnet_command="$DOTNET_ROOT/dotnet"
 fi
@@ -36,7 +38,7 @@ fi
 set +e
 (
     cd -- "$temp_dir"
-    env -u BINANCE_API_KEY -u BINANCE_API_SECRET \
+    env -u BINANCE_API_KEY -u BINANCE_API_SECRET -u BINANCE_API_KEY_FILE -u BINANCE_API_SECRET_FILE \
         TRADING_ENVIRONMENT=TESTNET \
         BINANCE_REST_BASE_URL=https://testnet.binance.vision/api \
         BINANCE_WITHDRAWALS_ENABLED=false \
