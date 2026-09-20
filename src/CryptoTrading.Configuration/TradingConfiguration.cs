@@ -77,7 +77,7 @@ public static class TradingConfigurationExtensions
     public static IConfigurationBuilder AddLocalDotEnv(this IConfigurationBuilder builder, string? path = null)
     {
         var filePath = path ?? FindDotEnv();
-        if (filePath is null || !File.Exists(filePath))
+        if (filePath is null || !File.Exists(filePath) || !HasSafeDotEnvPermissions(filePath))
         {
             return builder;
         }
@@ -208,5 +208,36 @@ public static class TradingConfigurationExtensions
 
         var directoryMode = File.GetUnixFileMode(directory.FullName);
         return (directoryMode & groupOrOtherBits) == 0;
+    }
+
+    private static bool HasSafeDotEnvPermissions(string path)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return true;
+        }
+
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return false;
+            }
+
+            var mode = File.GetUnixFileMode(path);
+            const UnixFileMode groupOrOtherBits = UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                                                   UnixFileMode.GroupExecute | UnixFileMode.OtherRead |
+                                                   UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+            return (mode & groupOrOtherBits) == 0;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 }
