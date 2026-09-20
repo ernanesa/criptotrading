@@ -18,6 +18,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Experiment evidence bundle | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — 3 testes de manifesto, hash, idempotência, redaction e holdout contaminado |
 | Worker persistence startup | `./scripts/test-worker-persistence-startup.sh` + CI | PASS — host real, migrations 010–011 e sink PostgreSQL; `PAPER/NO_TRADE`, sem Binance; smoke test integrado ao workflow de qualidade |
 | API local smoke | `./scripts/test-api-smoke.sh` + CI | PASS — host real, liveness/readiness, `X-Correlation-Id` e status operacional read-only verificados com configuração sintética; sem Binance, banco ou mutações |
+| Local quality gates parallel runner | `./scripts/test-local-gates.sh` | PASS — gates offline independentes executados em paralelo, com relatório agregado redigido e porta isolada para o smoke da API |
 | Experiment governance | `dotnet test tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj --configuration Release --no-restore` | PASS — 8 testes de preregistration, budget, idempotência e holdout; OOS real continua pendente |
 | Experiment governance restart | `./scripts/test-postgres-integration.sh` | PASS — snapshot recomposto após nova instância do store; hash, trial, acesso e contaminação preservados |
 | Persistência operacional PostgreSQL | `./scripts/test-postgres-integration.sh` | PASS — 8 aprovados; append idempotente, leitura/hash, colisão e trigger append-only |
