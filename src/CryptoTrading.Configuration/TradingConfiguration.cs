@@ -196,10 +196,8 @@ public static class TradingConfigurationExtensions
         }
 
         var fileMode = File.GetUnixFileMode(file.FullName);
-        const UnixFileMode groupOrOtherBits = UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
-                                               UnixFileMode.GroupExecute | UnixFileMode.OtherRead |
-                                               UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
-        if ((fileMode & groupOrOtherBits) != 0)
+        const UnixFileMode privateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        if ((fileMode & ~privateFileMode) != 0)
         {
             return false;
         }
@@ -210,6 +208,9 @@ public static class TradingConfigurationExtensions
             return false;
         }
 
+        const UnixFileMode groupOrOtherBits = UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
+                                               UnixFileMode.GroupExecute | UnixFileMode.OtherRead |
+                                               UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
         var directoryMode = File.GetUnixFileMode(directory.FullName);
         return (directoryMode & groupOrOtherBits) == 0;
     }
@@ -230,10 +231,8 @@ public static class TradingConfigurationExtensions
             }
 
             var mode = File.GetUnixFileMode(path);
-            const UnixFileMode groupOrOtherBits = UnixFileMode.GroupRead | UnixFileMode.GroupWrite |
-                                                   UnixFileMode.GroupExecute | UnixFileMode.OtherRead |
-                                                   UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
-            return (mode & groupOrOtherBits) == 0;
+            const UnixFileMode privateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            return (mode & ~privateFileMode) == 0;
         }
         catch (IOException)
         {

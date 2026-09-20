@@ -179,6 +179,36 @@ public sealed class TradingOptionsValidatorTests
         Assert.DoesNotContain("file-api-key", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExecutableExternalCredentialFileIsRejectedOnUnix()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        using var directory = new TemporarySecretDirectory();
+        var keyPath = directory.Write("api-key", "file-api-key");
+        var secretPath = directory.Write("api-secret", "file-api-secret");
+        File.SetUnixFileMode(keyPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var configuration = CreateConfiguration(new Dictionary<string, string?>
+        {
+            ["TRADING_ENVIRONMENT"] = "TESTNET",
+            ["BINANCE_REST_BASE_URL"] = "https://testnet.binance.vision/api",
+            ["BINANCE_WS_BASE_URL"] = "wss://testnet.binance.vision/ws",
+            ["BINANCE_API_KEY_FILE"] = keyPath,
+            ["BINANCE_API_SECRET_FILE"] = secretPath,
+            ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
+            ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT"
+        });
+
+        using var provider = new ServiceCollection()
+            .AddTradingConfiguration(configuration)
+            .BuildServiceProvider();
+
+        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<TradingOptions>>().Value);
+    }
+
     private static IConfiguration CreateConfiguration(IReadOnlyDictionary<string, string?> values) =>
         new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
