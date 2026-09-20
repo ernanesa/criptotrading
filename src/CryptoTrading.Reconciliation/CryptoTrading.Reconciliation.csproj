@@ -8,5 +8,6 @@
   <ItemGroup>
     <ProjectReference Include="../CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
     <ProjectReference Include="../CryptoTrading.Exchange.Binance/CryptoTrading.Exchange.Binance.csproj" />
+    <ProjectReference Include="../CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
   </ItemGroup>
 </Project>

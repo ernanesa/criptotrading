@@ -6,6 +6,7 @@ using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Exchange.Paper;
+using CryptoTrading.Observability;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.Options;
 
@@ -217,6 +218,7 @@ public sealed class OutboxDispatcher(
 
                 foreach (var message in messages)
                 {
+                    TradingTelemetry.RecordOutboxQueueLag(DateTimeOffset.UtcNow - message.AvailableAt);
                     await DispatchOneAsync(store, message, executorMap, stoppingToken).ConfigureAwait(false);
                 }
             }
@@ -245,6 +247,7 @@ public sealed class OutboxDispatcher(
             }
             else
             {
+                TradingTelemetry.RecordOutboxDispatch(succeeded: true);
                 DispatcherLog.Processed(logger, message.MessageId, message.MessageType);
             }
         }
@@ -263,12 +266,14 @@ public sealed class OutboxDispatcher(
                     exception.GetType().Name,
                     DateTimeOffset.UtcNow,
                     cancellationToken).ConfigureAwait(false);
+                TradingTelemetry.RecordOutboxDispatch(succeeded: false, deadLettered: true);
                 DispatcherLog.DeadLettered(logger, message.MessageId, message.MessageType, exception.GetType().Name);
             }
             else
             {
                 var retryAt = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
                 _ = await store.FailOutboxAsync(message.MessageId, leaseOwner, exception.GetType().Name, retryAt, cancellationToken).ConfigureAwait(false);
+                TradingTelemetry.RecordOutboxDispatch(succeeded: false);
                 DispatcherLog.Failed(logger, message.MessageId, message.MessageType, exception.GetType().Name, delaySeconds);
             }
         }

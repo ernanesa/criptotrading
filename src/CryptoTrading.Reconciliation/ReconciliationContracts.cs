@@ -4,6 +4,7 @@ using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
+using CryptoTrading.Observability;
 
 namespace CryptoTrading.Reconciliation;
 
@@ -389,6 +390,8 @@ public sealed class AccountReconciliationService
                 timeProvider.GetUtcNow());
             _ = operationalControl.EnterSafeMode(command);
         }
+
+        TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
 
         return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count);
     }
