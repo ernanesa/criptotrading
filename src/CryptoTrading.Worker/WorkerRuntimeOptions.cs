@@ -49,6 +49,17 @@ public sealed class WorkerRuntimeOptions
     /// <summary>Enables the authenticated account-event stream with durable local persistence.</summary>
     public bool AccountStreamEnabled { get; set; }
 
+    /// <summary>Enables the closed-bar baseline decision loop; disabled by default.</summary>
+    public bool AutonomyEnabled { get; set; }
+
+    public string AutonomySymbol { get; set; } = "BTCUSDT";
+
+    public string AutonomyInterval { get; set; } = "1m";
+
+    public int AutonomyKlineLimit { get; set; } = 100;
+
+    public decimal AutonomyEntryTargetNotional { get; set; } = 100m;
+
     public string ReconciliationAccount { get; set; } = "exchange-wallet";
 
     public string ReconciliationSymbols { get; set; } = "BTCUSDT";
@@ -199,6 +210,39 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_ACCOUNT_STREAM_ENABLED requires WORKER_RECONCILIATION_ENABLED=true for initial state recovery."]);
+        }
+
+        if (AutonomyEnabled)
+        {
+            if (!PersistenceEnabled || !ApplyMigrations || !RiskPolicyRequired || !ReconciliationEnabled || !AccountStreamEnabled)
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_AUTONOMY_ENABLED requires persistence, migrations, RiskPolicy, reconciliation and account stream."]);
+            }
+
+            if (string.IsNullOrWhiteSpace(AutonomySymbol) || !string.Equals(AutonomySymbol.Trim(), "BTCUSDT", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_AUTONOMY_SYMBOL is restricted to BTCUSDT for the A2 baseline."]);
+            }
+
+            if (AutonomyInterval.Trim() is not ("1m" or "5m" or "15m" or "1h"))
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_AUTONOMY_INTERVAL must be one of 1m, 5m, 15m or 1h."]);
+            }
+
+            if (AutonomyKlineLimit is < 50 or > 1_000)
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_AUTONOMY_KLINE_LIMIT must be between 50 and 1000."]);
+            }
+
+            if (AutonomyEntryTargetNotional <= 0m)
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL must be greater than zero."]);
+            }
         }
 
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationAccount))

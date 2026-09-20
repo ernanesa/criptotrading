@@ -51,6 +51,11 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ReconciliationEnabled = builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false);
         options.RiskPolicyRequired = builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false);
         options.AccountStreamEnabled = builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false);
+        options.AutonomyEnabled = builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false);
+        options.AutonomySymbol = builder.Configuration["WORKER_AUTONOMY_SYMBOL"] ?? "BTCUSDT";
+        options.AutonomyInterval = builder.Configuration["WORKER_AUTONOMY_INTERVAL"] ?? "1m";
+        options.AutonomyKlineLimit = builder.Configuration.GetValue("WORKER_AUTONOMY_KLINE_LIMIT", 100);
+        options.AutonomyEntryTargetNotional = builder.Configuration.GetValue("WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL", 100m);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
@@ -107,6 +112,13 @@ builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher
 builder.Services.AddSingleton<CryptoTrading.Shadow.ShadowReportWriter>(serviceProvider =>
     new CryptoTrading.Shadow.ShadowReportWriter(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ShadowReportDirectory));
 _ = builder.Services.AddOutboxExecution(builder.Configuration);
+if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
+{
+    _ = builder.Services.AddBinanceSpotMarketClient();
+    builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle>(_ =>
+        new CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle(
+            CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline));
+}
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
     _ = builder.Services.AddPostgresTradingStore(
@@ -200,6 +212,10 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 }
 builder.Services.AddHostedService<OutboxDispatcher>();
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();
+if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
+{
+    builder.Services.AddHostedService<AutonomyCycleHostedService>();
+}
 builder.Services.AddHostedService<ShadowDrillHostedService>();
 
 var host = builder.Build();

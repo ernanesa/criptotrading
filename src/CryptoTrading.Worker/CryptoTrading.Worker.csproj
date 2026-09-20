@@ -19,6 +19,7 @@
     <ProjectReference Include="../CryptoTrading.Reconciliation/CryptoTrading.Reconciliation.csproj" />
     <ProjectReference Include="../CryptoTrading.Persistence/CryptoTrading.Persistence.csproj" />
     <ProjectReference Include="../CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <ProjectReference Include="../CryptoTrading.Backtesting/CryptoTrading.Backtesting.csproj" />
     <ProjectReference Include="../CryptoTrading.Shadow/CryptoTrading.Shadow.csproj" />
   </ItemGroup>
 </Project>
