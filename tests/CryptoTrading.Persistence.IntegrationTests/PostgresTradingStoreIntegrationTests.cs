@@ -7,6 +7,8 @@ using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Research;
 using Npgsql;
+using CryptoTrading.Backtesting;
+using CryptoTrading.Backtesting.Strategies;
 using Xunit;
 using Xunit.Sdk;
 
@@ -468,6 +470,96 @@ public sealed class PostgresTradingStoreIntegrationTests
             "DELETE FROM trading.experiment_trials WHERE experiment_id = @experiment_id;", connection);
         delete.Parameters.AddWithValue("experiment_id", registration.ExperimentId.Value);
         await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
+    }
+
+    [Fact]
+    public async Task ReconstructedSnapshotProjectsIntoGovernedEvidenceBundle()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var parameters = TrendFollowingParameters.BtcUsdtBaseline;
+        var evaluation = WalkForwardEvaluator.Evaluate(
+            dataset.Metadata,
+            dataset.Bars,
+            parameters,
+            BacktestEvaluationOptions.DailyCrypto(),
+            WalkForwardPlan.Create(dataset.Bars.Count, 60, 20, 20));
+        var preregistration = new ExperimentPreregistration(
+            ExperimentId.New(),
+            "integration-governed-evidence",
+            "baseline produces positive net return after costs",
+            "baseline-only",
+            ["baseline"],
+            1,
+            "net_return",
+            "reject if net return is not positive",
+            "NO_TRADE/cash and buy-and-hold",
+            new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero),
+            "integration",
+            IdempotencyKey.New(),
+            parameters.Version,
+            "integration-commit",
+            dataset.Metadata.Version,
+            dataset.Metadata.ContentHash,
+            "holdout-v1",
+            "metrics-v1",
+            "integration-environment",
+            Hash("integration-dependencies"),
+            17,
+            dataset.Bars[0].CloseTimeUtc,
+            dataset.Bars[^1].CloseTimeUtc.AddDays(1));
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        Assert.True(await store.AppendExperimentPreregistrationAsync(preregistration));
+        var trial = new ExperimentTrial(
+            1,
+            "baseline",
+            "baseline-v1",
+            Hash("integration-trial"),
+            ExperimentDecision.Rejected,
+            preregistration.PreregisteredAtUtc,
+            "integration",
+            IdempotencyKey.New());
+        Assert.True(await store.AppendExperimentTrialAsync(preregistration.ExperimentId, trial));
+
+        await using var restarted = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var snapshot = await restarted.ReadExperimentGovernanceSnapshotAsync(preregistration.ExperimentId);
+        Assert.NotNull(snapshot);
+        using var output = new TemporaryDirectory();
+        var input = ExperimentEvidenceWriter.FromGovernanceState(
+            snapshot!.Preregistration,
+            snapshot.Trials.Count,
+            snapshot.HoldoutAccessCount,
+            snapshot.HoldoutContaminated,
+            evaluation,
+            "Rejected",
+            new Dictionary<string, string> { ["dataset"] = dataset.Metadata.ContentHash },
+            ["AC-POSTGRES-GOVERNED-EVIDENCE-01"]);
+        var bundle = ExperimentEvidenceWriter.Write(output.Path, input, DateTimeOffset.UtcNow);
+
+        Assert.True(File.Exists(bundle.ArtifactPath));
+        Assert.True(File.Exists(bundle.ManifestPath));
+        Assert.Contains("\"promotion_authorized\":false", bundle.ManifestJson, StringComparison.Ordinal);
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "cryptotrading-governed-evidence-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
     }
 
     private static ExperimentPreregistration NewExperimentRegistration() =>

@@ -32,3 +32,8 @@ dotnet run --project tools/CryptoTrading.GovernedEvidenceRunner -c Release -- \
 O runner não envia ordens, não acessa endpoints Binance e não concede promoção.
 Uma decisão elegível continua sujeita a RiskPolicy, revisão humana e aos gates
 de readiness.
+
+O contrato foi exercitado no PostgreSQL efêmero pelo teste
+`ReconstructedSnapshotProjectsIntoGovernedEvidenceBundle`: a preregistration e
+o trial foram persistidos, o snapshot foi lido por uma nova instância e o
+bundle foi escrito somente após as validações de lineage.
