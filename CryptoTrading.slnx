@@ -16,6 +16,7 @@
     <Project Path="tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj" />
     <Project Path="tools/CryptoTrading.PublicKlinesRecorder/CryptoTrading.PublicKlinesRecorder.csproj" />
     <Project Path="tools/CryptoTrading.PublicOosRunner/CryptoTrading.PublicOosRunner.csproj" />
+    <Project Path="tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj" />
