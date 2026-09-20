@@ -15,6 +15,8 @@ trap cleanup EXIT
 dotnet_command="dotnet"
 if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
     dotnet_command="$repo_root/.tools/dotnet/dotnet"
+elif [[ -x "$HOME/.dotnet/dotnet" ]]; then
+    dotnet_command="$HOME/.dotnet/dotnet"
 elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
     dotnet_command="$DOTNET_ROOT/dotnet"
 fi
@@ -43,6 +45,7 @@ esac
 set +e
 "$dotnet_command" run \
     --project "$repo_root/tools/CryptoTrading.BinanceReadOnlyProbe/CryptoTrading.BinanceReadOnlyProbe.csproj" \
+    --no-build \
     --no-restore \
     --configuration Release >"$probe_log" 2>&1
 probe_status=$?
@@ -59,7 +62,7 @@ fi
     echo "- Result: **$result**"
     echo "- UTC: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
     echo "- Environment: \`TESTNET\`"
-    echo "- Endpoint policy: exact HTTPS Spot Testnet `/api` endpoint"
+    echo '- Endpoint policy: exact HTTPS Spot Testnet `/api` endpoint'
     echo "- Credentials: supplied locally, never written to this report"
     echo "- Exchange mutation: not available (account/open-orders/trades only)"
     echo "- Probe exit code: \`$probe_status\`"
