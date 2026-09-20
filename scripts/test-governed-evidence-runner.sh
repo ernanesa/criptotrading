@@ -3,6 +3,15 @@ set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dotnet_command="${DOTNET_COMMAND:-dotnet}"
+if [[ -z "${DOTNET_COMMAND:-}" ]]; then
+    if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
+        dotnet_command="$repo_root/.tools/dotnet/dotnet"
+    elif [[ -x "$HOME/.dotnet/dotnet" ]]; then
+        dotnet_command="$HOME/.dotnet/dotnet"
+    elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
+        dotnet_command="$DOTNET_ROOT/dotnet"
+    fi
+fi
 compose_project="${COMPOSE_PROJECT_NAME:-cryptotrading-governed-evidence}"
 postgres_port="${POSTGRES_TEST_PORT:-55433}"
 postgres_db="cryptotrading"
@@ -32,15 +41,16 @@ export POSTGRES_CONNECTION_STRING="$connection_string"
 dataset_dir="$(mktemp -d /tmp/cryptotrading-governed-dataset.XXXXXX)"
 evidence_dir="$(mktemp -d /tmp/cryptotrading-governed-evidence.XXXXXX)"
 unset BINANCE_API_KEY BINANCE_API_SECRET
+dataset_version="$(date -u +%Y-%m-%d)"
 
 "$dotnet_command" run --project "$repo_root/tools/CryptoTrading.PublicKlinesRecorder" -c Release -- \
     --source production-data --symbol BTCUSDT --interval 1d --output "$dataset_dir" --max-bars 180 >/dev/null
 experiment_id="$("$dotnet_command" run --project "$repo_root/tools/CryptoTrading.GovernedEvidenceFixture" -c Release -- \
-    --input "$dataset_dir" --dataset-id btcusdt-public-1d --dataset-version 2026-09-19 \
+    --input "$dataset_dir" --dataset-id btcusdt-public-1d --dataset-version "$dataset_version" \
     --dataset-source binance-public-data --symbol BTCUSDT)"
 "$dotnet_command" run --project "$repo_root/tools/CryptoTrading.GovernedEvidenceRunner" -c Release -- \
     --experiment-id "$experiment_id" --input "$dataset_dir" --output "$evidence_dir" \
-    --dataset-id btcusdt-public-1d --dataset-version 2026-09-19 --dataset-source binance-public-data \
+    --dataset-id btcusdt-public-1d --dataset-version "$dataset_version" --dataset-source binance-public-data \
     --symbol BTCUSDT --decision Rejected --trace docs/governed-evidence-runner.md --trace AC-GOVERNED-E2E-01
 
 test -s "$evidence_dir/$experiment_id.experiment.json"
