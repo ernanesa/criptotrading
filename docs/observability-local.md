@@ -54,3 +54,8 @@ curl -s http://127.0.0.1:5080/metrics
 ```
 
 O endpoint `/metrics` é um diagnóstico local em JSON, não substitui um exporter Prometheus. A próxima evolução deve conectar `TradingTelemetry.Meter` e `TradingTelemetry.ActivitySource` ao OpenTelemetry Collector local, preservando a política de redaction e retenção definida no plano.
+
+`/metrics` e `/operational/status` recusam conexões que não sejam loopback,
+mesmo que o processo seja iniciado com bind externo por engano. Para publicar
+diagnósticos fora da máquina, a evolução obrigatória é uma superfície separada
+com autenticação, autorização e política de rede explícitas.

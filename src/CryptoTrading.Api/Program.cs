@@ -78,10 +78,21 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 })
     .WithName("GetReadiness");
 
-app.MapGet("/metrics", () => Results.Ok(TradingTelemetry.Snapshot()))
+var localDiagnostics = app.MapGroup(string.Empty)
+    .AddEndpointFilter(async (context, next) =>
+    {
+        if (!LocalDiagnosticsAccessPolicy.IsLoopback(context.HttpContext.Connection.RemoteIpAddress))
+        {
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+        }
+
+        return await next(context).ConfigureAwait(false);
+    });
+
+localDiagnostics.MapGet("/metrics", () => Results.Ok(TradingTelemetry.Snapshot()))
     .WithName("GetMetrics");
 
-app.MapGet("/operational/status", (IOperationalControl operationalControl) =>
+localDiagnostics.MapGet("/operational/status", (IOperationalControl operationalControl) =>
     Results.Ok(new
     {
         source = "api-process",
