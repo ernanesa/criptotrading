@@ -66,3 +66,6 @@ jobs:
 
       - name: Test readiness validator contract
         run: ./scripts/test-readiness-validator.sh
+
+      - name: Test public OOS credential guard
+        run: ./scripts/test-public-oos-production-guard.sh
