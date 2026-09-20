@@ -97,15 +97,20 @@ public sealed class AccountStreamHostedServiceTests
     [Fact]
     public void AccountStreamGateRequiresPersistenceMigrationAndNoTrade()
     {
-        Assert.Throws<Microsoft.Extensions.Options.OptionsValidationException>(() => new WorkerRuntimeOptions
+        var valid = new WorkerRuntimeOptions
         {
             AccountStreamEnabled = true,
             PersistenceEnabled = true,
             ApplyMigrations = true,
             ReconciliationEnabled = true,
             NoTrade = false,
+            ExecutionMode = "TESTNET",
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            RiskPolicyRequired = true,
             PostgresConnectionString = "Host=localhost"
-        }.Validate());
+        };
+        valid.Validate();
 
         Assert.Throws<Microsoft.Extensions.Options.OptionsValidationException>(() => new WorkerRuntimeOptions
         {
@@ -113,6 +118,11 @@ public sealed class AccountStreamHostedServiceTests
             PersistenceEnabled = true,
             ApplyMigrations = false,
             ReconciliationEnabled = true,
+            ExecutionMode = "TESTNET",
+            NoTrade = false,
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            RiskPolicyRequired = true,
             PostgresConnectionString = "Host=localhost"
         }.Validate());
     }

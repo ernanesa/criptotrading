@@ -43,7 +43,10 @@ public sealed class WorkerRuntimeTests
             ApplyMigrations = true,
             PostgresConnectionString = "Host=localhost",
             TestnetExecutionAcknowledged = true,
-            TestnetOrderExecutionEnabled = true
+            TestnetOrderExecutionEnabled = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
         };
 
         valid.Validate();
@@ -54,24 +57,28 @@ public sealed class WorkerRuntimeTests
             {
                 ExecutionMode = "TESTNET", NoTrade = true, PersistenceEnabled = true,
                 ApplyMigrations = true, PostgresConnectionString = "Host=localhost",
-                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
             },
             new WorkerRuntimeOptions
             {
                 ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = false,
-                ApplyMigrations = true, TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+                ApplyMigrations = true, TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
             },
             new WorkerRuntimeOptions
             {
                 ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true,
                 ApplyMigrations = false, PostgresConnectionString = "Host=localhost",
-                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true
+                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
             },
             new WorkerRuntimeOptions
             {
                 ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true,
                 ApplyMigrations = true, PostgresConnectionString = "Host=localhost",
-                TestnetExecutionAcknowledged = false, TestnetOrderExecutionEnabled = true
+                TestnetExecutionAcknowledged = false, TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
             },
             new WorkerRuntimeOptions
             {
@@ -89,6 +96,8 @@ public sealed class WorkerRuntimeTests
     {
         var command = NewCommand();
         var exchange = new AmbiguousTestnetClient(command);
+        var store = new RecordingOpenOrderStore();
+        var projection = new OrderProjectionService(store);
         var executor = new TestnetOutboxMessageExecutor(
             exchange,
             Options.Create(new WorkerRuntimeOptions
@@ -99,18 +108,25 @@ public sealed class WorkerRuntimeTests
                 ApplyMigrations = true,
                 PostgresConnectionString = "Host=localhost",
                 TestnetExecutionAcknowledged = true,
-                TestnetOrderExecutionEnabled = true
+                TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true,
+                ReconciliationEnabled = true,
+                AccountStreamEnabled = true
             }),
             Options.Create(new TradingOptions
             {
                 Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" }
             }),
+            projection,
             NullLogger<TestnetOutboxMessageExecutor>.Instance);
 
         await executor.ExecuteAsync(MessageFor(command));
 
         Assert.Equal(1, exchange.SubmitCalls);
         Assert.Equal(1, exchange.QueryCalls);
+        var projected = Assert.Single(store.Records);
+        Assert.Equal("NEW", projected.Status);
+        Assert.Equal(command.ClientOrderId.Value, projected.ClientOrderId);
     }
 
     [Fact]
@@ -149,8 +165,13 @@ public sealed class WorkerRuntimeTests
             ApplyMigrations = true,
             PostgresConnectionString = "Host=localhost",
             TestnetExecutionAcknowledged = true,
-            TestnetOrderExecutionEnabled = true
+            TestnetOrderExecutionEnabled = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
         }));
+        testnetServices.AddSingleton<ILocalOpenOrderStore, RecordingOpenOrderStore>();
+        testnetServices.AddSingleton<OrderProjectionService>();
         _ = testnetServices.AddOutboxExecution(configuration);
         _ = testnetServices.AddSingleton<IBinanceSpotOrderClient>(_ => new AmbiguousTestnetClient(NewCommand()));
         await using var testnetProvider = testnetServices.BuildServiceProvider();
@@ -230,7 +251,7 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
-    public void ReconciliationRequiresNoTradeAndPersistence()
+    public void PaperReconciliationRequiresNoTradeAndPersistence()
     {
         Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
         {
@@ -246,6 +267,38 @@ public sealed class WorkerRuntimeTests
             NoTrade = true,
             PersistenceEnabled = false,
         }.Validate());
+    }
+
+    [Fact]
+    public void TestnetExecutionRequiresRiskReconciliationAndAccountStream()
+    {
+        WorkerRuntimeOptions Valid() => new()
+        {
+            ExecutionMode = "TESTNET",
+            NoTrade = false,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        };
+
+        Valid().Validate();
+
+        foreach (var mutate in new Action<WorkerRuntimeOptions>[]
+        {
+            options => options.RiskPolicyRequired = false,
+            options => options.ReconciliationEnabled = false,
+            options => options.AccountStreamEnabled = false
+        })
+        {
+            var options = Valid();
+            mutate(options);
+            Assert.Throws<OptionsValidationException>(() => options.Validate());
+        }
     }
 
     [Fact]
@@ -534,5 +587,26 @@ public sealed class WorkerRuntimeTests
 
         public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingOpenOrderStore : ILocalOpenOrderStore
+    {
+        public List<LocalOpenOrderRecord> Records { get; } = [];
+
+        public Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<LocalOpenOrderRecord>>(Records);
+
+        public Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default)
+        {
+            Records.RemoveAll(item => item.ClientOrderId == order.ClientOrderId);
+            Records.Add(order);
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            Records.RemoveAll(item => item.ClientOrderId == clientOrderId);
+            return Task.CompletedTask;
+        }
     }
 }
