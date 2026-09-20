@@ -21,8 +21,9 @@ elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
     dotnet_command="$DOTNET_ROOT/dotnet"
 fi
 
-if [[ -z "${BINANCE_API_KEY:-}" || -z "${BINANCE_API_SECRET:-}" ]]; then
-    echo 'Refusing to run: provide fresh Testnet credentials through the environment only.' >&2
+if [[ -z "${BINANCE_API_KEY:-}" && -z "${BINANCE_API_KEY_FILE:-}" ]] ||
+   [[ -z "${BINANCE_API_SECRET:-}" && -z "${BINANCE_API_SECRET_FILE:-}" ]]; then
+    echo 'Refusing to run: provide fresh Testnet credentials or protected credential file paths.' >&2
     exit 2
 fi
 if [[ "${TRADING_ENVIRONMENT:-TESTNET}" != "TESTNET" ]]; then
