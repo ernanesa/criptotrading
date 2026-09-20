@@ -169,6 +169,12 @@ public static class TradingConfigurationExtensions
 
         try
         {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return string.Empty;
+            }
+
             var file = new FileInfo(path);
             if (!file.Exists || !HasSafeSecretPermissions(file))
             {
