@@ -51,6 +51,15 @@ O primeiro incremento é Binance Spot em BTC/USDT, com uma única baseline Trend
 
 O RAG é uma ferramenta local do Research Plane, fora do hot path de capital. Ele deve confirmar fontes contra o código/commit atual e nunca autoriza risco, ordens, credenciais ou mudanças externas.
 
+## Contexto dos agentes
+
+As regras de colaboração estão em [`AGENTS.md`](AGENTS.md). Cada tarefa começa
+com um context pack mínimo e termina com um handoff redigido; decisões
+substituídas ficam marcadas como `SUPERSEDES` e não retornam ao contexto ativo.
+O skill global `context-state-manager` aplica a mesma política, e o RAG é usado
+somente para localizar fontes relevantes por ID/hash antes da confirmação no
+checkout atual.
+
 ## Adapter Binance Spot read-only
 
 O projeto `CryptoTrading.Exchange.Binance` possui duas fronteiras separadas:
