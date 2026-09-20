@@ -30,6 +30,10 @@ nenhum teste autenticado deve ocorrer com segredo enviado pelo chat.
 
 O procedimento do bootstrap local está em [`docs/local-development.md`](docs/local-development.md).
 O acompanhamento das tarefas está em [`docs/implementation-checklist.md`](docs/implementation-checklist.md).
+Antes de abrir uma mudança, os gates locais independentes podem ser executados
+em paralelo com [`scripts/test-local-gates.sh`](scripts/test-local-gates.sh);
+o relatório redigido e as limitações do comando estão documentados em
+[`docs/local-quality-gates.md`](docs/local-quality-gates.md).
 
 ## Princípios
 
