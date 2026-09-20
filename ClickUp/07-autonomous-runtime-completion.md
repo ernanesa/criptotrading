@@ -1,7 +1,7 @@
 # E-19 — Closed-loop Autonomous Runtime Integration
 
 **Parent:** CryptoTrading / Product Delivery / R1.0 Active Delivery  
-**Status:** Proposed  
+**Status:** In Progress — implementação incremental; promoção bloqueada por gates pendentes
 **Priority:** P0/P1  
 **Release:** R1.0-A2  
 **Source:** `plan/31-autonomous-runtime-completion.md`  

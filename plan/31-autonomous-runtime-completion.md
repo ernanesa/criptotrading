@@ -1,6 +1,6 @@
 # 31 — Complemento de implementação: runtime autônomo fechado (A2)
 
-**Status:** planned / implementação incremental
+**Status:** in progress — fatias A2 implementadas; integração final e gates de promoção pendentes
 **Data-base:** 2026-09-20
 **Épico:** E-19 — Closed-loop Autonomous Runtime Integration
 **Escopo:** completar o caminho executável entre market data, decisão, risco, execução, projeções, reconciliação e operação segura.
