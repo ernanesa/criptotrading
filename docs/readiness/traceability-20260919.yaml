@@ -1,6 +1,6 @@
 schema_version: 1
 snapshot: 2026-09-19
-commit: 7283378
+commit: 30a6b1e
 decision: no-go-shadow-canary-live
 scope: local-foundation-paper
 items:
@@ -30,7 +30,7 @@ items:
     pending: [authenticated-testnet-run, orders-fills-ledger-rebuild]
   - id: release-readiness
     capability: promotion, canary, release and traceability evidence
-    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md, scripts/validate-readiness.sh, src/CryptoTrading.Observability/HttpWebhookTradingAlertSink.cs, src/CryptoTrading.Domain/Risk/OperationalControl.cs, src/CryptoTrading.Shadow/PostReleaseReport.cs, src/CryptoTrading.Shadow/PostReleaseEvidenceWriter.cs, src/CryptoTrading.Worker/Program.cs, src/CryptoTrading.Worker/OperationalControlRegistration.cs, src/CryptoTrading.Worker/ReconciliationReportWriter.cs, src/CryptoTrading.Shadow/ShadowOperationalGate.cs, src/CryptoTrading.Persistence/PostgresTradingStore.cs, src/CryptoTrading.Persistence/Migrations/010_operational_control_audit.up.sql, src/CryptoTrading.Persistence/Migrations/011_experiment_governance.up.sql, tools/CryptoTrading.GovernedEvidenceRunner/Program.cs, tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs, docs/governed-evidence-runner.md, docs/observability-local.md, docs/release-report-local.md, docs/persistence-migrations.md, 544a156, 59c79c2, 3c3a3f6, 04ac8c9, 0e06648, 214d462, d170a3e, 33eaf73, bf4efaa, d32f5ac, 677f15b, e54ba74, ea008ec, b5db230, 7283378]
+    evidence: [docs/readiness/PRM-20260919-foundation.md, docs/readiness/CANARY-20260919-draft.md, docs/readiness/RELEASE-20260919-foundation.md, scripts/validate-readiness.sh, src/CryptoTrading.Observability/HttpWebhookTradingAlertSink.cs, src/CryptoTrading.Domain/Risk/OperationalControl.cs, src/CryptoTrading.Shadow/PostReleaseReport.cs, src/CryptoTrading.Shadow/PostReleaseEvidenceWriter.cs, src/CryptoTrading.Worker/Program.cs, src/CryptoTrading.Worker/OperationalControlRegistration.cs, src/CryptoTrading.Worker/ReconciliationReportWriter.cs, src/CryptoTrading.Shadow/ShadowOperationalGate.cs, src/CryptoTrading.Persistence/PostgresTradingStore.cs, src/CryptoTrading.Persistence/Migrations/010_operational_control_audit.up.sql, src/CryptoTrading.Persistence/Migrations/011_experiment_governance.up.sql, tools/CryptoTrading.GovernedEvidenceRunner/Program.cs, tools/CryptoTrading.GovernedEvidenceFixture/Program.cs, tests/CryptoTrading.Persistence.IntegrationTests/PostgresTradingStoreIntegrationTests.cs, scripts/test-governed-evidence-runner.sh, docs/governed-evidence-runner.md, docs/observability-local.md, docs/release-report-local.md, docs/persistence-migrations.md, 544a156, 59c79c2, 3c3a3f6, 04ac8c9, 0e06648, 214d462, d170a3e, 33eaf73, bf4efaa, d32f5ac, 677f15b, e54ba74, ea008ec, b5db230, 7283378, 30a6b1e]
     validation: ./scripts/scan-secrets.sh
     status: no-go
     pending: [real-oos-walk-forward, shadow-soak, production-rpo-rto, alert-delivery, human-approval]

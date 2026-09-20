@@ -37,3 +37,8 @@ O contrato foi exercitado no PostgreSQL efêmero pelo teste
 `ReconstructedSnapshotProjectsIntoGovernedEvidenceBundle`: a preregistration e
 o trial foram persistidos, o snapshot foi lido por uma nova instância e o
 bundle foi escrito somente após as validações de lineage.
+
+O script `scripts/test-governed-evidence-runner.sh` exercita o processo separado
+com PostgreSQL efêmero: coleta 180 candles públicos, registra uma fixture
+preregistration/trial, executa o runner real e verifica os dois arquivos do
+bundle e `promotion_authorized=false`.
