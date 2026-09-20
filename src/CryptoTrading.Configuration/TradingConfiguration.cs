@@ -124,8 +124,8 @@ public static class TradingConfigurationExtensions
                 {
                     RestBaseUrl = Uri.TryCreate(configuration["BINANCE_REST_BASE_URL"], UriKind.Absolute, out var restUri) ? restUri : null,
                     WebSocketBaseUrl = Uri.TryCreate(configuration["BINANCE_WS_BASE_URL"], UriKind.Absolute, out var wsUri) ? wsUri : null,
-                    ApiKey = ResolveSecret(configuration, "BINANCE_API_KEY", "BINANCE_API_KEY_FILE"),
-                    ApiSecret = ResolveSecret(configuration, "BINANCE_API_SECRET", "BINANCE_API_SECRET_FILE"),
+                    ApiKey = ResolveCredential(configuration, "BINANCE_API_KEY", "BINANCE_API_KEY_FILE"),
+                    ApiSecret = ResolveCredential(configuration, "BINANCE_API_SECRET", "BINANCE_API_SECRET_FILE"),
                     WithdrawalsEnabled = bool.TryParse(configuration["BINANCE_WITHDRAWALS_ENABLED"], out var withdrawals) && withdrawals,
                     AllowedSymbols = configuration["BINANCE_ALLOWED_SYMBOLS"] ?? string.Empty
                 };
@@ -149,8 +149,12 @@ public static class TradingConfigurationExtensions
         return null;
     }
 
-    private static string ResolveSecret(IConfiguration configuration, string valueKey, string fileKey)
+    /// <summary>Resolves a credential from a direct value or a protected local file.</summary>
+    public static string ResolveCredential(IConfiguration configuration, string valueKey, string fileKey)
     {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentException.ThrowIfNullOrWhiteSpace(valueKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileKey);
         var directValue = configuration[valueKey];
         if (!string.IsNullOrWhiteSpace(directValue))
         {

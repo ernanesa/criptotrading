@@ -30,11 +30,11 @@ if (!Uri.TryCreate(restBaseUrl, UriKind.Absolute, out var restUri) ||
     return Fail("BINANCE_REST_BASE_URL must be the HTTPS Spot Testnet endpoint.");
 }
 
-var apiKey = configuration["BINANCE_API_KEY"];
-var apiSecret = configuration["BINANCE_API_SECRET"];
+var apiKey = TradingConfigurationExtensions.ResolveCredential(configuration, "BINANCE_API_KEY", "BINANCE_API_KEY_FILE");
+var apiSecret = TradingConfigurationExtensions.ResolveCredential(configuration, "BINANCE_API_SECRET", "BINANCE_API_SECRET_FILE");
 if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(apiSecret))
 {
-    return Fail("BINANCE_API_KEY and BINANCE_API_SECRET must be supplied only through the local environment.");
+    return Fail("Binance credentials must be supplied through local values or protected credential files.");
 }
 
 if (bool.TryParse(configuration["BINANCE_WITHDRAWALS_ENABLED"], out var withdrawalsEnabled) && withdrawalsEnabled)
