@@ -46,6 +46,29 @@ public sealed class BaselineDecisionCycleTests
     }
 
     [Fact]
+    public void IncompleteAccountingContextBlocksAutonomousEntry()
+    {
+        var request = NewRequest(OperationalControlSnapshot.Initial) with
+        {
+            Portfolio = new PortfolioSnapshot(
+                new Dictionary<Asset, Money>(),
+                0m,
+                0m,
+                0m,
+                RiskContextComplete: false,
+                RiskContextUnavailableReason: "HIGH_WATER_MARK_UNAVAILABLE")
+        };
+
+        var result = new BaselineDecisionCycle(
+            new TrendFollowingParameters("baseline", "1.0.0", BtcUsdt, 2, 3, 0m, 0m))
+            .Evaluate(request);
+
+        Assert.NotNull(result.Execution);
+        Assert.False(result.Execution!.IsDispatchable);
+        Assert.Contains(RiskReasonCodes.RiskContextUnavailable, result.Execution.Decision.ReasonCodes);
+    }
+
+    [Fact]
     public void NoTradeSignalProducesNoIntent()
     {
         var bars = new[]
