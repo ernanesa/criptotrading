@@ -41,4 +41,6 @@ bundle foi escrito somente após as validações de lineage.
 O script `scripts/test-governed-evidence-runner.sh` exercita o processo separado
 com PostgreSQL efêmero: coleta 180 candles públicos, registra uma fixture
 preregistration/trial, executa o runner real e verifica os dois arquivos do
-bundle e `promotion_authorized=false`.
+bundle e `promotion_authorized=false`. O harness seleciona o SDK local de .NET
+11 quando disponível, usa a versão UTC corrente do dataset e não depende de
+`PATH` previamente configurado.
