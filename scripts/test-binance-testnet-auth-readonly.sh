@@ -56,6 +56,11 @@ if (( probe_status == 0 )); then
     result="PASS"
 fi
 
+safe_diagnostic="redacted diagnostic unavailable"
+if safe_line="$(grep -E '^Read-only probe (refused|failed):' "$probe_log" | head -n 1)"; then
+    safe_diagnostic="$(printf '%s' "$safe_line" | tr '\r\n' ' ' | cut -c1-300)"
+fi
+
 {
     echo "# Binance Spot Testnet read-only probe"
     echo
@@ -66,6 +71,7 @@ fi
     echo "- Credentials: supplied locally, never written to this report"
     echo "- Exchange mutation: not available (account/open-orders/trades only)"
     echo "- Probe exit code: \`$probe_status\`"
+    echo "- Safe diagnostic: \`$safe_diagnostic\`"
     echo
     echo "The process output is intentionally not copied here. Inspect it only in"
     echo "a controlled local terminal if troubleshooting is required; never paste"
