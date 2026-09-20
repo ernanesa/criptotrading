@@ -25,3 +25,10 @@ Uma execução operacional validada em 2026-09-19 processou 179 barras públicas
 gerou 5 janelas OOS e confirmou igualdade entre o fingerprint do manifesto e o
 fingerprint lido após reinício do journal. O resultado permaneceu explicitamente
 não-promocional.
+
+Para repetir a coleta pública e o walk-forward em um único gate descartável,
+execute `scripts/test-public-oos-production.sh`. O harness usa um diretório
+temporário, recusa credenciais presentes no ambiente, coleta no máximo 180
+barras, valida o schema/fingerprint do relatório e exige
+`promotion_authorized=false`; nenhum dataset ou relatório temporário é
+versionado.
