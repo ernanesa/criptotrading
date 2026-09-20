@@ -22,6 +22,7 @@ internal static class WorkerExecutionRegistration
                 return new TestnetOutboxMessageExecutor(
                     serviceProvider.GetRequiredService<IBinanceSpotOrderClient>(),
                     runtimeOptions,
+                    serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
                     serviceProvider.GetRequiredService<ILogger<TestnetOutboxMessageExecutor>>());
             }
 
@@ -45,7 +46,12 @@ internal static class WorkerExecutionRegistration
             client.Timeout = TimeSpan.FromSeconds(10);
             client.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading/0.1");
         });
-        _ = services.AddSingleton<IBinanceSpotOrderClient>(serviceProvider =>
+        _ = services.AddBinanceSpotMarketClient();
+        _ = services.AddSingleton<IBinanceSymbolTradingRulesProvider>(serviceProvider =>
+            new BinanceSymbolTradingRulesCache(
+                serviceProvider.GetRequiredService<IBinanceSpotMarketClient>(),
+                TimeSpan.FromMinutes(5)));
+        _ = services.AddSingleton<BinanceSpotOrderClient>(serviceProvider =>
         {
             var trading = serviceProvider.GetRequiredService<IOptions<TradingOptions>>().Value;
             var orderOptions = new BinanceSpotOrderClientOptions
@@ -61,6 +67,10 @@ internal static class WorkerExecutionRegistration
                 orderOptions,
                 clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>());
         });
+        _ = services.AddSingleton<IBinanceSpotOrderClient>(serviceProvider =>
+            new BinancePreTradeValidatedOrderClient(
+                serviceProvider.GetRequiredService<BinanceSpotOrderClient>(),
+                serviceProvider.GetRequiredService<IBinanceSymbolTradingRulesProvider>()));
 
         return services;
     }

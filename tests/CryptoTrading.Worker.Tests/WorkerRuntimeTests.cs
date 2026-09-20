@@ -101,6 +101,10 @@ public sealed class WorkerRuntimeTests
                 TestnetExecutionAcknowledged = true,
                 TestnetOrderExecutionEnabled = true
             }),
+            Options.Create(new TradingOptions
+            {
+                Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" }
+            }),
             NullLogger<TestnetOutboxMessageExecutor>.Instance);
 
         await executor.ExecuteAsync(MessageFor(command));

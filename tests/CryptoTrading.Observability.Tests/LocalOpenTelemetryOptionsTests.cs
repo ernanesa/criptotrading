@@ -1,4 +1,3 @@
-using CryptoTrading.Observability;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
