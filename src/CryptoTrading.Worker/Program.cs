@@ -130,6 +130,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<OrderProjectionService>();
 }
 

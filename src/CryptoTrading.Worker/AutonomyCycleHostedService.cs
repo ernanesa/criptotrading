@@ -25,12 +25,11 @@ internal sealed class AutonomyCycleHostedService(
     IBinanceSpotAccountClient accountClient,
     IRiskPolicyStore riskPolicyStore,
     IOutboxStore outboxStore,
+    IAutonomyCheckpointStore checkpointStore,
     IAsyncOperationalControl operationalControl,
     BaselineDecisionCycle cycle,
     ILogger<AutonomyCycleHostedService> logger) : BackgroundService
 {
-    private DateTimeOffset? lastProcessedCloseUtc;
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var runtime = options.Value;
@@ -71,6 +70,10 @@ internal sealed class AutonomyCycleHostedService(
     private async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
+        var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}";
+        var lastProcessedCloseUtc = await checkpointStore
+            .GetLastProcessedCloseAsync(checkpointScope, cancellationToken)
+            .ConfigureAwait(false);
         var policyDocument = await riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("No active RiskPolicy is available for the autonomy cycle.");
         if (policyDocument.Policy.WithdrawalsEnabled)
@@ -124,6 +127,7 @@ internal sealed class AutonomyCycleHostedService(
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
         {
+            await checkpointStore.SetLastProcessedCloseAsync(checkpointScope, latest.CloseTimeUtc, cancellationToken).ConfigureAwait(false);
             AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, result.NoTradeReason ?? "UNSPECIFIED");
             return;
         }
@@ -135,6 +139,7 @@ internal sealed class AutonomyCycleHostedService(
         }
 
         _ = await outboxStore.EnqueueAsync(outbox, cancellationToken).ConfigureAwait(false);
+        await checkpointStore.SetLastProcessedCloseAsync(checkpointScope, latest.CloseTimeUtc, cancellationToken).ConfigureAwait(false);
         AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
     }
 

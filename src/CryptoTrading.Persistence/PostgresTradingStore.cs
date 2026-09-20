@@ -87,6 +87,19 @@ public interface IOutboxStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable watermark for a deterministic autonomy decision stream.</summary>
+public interface IAutonomyCheckpointStore
+{
+    Task<DateTimeOffset?> GetLastProcessedCloseAsync(
+        string scope,
+        CancellationToken cancellationToken = default);
+
+    Task SetLastProcessedCloseAsync(
+        string scope,
+        DateTimeOffset closeTimeUtc,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Durable, approval-gated registry for immutable risk-policy documents.</summary>
 public interface IRiskPolicyStore
 {
@@ -187,7 +200,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1216,6 +1229,48 @@ public sealed class PostgresTradingStore : IOutboxStore, IRiskPolicyStore, IAcco
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return record;
+    }
+
+    public async Task<DateTimeOffset?> GetLastProcessedCloseAsync(
+        string scope,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT last_processed_close FROM trading.autonomy_checkpoints WHERE scope = @scope;",
+            connection);
+        command.Parameters.Add(Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()));
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is DateTime timestamp
+            ? new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc))
+            : null;
+    }
+
+    public async Task SetLastProcessedCloseAsync(
+        string scope,
+        DateTimeOffset closeTimeUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scope);
+        if (closeTimeUtc.Offset != TimeSpan.Zero)
+        {
+            closeTimeUtc = closeTimeUtc.ToUniversalTime();
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO trading.autonomy_checkpoints (scope, last_processed_close)
+            VALUES (@scope, @close_time)
+            ON CONFLICT (scope) DO UPDATE
+            SET last_processed_close = GREATEST(trading.autonomy_checkpoints.last_processed_close, EXCLUDED.last_processed_close),
+                updated_at = transaction_timestamp();
+            """,
+            connection);
+        command.Parameters.Add(Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()));
+        command.Parameters.Add(Parameter("close_time", NpgsqlDbType.TimestampTz, closeTimeUtc.UtcDateTime));
+        _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Claims available messages atomically using row locks and a time-bounded lease.</summary>
