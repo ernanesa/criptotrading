@@ -61,6 +61,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
         options.ReconciliationIntervalMinutes = builder.Configuration.GetValue("WORKER_RECONCILIATION_INTERVAL_MINUTES", 15);
         options.ReconciliationReportDirectory = builder.Configuration["WORKER_RECONCILIATION_REPORT_DIRECTORY"] ?? "artifacts/reconciliation";
+        options.RuntimeAuditPath = builder.Configuration["WORKER_RUNTIME_AUDIT_PATH"] ?? "artifacts/runtime/runtime-transitions.jsonl";
         options.AlertFileDirectory = builder.Configuration["WORKER_ALERT_FILE_DIRECTORY"] ?? string.Empty;
         options.AlertWebhookUrl = builder.Configuration["WORKER_ALERT_WEBHOOK_URL"] ?? string.Empty;
         options.AlertWebhookAllowedHosts = builder.Configuration["WORKER_ALERT_WEBHOOK_ALLOWED_HOSTS"] ?? string.Empty;
@@ -132,6 +133,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IExecutionAccountingStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<OrderProjectionService>();
 }
 
@@ -142,6 +145,11 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 OperationalControlRegistration.Add(
     builder.Services,
     builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false));
+
+builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(serviceProvider =>
+    new RuntimeTransitionJournal(serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value.RuntimeAuditPath));
+builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeSupervisor, CryptoTrading.Domain.Runtime.RuntimeSupervisor>();
+builder.Services.AddHostedService<RuntimeSupervisorHostedService>();
 
 // Hosted services are started in registration order. Migrations must complete
 // before RiskPolicy validation, reconciliation or account-stream persistence.

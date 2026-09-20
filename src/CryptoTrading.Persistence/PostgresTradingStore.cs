@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
+using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Research;
@@ -144,6 +145,14 @@ public interface ILocalOpenOrderStore
     Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default);
 }
 
+/// <summary>Atomic execution-fact, journal, position and PnL projection boundary.</summary>
+public interface IExecutionAccountingStore
+{
+    Task<ExecutionAccountingResult> RecordExecutionAsync(
+        ExecutionAccountingCommand command,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Durable append-only store for KillSwitch/SafeMode transitions.</summary>
 public interface IOperationalControlAuditStore
 {
@@ -200,7 +209,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -996,6 +1005,130 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
         return entry;
     }
 
+    /// <summary>
+    /// Atomically records an execution fact, balanced ledger postings, average-cost
+    /// position state and known-trade evidence. Replays are immutable and idempotent.
+    /// </summary>
+    public async Task<ExecutionAccountingResult> RecordExecutionAsync(
+        ExecutionAccountingCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var entry = ExecutionAccounting.CreateLedgerEntry(command);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+
+        await using (var existingCommand = new NpgsqlCommand(
+            "SELECT ledger_entry_id, realized_pnl_quote, average_cost_quote FROM trading.execution_fills WHERE execution_id = @execution_id;",
+            connection, transaction))
+        {
+            existingCommand.Parameters.Add(Parameter("execution_id", NpgsqlDbType.Varchar, command.ExecutionId));
+            await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var existingEntryId = new LedgerEntryId(reader.GetGuid(0));
+                decimal? realized = reader.IsDBNull(1) ? null : reader.GetDecimal(1);
+                decimal? existingAverageCost = reader.IsDBNull(2) ? null : reader.GetDecimal(2);
+                await reader.DisposeAsync().ConfigureAwait(false);
+                if (existingEntryId != entry.Id)
+                {
+                    throw new InvalidOperationException("Execution identity is already associated with a different ledger entry.");
+                }
+
+                var existingEntry = await ReadExistingJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Execution record exists without its journal entry.");
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true);
+            }
+        }
+
+        decimal currentQuantity = 0m;
+        decimal currentCost = 0m;
+        await using (var positionCommand = new NpgsqlCommand(
+            "SELECT base_asset, quote_asset, quantity, cost_quote FROM trading.position_cost_basis WHERE symbol = @symbol FOR UPDATE;",
+            connection, transaction))
+        {
+            positionCommand.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, command.Symbol.Value));
+            await using var reader = await positionCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (!string.Equals(reader.GetString(0), command.BaseAsset.Value, StringComparison.Ordinal)
+                    || !string.Equals(reader.GetString(1), command.QuoteAsset.Value, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException($"Position basis for {command.Symbol} has inconsistent assets.");
+                }
+
+                currentQuantity = reader.GetDecimal(2);
+                currentCost = reader.GetDecimal(3);
+            }
+        }
+
+        var update = ExecutionAccounting.ApplyAverageCost(command, currentQuantity, currentCost);
+        decimal? averageCost = update.Quantity == 0m ? null : update.CostQuote / update.Quantity;
+        var inserted = await InsertJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false);
+        if (!inserted)
+        {
+            var existing = await ReadExistingJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Journal uniqueness conflict did not return an entry.");
+            throw new InvalidOperationException($"Ledger entry {entry.Id} already exists before execution fact {command.ExecutionId}.");
+        }
+
+        await InsertLedgerPostingsAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.execution_fills
+                (execution_id, trade_id, order_id, symbol, base_asset, quote_asset, side,
+                 quantity, price, commission, commission_asset, occurred_at, ledger_entry_id,
+                 realized_pnl_quote, average_cost_quote)
+            VALUES
+                (@execution_id, @trade_id, @order_id, @symbol, @base_asset, @quote_asset, @side,
+                 @quantity, @price, @commission, @commission_asset, @occurred_at, @ledger_entry_id,
+                 @realized_pnl_quote, @average_cost_quote);
+            """,
+            [
+                Parameter("execution_id", NpgsqlDbType.Varchar, command.ExecutionId),
+                Parameter("trade_id", NpgsqlDbType.Bigint, command.TradeId),
+                Parameter("order_id", NpgsqlDbType.Bigint, command.OrderId),
+                Parameter("symbol", NpgsqlDbType.Varchar, command.Symbol.Value),
+                Parameter("base_asset", NpgsqlDbType.Varchar, command.BaseAsset.Value),
+                Parameter("quote_asset", NpgsqlDbType.Varchar, command.QuoteAsset.Value),
+                Parameter("side", NpgsqlDbType.Varchar, command.Side == OrderSide.Buy ? "BUY" : "SELL"),
+                Parameter("quantity", NpgsqlDbType.Numeric, command.Quantity.Value),
+                Parameter("price", NpgsqlDbType.Numeric, command.Price.Value),
+                Parameter("commission", NpgsqlDbType.Numeric, command.Commission.Amount),
+                Parameter("commission_asset", NpgsqlDbType.Varchar, command.Commission.Asset.Value),
+                Parameter("occurred_at", NpgsqlDbType.TimestampTz, command.OccurredAtUtc.UtcDateTime),
+                Parameter("ledger_entry_id", NpgsqlDbType.Uuid, entry.Id.Value),
+                Parameter("realized_pnl_quote", NpgsqlDbType.Numeric, update.RealizedPnlQuote),
+                Parameter("average_cost_quote", NpgsqlDbType.Numeric, averageCost),
+            ], cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.position_cost_basis (symbol, base_asset, quote_asset, quantity, cost_quote)
+            VALUES (@symbol, @base_asset, @quote_asset, @quantity, @cost_quote)
+            ON CONFLICT (symbol) DO UPDATE SET
+                quantity = EXCLUDED.quantity,
+                cost_quote = EXCLUDED.cost_quote,
+                updated_at = transaction_timestamp();
+            """,
+            [
+                Parameter("symbol", NpgsqlDbType.Varchar, command.Symbol.Value),
+                Parameter("base_asset", NpgsqlDbType.Varchar, command.BaseAsset.Value),
+                Parameter("quote_asset", NpgsqlDbType.Varchar, command.QuoteAsset.Value),
+                Parameter("quantity", NpgsqlDbType.Numeric, update.Quantity),
+                Parameter("cost_quote", NpgsqlDbType.Numeric, update.CostQuote),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (command.TradeId is { } tradeId)
+        {
+            await InsertKnownTradeAsync(connection, transaction, tradeId, command.Symbol.Value, cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new(command.ExecutionId, entry, update.RealizedPnlQuote, averageCost, false);
+    }
+
     public async Task<Money> GetBalanceAsync(
         AccountId account,
         Asset asset,
@@ -1437,6 +1570,44 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
                 Parameter("idempotency_key", NpgsqlDbType.Varchar, entry.IdempotencyKey?.Value),
             ], cancellationToken).ConfigureAwait(false);
         return result is not null and not DBNull;
+    }
+
+    private static async Task InsertLedgerPostingsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        LedgerEntry entry,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (posting, index) in entry.Postings.Select((posting, index) => (posting, index)))
+        {
+            await ExecuteAsync(connection, transaction,
+                """
+                INSERT INTO trading.ledger_postings (entry_id, posting_index, account_id, asset, amount)
+                VALUES (@entry_id, @posting_index, @account_id, @asset, @amount);
+                """,
+                [
+                    Parameter("entry_id", NpgsqlDbType.Uuid, entry.Id.Value),
+                    Parameter("posting_index", NpgsqlDbType.Smallint, checked((short)index)),
+                    Parameter("account_id", NpgsqlDbType.Varchar, posting.Account.Value),
+                    Parameter("asset", NpgsqlDbType.Varchar, posting.Amount.Asset.Value),
+                    Parameter("amount", NpgsqlDbType.Numeric, posting.Amount.Amount),
+                ], cancellationToken).ConfigureAwait(false);
+
+            await ExecuteAsync(connection, transaction,
+                """
+                INSERT INTO trading.ledger_balances (account_id, asset, balance, projection_version)
+                VALUES (@account_id, @asset, @balance, 1)
+                ON CONFLICT (account_id, asset) DO UPDATE SET
+                    balance = trading.ledger_balances.balance + EXCLUDED.balance,
+                    projection_version = trading.ledger_balances.projection_version + 1,
+                    updated_at = transaction_timestamp();
+                """,
+                [
+                    Parameter("account_id", NpgsqlDbType.Varchar, posting.Account.Value),
+                    Parameter("asset", NpgsqlDbType.Varchar, posting.Amount.Asset.Value),
+                    Parameter("balance", NpgsqlDbType.Numeric, posting.Amount.Amount),
+                ], cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static async Task<LedgerEntry?> ReadExistingJournalEntryAsync(
