@@ -1,6 +1,7 @@
 using CryptoTrading.Domain.Accounting;
 using System.Diagnostics;
 using CryptoTrading.Domain.Risk;
+using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Observability;
 using Xunit;
@@ -174,6 +175,79 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
+    public async Task FreshExchangeSnapshotResolvesUnknownOrderIdempotently()
+    {
+        var control = CreateControl();
+        var sink = new InMemoryReconciliationEventSink();
+        var resolver = new RecordingOpenOrderResolutionSink();
+        var service = CreateService(
+            new ReconciliationSnapshot(
+                Now,
+                [new ReconciliationBalance("USDT", 100m, 0m)],
+                [],
+                [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "NEW")]),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            sink,
+            [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "UNKNOWN")],
+            resolver);
+
+        var result = await service.ReconcileAsync();
+
+        Assert.True(result.IsHealthy);
+        var resolved = Assert.Single(result.Events.OfType<OpenOrderReconciled>());
+        Assert.Equal("UNKNOWN", resolved.PreviousLocalStatus);
+        Assert.Equal("NEW", resolved.AuthoritativeStatus);
+        Assert.Single(resolver.Resolutions);
+        Assert.Equal("NEW", resolver.Resolutions[0].Status);
+    }
+
+    [Fact]
+    public async Task MissingExchangeOrderDoesNotInferCancellationFromUnknown()
+    {
+        var control = CreateControl();
+        var sink = new InMemoryReconciliationEventSink();
+        var service = CreateService(
+            new ReconciliationSnapshot(Now, [new ReconciliationBalance("USDT", 100m, 0m)], []),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            sink,
+            [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "UNKNOWN")],
+            new RecordingOpenOrderResolutionSink());
+
+        var result = await service.ReconcileAsync();
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
+            && mismatch.ReasonCode == "UNKNOWN_ORDER_NOT_FOUND_ON_EXCHANGE");
+        Assert.True(control.Snapshot.BlocksNewEntries);
+    }
+
+    [Fact]
+    public async Task PendingCancelRemainsBlockedWhileExchangeReportsPendingCancel()
+    {
+        var control = CreateControl();
+        var sink = new InMemoryReconciliationEventSink();
+        var service = CreateService(
+            new ReconciliationSnapshot(
+                Now,
+                [new ReconciliationBalance("USDT", 100m, 0m)],
+                [],
+                [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "PENDING_CANCEL")]),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            sink,
+            [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "PENDING_CANCEL")],
+            new RecordingOpenOrderResolutionSink());
+
+        var result = await service.ReconcileAsync();
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
+            && mismatch.ReasonCode == "ORDER_CANCEL_PENDING");
+    }
+
+    [Fact]
     public async Task LocalOnlyAssetIsReconciledAgainstZeroExchangeBalance()
     {
         var control = CreateControl();
@@ -264,7 +338,8 @@ public sealed class AccountReconciliationServiceTests
         IReadOnlyDictionary<string, decimal> balances,
         IAsyncOperationalControl control,
         IReconciliationEventSink sink,
-        IReadOnlyList<ReconciliationOpenOrder>? localOpenOrders = null) => new(
+        IReadOnlyList<ReconciliationOpenOrder>? localOpenOrders = null,
+        ILocalOpenOrderResolutionSink? resolver = null) => new(
         new FakeSnapshotProvider(snapshot),
         new FakeBalanceReader(balances),
         new FakeKnownTradeReader(new HashSet<long>()),
@@ -272,7 +347,8 @@ public sealed class AccountReconciliationServiceTests
         control,
         new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
         new FixedTimeProvider(Now),
-        new FakeLocalOpenOrderReader(localOpenOrders ?? []));
+        new FakeLocalOpenOrderReader(localOpenOrders ?? []),
+        resolver);
 
     private static InMemoryOperationalControl CreateControl() => new(new AllowResetAuthorizer());
 
@@ -299,6 +375,22 @@ public sealed class AccountReconciliationServiceTests
     private sealed class FakeLocalOpenOrderReader(IReadOnlyList<ReconciliationOpenOrder> orders) : ILocalOpenOrderReader
     {
         public Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default) => Task.FromResult(orders);
+    }
+
+    private sealed class RecordingOpenOrderResolutionSink : ILocalOpenOrderResolutionSink
+    {
+        public List<ReconciliationOpenOrder> Resolutions { get; } = [];
+
+        public Task ResolveAsync(
+            ReconciliationOpenOrder authoritativeOrder,
+            string previousLocalStatus,
+            CorrelationId correlationId,
+            DateTimeOffset observedAtUtc,
+            CancellationToken cancellationToken = default)
+        {
+            Resolutions.Add(authoritativeOrder);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class AllowResetAuthorizer : IOperationalControlResetAuthorizer

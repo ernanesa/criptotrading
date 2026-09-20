@@ -83,6 +83,34 @@ internal sealed class PostgresLocalOpenOrderReader(PostgresTradingStore store) :
     }
 }
 
+/// <summary>Persists only fresh exchange-authoritative resolutions for ambiguous orders.</summary>
+internal sealed class PostgresLocalOpenOrderResolutionSink(PostgresTradingStore store) : ILocalOpenOrderResolutionSink
+{
+    public Task ResolveAsync(
+        ReconciliationOpenOrder authoritativeOrder,
+        string previousLocalStatus,
+        CorrelationId correlationId,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(authoritativeOrder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(previousLocalStatus);
+        if (observedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Reconciliation observation must be UTC.", nameof(observedAtUtc));
+        }
+
+        return store.UpsertOpenOrderAsync(
+            new LocalOpenOrderRecord(
+                authoritativeOrder.Symbol,
+                authoritativeOrder.OrderId,
+                authoritativeOrder.ClientOrderId,
+                authoritativeOrder.Status,
+                observedAtUtc),
+            cancellationToken);
+    }
+}
+
 internal sealed class DenyOperationalControlResetAuthorizer : IOperationalControlResetAuthorizer
 {
     public bool IsAuthorized(
