@@ -27,7 +27,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Backup/restore + RPO/RTO local | `./scripts/test-postgres-backup-restore.sh` | PASS — dump restaurado em banco efêmero; tempos de backup/restore/validação e RPO do marcador registrados em `artifacts/recovery/postgres-rpo-rto-*.md`; recursos removidos |
 | Full local recovery drill | `./scripts/test-full-recovery-drill.sh` + CI | PASS — ledger, manifesto full-state, PostgreSQL restart/idempotência e backup/restore passaram juntos; evidência redigida em `artifacts/recovery/full-recovery-20260920T005211Z-960030.md`; execução integrada ao workflow; limites de produção permanecem explícitos |
 | Manifesto full-state local | `dotnet test` Persistence filtrado | PASS — 7 testes validam ledger, open orders, Account Stream, outbox metadata, hash canônico e comparação pré/pós-restore; sem escrita/rede |
-| Read-only offline preflight | `./scripts/test-binance-readonly-preflight.sh` | PASS — probe recusou sem credenciais, em diretório sem `.env`, com `NO_TRADE=true`/`PAPER`; nenhuma chamada autenticada |
+| Read-only offline preflight | `./scripts/test-binance-readonly-preflight.sh` + CI | PASS — probe recusou sem credenciais, em diretório sem `.env`, com `NO_TRADE=true`/`PAPER`; nenhuma chamada autenticada; guard integrado ao workflow |
 | Secret scan | `./scripts/scan-secrets.sh` | PASS — nenhum padrão de credencial em arquivos versionados |
 | Compose | `POSTGRES_PASSWORD='validation-only-not-a-credential' docker compose config --quiet` | PASS |
 | Integridade documental | `git diff --check` | PASS |
