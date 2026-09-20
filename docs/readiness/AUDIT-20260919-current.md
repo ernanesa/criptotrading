@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `b5db230`
+**Commit de código auditado:** `7283378`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -45,6 +45,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Public OOS runner | `dotnet run --project tools/CryptoTrading.PublicOosRunner -c Release --no-build -- ...` | PASS — 179 barras, 5 janelas OOS, fingerprint do manifesto igual ao replay reaberto, `promotion_authorized=false`; resultado não é decisão de promoção |
 | Governed evidence projection | `dotnet test tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj --configuration Release --no-restore` | PASS — preregistration/dataset/estratégia lineage e trial budget validados antes do bundle; 51 testes Backtesting |
 | Governed evidence runner | `dotnet build tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj --configuration Release --no-restore` + guard tests | PASS — snapshot PostgreSQL read-only, sem migrations/ordens; credencial e connection string ausentes falham antes da rede |
+| Governed evidence PostgreSQL integration | `./scripts/test-postgres-integration.sh` | PASS — 10/10, incluindo persistência/restart e bundle governado com `promotion_authorized=false`; container efêmero encerrado ao final |
 | Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 56 testes |
 
 | OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
