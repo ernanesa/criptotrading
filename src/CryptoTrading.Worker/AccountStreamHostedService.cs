@@ -22,6 +22,7 @@ internal sealed class AccountStreamHostedService(
     IOptions<WorkerRuntimeOptions> options,
     IBinanceUserDataStreamClient streamClient,
     IAccountStreamEventStore eventStore,
+    ILocalOpenOrderStore openOrderStore,
     IAsyncOperationalControl operationalControl,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reconciliationReportWriter,
@@ -47,6 +48,10 @@ internal sealed class AccountStreamHostedService(
             {
                 var record = ToRecord(userEvent);
                 _ = await eventStore.AppendAccountStreamEventAsync(record, stoppingToken).ConfigureAwait(false);
+                if (userEvent is BinanceExecutionReportEvent execution)
+                {
+                    await AccountStreamOrderProjection.ApplyAsync(openOrderStore, execution, stoppingToken).ConfigureAwait(false);
+                }
 
                 if (userEvent is BinanceUserDataStreamControlEvent control &&
                     control.EventType is "eventStreamTerminated" or "serverShutdown")
