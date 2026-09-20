@@ -47,6 +47,9 @@ jobs:
       - name: Start Worker with ephemeral PostgreSQL
         run: ./scripts/test-worker-persistence-startup.sh
 
+      - name: Run composite local recovery drill
+        run: ./scripts/test-full-recovery-drill.sh
+
   secret-scan:
     name: Tracked-file secret scan
     runs-on: ubuntu-latest
