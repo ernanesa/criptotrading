@@ -20,3 +20,5 @@ Endpoints locais:
 O worker/API deve receber `OTEL_EXPORTER_OTLP_ENDPOINT` apontando para o Collector somente quando o Collector estiver disponível. Os hosts permitidos continuam sujeitos à validação existente da aplicação.
 
 As imagens são parametrizadas por variáveis de ambiente para permitir atualização controlada, mas possuem versões padrão fixadas. Antes de atualizar uma imagem, executar `docker compose ... config`, os testes locais e uma inspeção de compatibilidade.
+
+Para validar uma segunda instância sem conflitar com outros serviços locais, altere as portas publicadas, por exemplo `GRAFANA_PORT=13000 PROMETHEUS_PORT=19090 docker compose ... up -d`.
