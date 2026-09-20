@@ -12,7 +12,7 @@ internal static class BinanceAuthenticatedResponseValidator
 {
     private static readonly HashSet<string> ReadOnlyPermissions = ["SPOT"];
 
-    public static BinanceAccountSnapshot Validate(BinanceAccountSnapshot? account)
+    public static BinanceAccountSnapshot Validate(BinanceAccountSnapshot? account, bool allowWithdrawCapability = false)
     {
         if (account is null)
         {
@@ -25,7 +25,7 @@ internal static class BinanceAuthenticatedResponseValidator
         RequireNonNegative(account.BuyerCommission, "buyerCommission");
         RequireNonNegative(account.SellerCommission, "sellerCommission");
         RequireNonNegative(account.UpdateTime, "updateTime");
-        if (account.CanWithdraw)
+        if (account.CanWithdraw && !allowWithdrawCapability)
         {
             throw Invalid("account canWithdraw must be false for a read-only integration");
         }
@@ -181,7 +181,21 @@ internal static class BinanceAuthenticatedResponseValidator
         return normalized;
     }
 
-    private static string NormalizeAsset(string? value, string fieldName) => NormalizeSymbol(value, fieldName);
+    private static string NormalizeAsset(string? value, string fieldName)
+    {
+        // An account asset is exchange-supplied metadata, not a trading symbol.
+        // The Spot account schema represents it as a string and Testnet may
+        // include non-symbol asset aliases. Preserve its spelling while
+        // bounding it and rejecting control characters before it crosses into
+        // application state or logs.
+        var normalized = RequireText(value, fieldName);
+        if (normalized.Length > 128 || normalized.Any(char.IsControl))
+        {
+            throw Invalid($"{fieldName} must be at most 128 characters and cannot contain control characters");
+        }
+
+        return normalized;
+    }
 
     private static decimal ParseNonNegativeDecimal(string? value, string fieldName)
     {

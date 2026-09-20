@@ -52,7 +52,10 @@ var options = new BinanceAuthenticatedClientOptions
     Environment = BinanceEnvironment.Testnet,
     RestBaseAddress = new Uri(restUri.AbsoluteUri.EndsWith('/', StringComparison.Ordinal) ? restUri.AbsoluteUri : restUri.AbsoluteUri + "/"),
     ApiKey = apiKey,
-    ApiSecret = apiSecret
+    ApiSecret = apiSecret,
+    // Spot Testnet has virtual funds and no /sapi withdrawal routes. Record its
+    // account capability while keeping this client GET-only and read-only.
+    AllowTestnetWithdrawCapability = true
 };
 
 var operation = "account";
@@ -72,7 +75,7 @@ try
     var trades = await client.GetMyTradesAsync(symbol, new BinanceTradeQuery(Limit: 100)).ConfigureAwait(false);
 
     Console.WriteLine("Binance Spot Testnet authenticated read-only probe: OK");
-    Console.WriteLine($"Balances={account.Balances.Count}; OpenOrders={openOrders.Count}; Trades={trades.Count}; Symbol={symbol}");
+    Console.WriteLine($"Balances={account.Balances.Count}; OpenOrders={openOrders.Count}; Trades={trades.Count}; Symbol={symbol}; CanWithdrawCapability={account.CanWithdraw}");
     Console.WriteLine("No order, cancel, transfer, withdrawal, margin, or futures endpoint was called.");
     return 0;
 }

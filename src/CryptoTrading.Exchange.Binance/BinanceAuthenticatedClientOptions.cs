@@ -20,6 +20,13 @@ public sealed class BinanceAuthenticatedClientOptions
 
     public TimeSpan ClockDriftTolerance { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Allows a Spot Testnet account payload to report <c>canWithdraw=true</c>.
+    /// This is an observation-only compatibility switch for Testnet diagnostics;
+    /// it neither enables nor adds a withdrawal endpoint.
+    /// </summary>
+    public bool AllowTestnetWithdrawCapability { get; set; }
+
     internal Uri GetRestBaseAddress()
     {
         var defaultAddress = Environment switch
