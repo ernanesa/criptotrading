@@ -100,11 +100,24 @@ public sealed class TestnetOutboxMessageExecutor(
                 await ProjectExchangeResultAsync(order, result, projection, message.MessageId, cancellationToken).ConfigureAwait(false);
                 TestnetExecutorLog.Submitted(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, recovered: true);
             }
-            catch (BinanceApiException queryFailure) when ((int?)queryFailure.StatusCode is 400 or 404)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                throw new BinanceOrderSubmissionAmbiguousException(
-                    command.ClientOrderId.Value,
-                    new InvalidOperationException("Ambiguous Testnet submit was not found by clientOrderId; durable retry remains subject to the outbox policy.", ambiguous));
+                throw;
+            }
+            catch (Exception queryFailure)
+            {
+                // The query itself may fail or return no order. Either way the
+                // submit outcome is not provable. Persist UNKNOWN before
+                // quarantining the outbox message; retrying SubmitAsync would
+                // be an unsafe duplicate even when Binance eventually accepts
+                // the original request.
+                await projection.TransitionAndProjectAsync(
+                    order,
+                    OrderStatus.Unknown,
+                    new IdempotencyKey($"unknown:{message.MessageId:N}"),
+                    DateTimeOffset.UtcNow,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                throw new OrderOutcomeUnknownException(command.ClientOrderId.Value, new AggregateException(ambiguous, queryFailure));
             }
         }
     }

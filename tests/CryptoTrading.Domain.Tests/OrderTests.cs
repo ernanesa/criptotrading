@@ -105,6 +105,34 @@ public sealed class OrderTests
     }
 
     [Fact]
+    public void AmbiguousSubmitEntersUnknownAndCanBeResolvedWithoutResubmission()
+    {
+        var order = NewOrder();
+        MoveTo(order, OrderStatus.Submitted);
+
+        order.TransitionTo(OrderStatus.Unknown, Key("unknown"), Now.AddSeconds(4));
+        var resolved = order.TransitionTo(OrderStatus.Acknowledged, Key("reconcile"), Now.AddSeconds(5), "exchange-unknown");
+
+        Assert.Equal(OrderStatus.Unknown, resolved.From);
+        Assert.Equal(OrderStatus.Acknowledged, order.Status);
+        Assert.Equal("exchange-unknown", order.ExchangeOrderId);
+    }
+
+    [Fact]
+    public void CancelPendingDoesNotPretendThatTheVenueCancelledTheOrder()
+    {
+        var order = NewOrder();
+        MoveTo(order, OrderStatus.Acknowledged);
+
+        order.TransitionTo(OrderStatus.CancelPending, Key("cancel-request"), Now.AddSeconds(4));
+
+        Assert.Equal(OrderStatus.CancelPending, order.Status);
+        Assert.Equal(1m, order.RemainingQuantity.Value);
+        Assert.Throws<InvalidOrderTransitionException>(() =>
+            order.TransitionTo(OrderStatus.Submitted, Key("blind-retry"), Now.AddSeconds(5)));
+    }
+
+    [Fact]
     public void FillIsAppliedExactlyOnceAndUpdatesRemainingQuantity()
     {
         var order = NewOrder();
@@ -208,6 +236,8 @@ public sealed class OrderTests
             OrderStatus.Cancelled => [OrderStatus.Validated, OrderStatus.Submitted, OrderStatus.Acknowledged, OrderStatus.Cancelled],
             OrderStatus.Rejected => [OrderStatus.Rejected],
             OrderStatus.Expired => [OrderStatus.Expired],
+            OrderStatus.CancelPending => [OrderStatus.Validated, OrderStatus.Submitted, OrderStatus.Acknowledged, OrderStatus.CancelPending],
+            OrderStatus.Unknown => [OrderStatus.Validated, OrderStatus.Submitted, OrderStatus.Unknown],
             _ => throw new ArgumentOutOfRangeException(nameof(target)),
         };
 

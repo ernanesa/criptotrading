@@ -20,6 +20,33 @@ public interface IOutboxMessageExecutor
     Task ExecuteAsync(LeasedOutboxMessage message, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Indicates that an exchange command may have reached the venue, but the
+/// authoritative outcome could not be proven. This is terminal for dispatch:
+/// the message must be quarantined for reconciliation, never submitted again.
+/// </summary>
+public sealed class OrderOutcomeUnknownException : Exception
+{
+    public OrderOutcomeUnknownException()
+        : this("unknown", null)
+    {
+    }
+
+    public OrderOutcomeUnknownException(string message)
+        : base(message)
+    {
+        ClientOrderId = "unknown";
+    }
+
+    public OrderOutcomeUnknownException(string clientOrderId, Exception? cause = null)
+        : base($"Order outcome for clientOrderId '{clientOrderId}' is unknown and requires reconciliation.", cause)
+    {
+        ClientOrderId = clientOrderId;
+    }
+
+    public string ClientOrderId { get; }
+}
+
 /// <summary>Safe PAPER executor. NO_TRADE acknowledges only after intentional suppression.</summary>
 public sealed class PaperOutboxMessageExecutor(
     IPaperExchange exchange,
@@ -261,6 +288,20 @@ public sealed class OutboxDispatcher(
         {
             throw;
         }
+        catch (OrderOutcomeUnknownException exception)
+        {
+            // An ambiguous submit is not a transient failure. Dead-lettering
+            // prevents the dispatcher from issuing a blind second submit while
+            // leaving the durable open-order projection for reconciliation.
+            _ = await store.DeadLetterOutboxAsync(
+                message.MessageId,
+                leaseOwner,
+                $"ORDER_OUTCOME_UNKNOWN:{exception.ClientOrderId}",
+                DateTimeOffset.UtcNow,
+                cancellationToken).ConfigureAwait(false);
+            TradingTelemetry.RecordOutboxDispatch(succeeded: false, deadLettered: true);
+            DispatcherLog.UnknownOutcome(logger, message.MessageId, message.MessageType, exception.ClientOrderId);
+        }
         catch (Exception exception)
         {
             activity?.SetStatus(ActivityStatusCode.Error);
@@ -316,4 +357,7 @@ internal static partial class DispatcherLog
 
     [LoggerMessage(LogLevel.Error, "Outbox message moved to dead-letter after retry limit. MessageId={MessageId} MessageType={MessageType} ErrorType={ErrorType}")]
     public static partial void DeadLettered(ILogger logger, Guid messageId, string messageType, string errorType);
+
+    [LoggerMessage(LogLevel.Error, "Outbox message quarantined with unknown order outcome. MessageId={MessageId} MessageType={MessageType} ClientOrderId={ClientOrderId}")]
+    public static partial void UnknownOutcome(ILogger logger, Guid messageId, string messageType, string clientOrderId);
 }

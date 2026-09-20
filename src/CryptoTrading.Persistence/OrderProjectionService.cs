@@ -80,6 +80,8 @@ public sealed class OrderProjectionService
     {
         OrderStatus.Created or OrderStatus.Validated or OrderStatus.Submitted or OrderStatus.Acknowledged => "NEW",
         OrderStatus.PartiallyFilled => "PARTIALLY_FILLED",
+        OrderStatus.Unknown => "UNKNOWN",
+        OrderStatus.CancelPending => "PENDING_CANCEL",
         _ => throw new InvalidOperationException($"Terminal order status '{status}' must be removed, not projected."),
     };
 

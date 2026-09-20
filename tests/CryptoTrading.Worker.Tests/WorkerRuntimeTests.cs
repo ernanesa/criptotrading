@@ -130,6 +130,34 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public async Task TestnetExecutorQuarantinesAmbiguousSubmitWhenOutcomeCannotBeQueried()
+    {
+        var command = NewCommand();
+        var exchange = new UnknownOutcomeTestnetClient();
+        var store = new RecordingOpenOrderStore();
+        var projection = new OrderProjectionService(store);
+        var executor = new TestnetOutboxMessageExecutor(
+            exchange,
+            Options.Create(new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true,
+                ApplyMigrations = true, PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = true, TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
+            }),
+            Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
+            projection,
+            NullLogger<TestnetOutboxMessageExecutor>.Instance);
+
+        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(MessageFor(command)));
+
+        Assert.Equal(1, exchange.SubmitCalls);
+        Assert.Equal(1, exchange.QueryCalls);
+        var projected = Assert.Single(store.Records);
+        Assert.Equal("UNKNOWN", projected.Status);
+    }
+
+    [Fact]
     public async Task ExecutionRegistrationKeepsPaperDefaultAndSelectsTestnetOnlyWhenConfigured()
     {
         var paperServices = new ServiceCollection();
@@ -626,6 +654,27 @@ public sealed class WorkerRuntimeTests
                 command.Quantity.Value,
                 0m,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        }
+
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class UnknownOutcomeTestnetClient : IBinanceSpotOrderClient
+    {
+        public int SubmitCalls { get; private set; }
+        public int QueryCalls { get; private set; }
+
+        public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default)
+        {
+            SubmitCalls++;
+            throw new BinanceOrderSubmissionAmbiguousException(request.ClientOrderId, new IOException("simulated response loss"));
+        }
+
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            QueryCalls++;
+            throw new BinanceApiException(System.Net.HttpStatusCode.ServiceUnavailable, "v3/order");
         }
 
         public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
