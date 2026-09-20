@@ -25,6 +25,14 @@ if grep -Fq "$key_value" "$output_file" || grep -Fq "$secret_value" "$output_fil
     exit 1
 fi
 
+rm -f -- "$secret_root/binance_api_key"
+ln -s "$secret_root/binance_api_secret" "$secret_root/binance_api_key"
+if printf 'generated-key\ngenerated-secret\n' |
+    XDG_CONFIG_HOME="$tmp_dir" "$helper" >/dev/null 2>&1; then
+    echo 'Secret initializer accepted a symlinked destination file.' >&2
+    exit 1
+fi
+
 symlink_root="$tmp_dir/symlink-case"
 mkdir -p "$symlink_root/target" "$symlink_root/cryptotrading"
 ln -s "$symlink_root/target" "$symlink_root/cryptotrading/testnet"
