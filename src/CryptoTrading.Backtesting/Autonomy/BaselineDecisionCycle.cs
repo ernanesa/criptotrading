@@ -21,7 +21,8 @@ public sealed record BaselineDecisionCycleRequest(
     ExecutionMarketSnapshot? ExecutionMarket = null,
     TimeSpan? ExecutionMarketMaxAge = null,
     TimeSpan? ExecutionTimeToLive = null,
-    decimal? AvailableAccountLiquidityNotional = null)
+    decimal? AvailableAccountLiquidityNotional = null,
+    FeeReservePolicy? FeeReservePolicy = null)
 {
     public void Validate()
     {
@@ -151,7 +152,8 @@ public sealed class BaselineDecisionCycle
                     request.EvaluatedAtUtc,
                     request.ExecutionMarketMaxAge ?? request.RiskPolicy.MaxMarketDataAge,
                     request.ExecutionTimeToLive ?? TimeSpan.FromMinutes(1),
-                    availableAccountLiquidityNotional: request.AvailableAccountLiquidityNotional));
+                    availableAccountLiquidityNotional: request.AvailableAccountLiquidityNotional,
+                    feeReservePolicy: request.FeeReservePolicy));
             if (plan.Plan is null)
             {
                 return new(

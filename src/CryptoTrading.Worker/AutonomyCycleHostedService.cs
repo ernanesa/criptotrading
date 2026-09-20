@@ -5,6 +5,7 @@ using System.Globalization;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
+using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
@@ -181,7 +182,8 @@ internal sealed class AutonomyCycleHostedService(
             executionMarket,
             policyDocument.Policy.MaxMarketDataAge,
             TimeSpan.FromMinutes(1),
-            availableQuoteLiquidity);
+            availableQuoteLiquidity,
+            new FeeReservePolicy(runtime.AutonomyFeeReserveBps));
         var result = cycle.Evaluate(request);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)

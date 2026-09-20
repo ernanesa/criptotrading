@@ -2,6 +2,7 @@
 #pragma warning disable CA1056 // Environment-bound configuration is kept as text until fail-closed validation at startup.
 
 using Microsoft.Extensions.Options;
+using CryptoTrading.Domain.Execution;
 using CryptoTrading.Observability;
 
 namespace CryptoTrading.Worker;
@@ -59,6 +60,9 @@ public sealed class WorkerRuntimeOptions
     public int AutonomyKlineLimit { get; set; } = 100;
 
     public decimal AutonomyEntryTargetNotional { get; set; } = 100m;
+
+    /// <summary>Quote fee reserve in basis points applied to BUY sizing.</summary>
+    public decimal AutonomyFeeReserveBps { get; set; } = FeeReservePolicy.DefaultReserveBps;
 
     public string ReconciliationAccount { get; set; } = "exchange-wallet";
 
@@ -245,6 +249,12 @@ public sealed class WorkerRuntimeOptions
             {
                 throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                     ["WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL must be greater than zero."]);
+            }
+
+            if (AutonomyFeeReserveBps is < 0m or > FeeReservePolicy.MaximumReserveBps)
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    [$"WORKER_AUTONOMY_FEE_RESERVE_BPS must be between 0 and {FeeReservePolicy.MaximumReserveBps}."]);
             }
         }
 
