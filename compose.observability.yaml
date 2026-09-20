@@ -1,0 +1,59 @@
+name: cryptotrading-observability
+
+services:
+  otel-collector:
+    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.123.0}
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./ops/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+      - "127.0.0.1:13133:13133"
+    security_opt:
+      - no-new-privileges:true
+
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.2.1}
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - cryptotrading-prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.5.2}
+    restart: unless-stopped
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - cryptotrading-grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    security_opt:
+      - no-new-privileges:true
+
+  tempo:
+    image: ${TEMPO_IMAGE:-grafana/tempo:2.7.2}
+    restart: unless-stopped
+    user: "0:0"
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./ops/observability/tempo.yaml:/etc/tempo.yaml:ro
+      - cryptotrading-tempo-data:/tmp/tempo
+    ports:
+      - "127.0.0.1:3200:3200"
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  cryptotrading-prometheus-data:
+  cryptotrading-grafana-data:
+  cryptotrading-tempo-data:
