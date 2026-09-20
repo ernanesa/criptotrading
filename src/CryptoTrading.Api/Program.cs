@@ -7,6 +7,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Text.Json;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
@@ -17,6 +18,16 @@ builder.Logging.AddJsonConsole(options =>
     options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
 });
 builder.Configuration.AddLocalDotEnv();
+LocalOpenTelemetryOptions.AddLocalOpenTelemetry(
+    builder.Services,
+    new LocalOpenTelemetryOptions
+    {
+        Endpoint = builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? string.Empty,
+        AllowedHosts = builder.Configuration["OTEL_EXPORTER_OTLP_ALLOWED_HOSTS"] ?? string.Empty,
+        Protocol = builder.Configuration["OTEL_EXPORTER_OTLP_PROTOCOL"] ?? "grpc"
+    },
+    serviceName: $"{TradingTelemetry.ServiceName}.Api");
+builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddAspNetCoreInstrumentation());
 builder.Services.AddTradingConfiguration(builder.Configuration);
 builder.Services.AddSingleton<IOperationalControl>(_ =>
     new InMemoryOperationalControl(new DenyApiOperationalControlResetAuthorizer()));

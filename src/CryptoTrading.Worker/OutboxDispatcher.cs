@@ -86,7 +86,7 @@ public sealed class PaperOutboxMessageExecutor(
         return Task.CompletedTask;
     }
 
-    private static SubmitOrderCommand DeserializeCommand(string payload)
+    internal static SubmitOrderCommand DeserializeCommand(string payload)
     {
         using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
