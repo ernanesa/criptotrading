@@ -16,6 +16,9 @@ BINANCE_API_SECRET=<new-testnet-secret>
 Create it from the tracked template with `cp .env.example .env`, fill the two
 values locally, and keep its permissions at `600`. Never commit or send the
 populated file. The repository `.gitignore` ignores `.env` and `.env.*`.
+The local loader ignores a group/world-readable `.env` (and symbolic links on
+Linux/macOS); process environment variables remain available, but missing
+validated credentials fail closed.
 
 ## Stronger alternative: external secret files
 
