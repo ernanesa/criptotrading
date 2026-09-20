@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using CryptoTrading.Observability;
 
 namespace CryptoTrading.Exchange.Binance;
 
@@ -72,7 +73,8 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
                         var parsed = BinanceMarketDataParser.TryParse(item.Span, timeProvider.GetUtcNow());
                         if (parsed is null)
                         {
-                            // Invalid payloads are quarantined by omission; one bad event must not tear down a healthy feed.
+                            // One bad event must not tear down a healthy feed, but it must remain observable.
+                            TradingTelemetry.RecordInvalidMarketDataPayload();
                             continue;
                         }
 

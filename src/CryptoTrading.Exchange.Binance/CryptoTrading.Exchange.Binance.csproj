@@ -9,6 +9,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../CryptoTrading.Configuration/CryptoTrading.Configuration.csproj" />
+    <ProjectReference Include="../CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
   </ItemGroup>
 
 </Project>

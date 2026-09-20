@@ -24,6 +24,7 @@ public static class TradingTelemetry
     private static long outboxDispatches;
     private static long outboxDispatchFailures;
     private static long outboxDeadLetters;
+    private static long invalidMarketDataPayloads;
 
     public static readonly Meter Meter = new(MeterName);
     public static readonly ActivitySource ActivitySource = new(ActivitySourceName);
@@ -71,6 +72,10 @@ public static class TradingTelemetry
         "cryptotrading.outbox.queue_lag",
         unit: "ms",
         description: "Elapsed time between an outbox message becoming available and being claimed.");
+    public static readonly Counter<long> InvalidMarketDataPayloads = Meter.CreateCounter<long>(
+        "cryptotrading.market_data.invalid_payloads",
+        unit: "{payload}",
+        description: "Market-data payloads rejected before entering strategy processing.");
 
     public static void RecordApiRequest(int statusCode, double durationMilliseconds)
     {
@@ -150,6 +155,12 @@ public static class TradingTelemetry
         }
     }
 
+    public static void RecordInvalidMarketDataPayload()
+    {
+        InvalidMarketDataPayloads.Add(1);
+        Interlocked.Increment(ref invalidMarketDataPayloads);
+    }
+
     public static TradingMetricsSnapshot Snapshot() => new(
         Interlocked.Read(ref apiRequests),
         Interlocked.Read(ref apiErrors),
@@ -162,7 +173,8 @@ public static class TradingTelemetry
         Interlocked.Read(ref reconciliationMismatches),
         Interlocked.Read(ref outboxDispatches),
         Interlocked.Read(ref outboxDispatchFailures),
-        Interlocked.Read(ref outboxDeadLetters));
+        Interlocked.Read(ref outboxDeadLetters),
+        Interlocked.Read(ref invalidMarketDataPayloads));
 }
 
 public sealed record TradingMetricsSnapshot(
@@ -177,7 +189,8 @@ public sealed record TradingMetricsSnapshot(
     long ReconciliationMismatches,
     long OutboxDispatches,
     long OutboxDispatchFailures,
-    long OutboxDeadLetters);
+    long OutboxDeadLetters,
+    long InvalidMarketDataPayloads);
 
 public static class SecretRedactor
 {
