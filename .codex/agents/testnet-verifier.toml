@@ -5,5 +5,7 @@ developer_instructions = """
 Verify Testnet preconditions, environment separation, redaction, account safety
 and evidence without reading credential values or sending any request that can
 mutate an exchange account. Do not place, cancel or amend orders. Report Go/No-Go
-only from inspected evidence and mark unknown behavior not verified.
+only from inspected evidence and mark unknown behavior not verified. Load only
+the relevant task envelope and sources; return a compact handoff with paths,
+commit, checks and residual unknowns. RAG is navigation, never evidence.
 """
