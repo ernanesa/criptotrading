@@ -1,7 +1,7 @@
 # Readiness audit — estado corrente
 
 **Data (UTC):** 2026-09-19  
-**Commit de código auditado:** `30a6b1e`
+**Commit de código auditado:** `acacc9c`
 **Escopo:** fundação local, Paper/NO_TRADE e integração Binance read-only  
 **Decisão:** **No-Go para Shadow/Canary/Live; Paper local permitido**
 
@@ -47,6 +47,7 @@ na sessão não resolvia o SDK preview declarado em `global.json`.
 | Governed evidence runner | `dotnet build tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj --configuration Release --no-restore` + guard tests | PASS — snapshot PostgreSQL read-only, sem migrations/ordens; credencial e connection string ausentes falham antes da rede |
 | Governed evidence PostgreSQL integration | `./scripts/test-postgres-integration.sh` | PASS — 10/10, incluindo persistência/restart e bundle governado com `promotion_authorized=false`; container efêmero encerrado ao final |
 | Governed evidence runner E2E | `./scripts/test-governed-evidence-runner.sh` | PASS — PostgreSQL efêmero persiste fixture governada, runner read-only reconstrói snapshot e produz artefato + manifesto; 179 barras públicas, `promotion_authorized=false`, sem credenciais/ordens |
+| Probe autenticado Testnet | `./scripts/test-binance-testnet-auth-readonly.sh` | **PENDING/FAIL EXTERNAL** — harness alcançou a fronteira autenticada sem mutações, mas a API devolveu falha redigida (`BinanceApiException`); nenhuma resposta, chave ou URL assinada foi persistida; requer chave Spot Testnet nova/válida |
 | Testnet probe hardening | `dotnet test` Binance + guard scripts | PASS — endpoint HTTPS Spot Testnet exato, porta 443, ausência de UserInfo/query/fragment, símbolo normalizado e withdrawals false; 56 testes |
 
 | OOS sensitivity local | `./scripts/test-oos-sensitivity.sh` | PASS — 1 teste, três casos preregistrados em seis janelas, execução duplicada e fingerprints estáveis; dataset sintético apenas, sem rede/credenciais |
