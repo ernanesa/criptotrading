@@ -1,0 +1,4 @@
+interface:
+  display_name: Requirements to ClickUp
+  short_description: Turn requirements into AI-ready backlog items
+  default_prompt: Analyze this requirement and propose an implementation-ready backlog with epics, stories, specs, tasks, subtasks, acceptance criteria, and a review-ready ClickUp plan.

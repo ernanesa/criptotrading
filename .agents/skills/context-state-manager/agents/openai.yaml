@@ -1,0 +1,4 @@
+interface:
+  display_name: Context State Manager
+  short_description: Keep long Codex sessions compact and consistent
+  default_prompt: "Use $context-state-manager to start from the minimum relevant context and finish with a compact handoff of active decisions, superseded requirements, open questions, evidence, and the next action."

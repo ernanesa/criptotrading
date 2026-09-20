@@ -1,0 +1,4 @@
+interface:
+  display_name: Trading Strategy Engineering
+  short_description: Research strategies with rigorous risk and validation controls
+  default_prompt: Evaluate this trading strategy or bot design for hypothesis quality, execution realism, risk controls, bias, reproducibility, observability, and safe deployment stages.

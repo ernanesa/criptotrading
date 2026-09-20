@@ -1,0 +1,4 @@
+interface:
+  display_name: Code Review
+  short_description: Find actionable bugs and risks in code changes
+  default_prompt: Review this change for correctness, security, maintainability, performance, compatibility, tests, and documentation. Report prioritized findings with precise file and line references; do not modify files.

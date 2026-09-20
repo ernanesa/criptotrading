@@ -1,0 +1,4 @@
+interface:
+  display_name: Versioned Documentation Workflow
+  short_description: Use current docs compatible with project versions
+  default_prompt: Inspect the project versions, retrieve only compatible official documentation, and validate the result with the project's checks.
