@@ -118,7 +118,7 @@ internal sealed class AutonomyCycleHostedService(
             .Where(balance => !string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase))
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
-        var currentEquityNotional = unsupportedAssetBalance
+        decimal? currentEquityNotional = unsupportedAssetBalance
             ? null
             : totalQuoteBalance + (btcQuantity * latest.ClosePrice.Value);
         var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
