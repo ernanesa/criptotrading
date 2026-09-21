@@ -180,6 +180,10 @@ public interface IOrderCancellationStore
     Task<ExecutionReplanCandidate?> ResolveTerminalCancellationAsync(
         TerminalCancellationResolution resolution,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ExecutionReplanCandidate>> ReadReplanCandidatesAsync(
+        int limit = 100,
+        CancellationToken cancellationToken = default);
 }
 
 public interface IExecutionAttributionReportStore
@@ -2073,6 +2077,24 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return candidate;
+    }
+
+    public async Task<IReadOnlyList<ExecutionReplanCandidate>> ReadReplanCandidatesAsync(int limit = 100, CancellationToken cancellationToken = default)
+    {
+        if (limit is < 1 or > 1_000) throw new ArgumentOutOfRangeException(nameof(limit));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT candidate_id, origin_order_id, origin_client_order_id, cancel_message_id, terminal_lifecycle_event_id, symbol, side, order_type, residual_quantity, next_attempt, correlation_id, created_at FROM trading.execution_replan_candidates ORDER BY created_at, candidate_id LIMIT @limit;", connection);
+        command.Parameters.Add(Parameter("limit", NpgsqlDbType.Integer, limit));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var candidates = new List<ExecutionReplanCandidate>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            candidates.Add(new(reader.GetGuid(0), new OrderId(reader.GetGuid(1)), new ClientOrderId(reader.GetString(2)), reader.GetGuid(3), reader.GetGuid(4), new Symbol(reader.GetString(5)),
+                reader.GetString(6) == "BUY" ? OrderSide.Buy : OrderSide.Sell, reader.GetString(7) == "LIMIT" ? OrderType.Limit : OrderType.Market,
+                new Quantity(reader.GetDecimal(8)), reader.GetInt32(9), new CorrelationId(reader.GetGuid(10)), new DateTimeOffset(reader.GetFieldValue<DateTime>(11).ToUniversalTime())));
+        }
+        return candidates;
     }
 
     public async Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(

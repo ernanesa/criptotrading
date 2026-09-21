@@ -803,6 +803,9 @@ public sealed class WorkerRuntimeTests
 
         public Task<CancelOutboxRecord> EnqueueCancellationAsync(CancelOutboxRecord record, CancellationToken cancellationToken = default) => Task.FromResult(record);
 
+        public Task<IReadOnlyList<ExecutionReplanCandidate>> ReadReplanCandidatesAsync(int limit = 100, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ExecutionReplanCandidate>>([]);
+
         public async Task<ExecutionReplanCandidate?> ResolveTerminalCancellationAsync(TerminalCancellationResolution resolution, CancellationToken cancellationToken = default)
         {
             var command = resolution.Command;
