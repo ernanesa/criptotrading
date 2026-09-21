@@ -59,6 +59,36 @@ public sealed class PostgresTradingStoreIntegrationTests
     }
 
     [Fact]
+    public async Task PersistsNegativeQuoteCommissionAsAppendOnlyRebate()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var baseAsset = new Asset("REB" + suffix);
+        var quoteAsset = new Asset("USDT");
+        var wallet = new AccountId("integration-rebate-wallet-" + suffix);
+        var command = new ExecutionAccountingCommand(
+            "rebate-" + suffix, Convert.ToInt64(suffix, 16), 71, new Symbol(baseAsset.Value + "USDT"), baseAsset, quoteAsset,
+            OrderSide.Buy, new Quantity(1m), new Price(100m), new Money(-.1m, quoteAsset), wallet,
+            new AccountId("integration-rebate-fees-" + suffix), LedgerEntryId.New(), CorrelationId.New(), IdempotencyKey.New(), DateTimeOffset.UtcNow);
+
+        _ = await store.RecordExecutionAsync(command);
+        Assert.Equal(-99.9m, (await store.GetBalanceAsync(wallet, quoteAsset)).Amount);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var query = new NpgsqlCommand("SELECT commission FROM trading.execution_fills WHERE execution_id = @execution_id;", connection);
+        query.Parameters.AddWithValue("execution_id", command.ExecutionId);
+        Assert.Equal(-.1m, await query.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task PersistsFeeExpectationAndDriftComparisonForAnExecution()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
