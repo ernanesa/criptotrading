@@ -146,6 +146,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOrderLifecycleStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IRuntimeStateStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<OrderProjectionService>();
@@ -159,20 +161,31 @@ OperationalControlRegistration.Add(
     builder.Services,
     builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false));
 
-builder.Services.AddSingleton<RuntimeTransitionJournal>(serviceProvider =>
-    new RuntimeTransitionJournal(serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value.RuntimeAuditPath));
-builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(serviceProvider =>
-    serviceProvider.GetRequiredService<RuntimeTransitionJournal>());
-builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeSupervisor>(serviceProvider =>
+if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
-    var journal = serviceProvider.GetRequiredService<RuntimeTransitionJournal>();
-    return new CryptoTrading.Domain.Runtime.RuntimeSupervisor(journal, initialRevision: journal.LastRevision);
-});
-builder.Services.AddHostedService<RuntimeSupervisorHostedService>();
-
+    builder.Services.AddSingleton<PostgresRuntimeTransitionSink>();
+    builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresRuntimeTransitionSink>());
+}
+else
+{
+    builder.Services.AddSingleton<RuntimeTransitionJournal>(serviceProvider =>
+        new RuntimeTransitionJournal(serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value.RuntimeAuditPath));
+    builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(serviceProvider =>
+        serviceProvider.GetRequiredService<RuntimeTransitionJournal>());
+}
+builder.Services.AddSingleton<DeferredRuntimeSupervisor>(serviceProvider => new(
+    serviceProvider.GetRequiredService<CryptoTrading.Domain.Runtime.IRuntimeTransitionSink>(),
+    builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false)
+        ? serviceProvider.GetRequiredService<IRuntimeStateStore>() : null,
+    builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false)
+        ? 0 : serviceProvider.GetRequiredService<RuntimeTransitionJournal>().LastRevision));
+builder.Services.AddSingleton<CryptoTrading.Domain.Runtime.IRuntimeSupervisor>(serviceProvider => serviceProvider.GetRequiredService<DeferredRuntimeSupervisor>());
+builder.Services.AddSingleton<IRuntimeSupervisorInitializer>(serviceProvider => serviceProvider.GetRequiredService<DeferredRuntimeSupervisor>());
 // Hosted services are started in registration order. Migrations must complete
 // before RiskPolicy validation, reconciliation or account-stream persistence.
 builder.Services.AddHostedService<PersistenceMigrationHostedService>();
+builder.Services.AddHostedService<RuntimeSupervisorHostedService>();
 if (builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false))
 {
     // RiskPolicy is deliberately registered before any service that could
