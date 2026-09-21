@@ -199,9 +199,12 @@ Cada cartão deve ser executado na ordem `contrato → migration/store → imple
 As seguintes fatias já possuem código e testes locais, mas não encerram o gate
 de promoção: reserva de taxa no sizing (`2bab4c1`/`379fb01`), resolução autoritativa de
 ordens ambíguas por snapshot fresco (`cf34b65`) e política pura de TTL,
-cancelamento pendente e residual (`aae53e1`). O cancelamento mutável ainda não
-está conectado ao outbox/adapter Testnet; resoluções terminais dependem de
-fills/user-data e a reconciliação append-only dedicada ainda não existe. A
+cancelamento pendente e residual (`aae53e1`). O cancelamento possui consumidor
+Testnet e produtor TTL durável (`016472e` e `a5c1d19`), ambos desativados por
+padrão e bloqueados por `NO_TRADE`; nenhuma chamada Testnet foi usada como
+evidência. A resolução terminal com residual ainda deve criar somente uma
+candidatura persistida para novo ciclo de risco/mercado, nunca um submit direto;
+fills/user-data e a reconciliação append-only dedicada continuam pendentes. A
 consulta dinâmica da comissão efetiva, sua validade, aplicação ao edge/sizing e
 o detector de desvio estimado-versus-realizado continuam planejados, não
 implementados.
