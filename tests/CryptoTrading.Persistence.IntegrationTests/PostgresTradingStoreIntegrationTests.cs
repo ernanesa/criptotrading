@@ -41,6 +41,7 @@ public sealed class PostgresTradingStoreIntegrationTests
 
         Assert.NotNull(first);
         Assert.Equal(first, replay);
+        Assert.Contains(await store.ReadReplanCandidatesAsync(), candidate => candidate.CandidateId == first.CandidateId);
         Assert.DoesNotContain(await store.ReadOpenOrdersAsync(), item => item.ClientOrderId == command.ClientOrderId.Value);
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
