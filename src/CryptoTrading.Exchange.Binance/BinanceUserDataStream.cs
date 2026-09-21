@@ -73,7 +73,8 @@ public sealed record BinanceExecutionReportEvent(
     decimal CumulativeExecutedQuantity,
     decimal LastExecutedPrice,
     decimal Commission,
-    string? CommissionAsset) : BinanceUserDataEvent(ReceivedAtUtc, EventTimeMilliseconds);
+    string? CommissionAsset,
+    decimal? OriginalQuantity = null) : BinanceUserDataEvent(ReceivedAtUtc, EventTimeMilliseconds);
 
 public sealed record BinanceAccountPositionBalance(string Asset, decimal Free, decimal Locked);
 
@@ -348,7 +349,8 @@ internal static class BinanceUserDataParser
             Decimal(root, "z"),
             Decimal(root, "L"),
             Decimal(root, "n"),
-            Optional(root, "N"));
+            Optional(root, "N"),
+            Decimal(root, "q"));
 
     private static BinanceOutboundAccountPositionEvent ParsePosition(JsonElement root, DateTimeOffset receivedAtUtc)
     {

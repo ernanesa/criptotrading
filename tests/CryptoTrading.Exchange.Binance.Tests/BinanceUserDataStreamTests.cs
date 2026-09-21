@@ -26,7 +26,7 @@ public sealed class BinanceUserDataStreamTests
     {
         using var transport = new FakeTransport(
             "not-json",
-            "{\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":42,\"t\":7,\"c\":\"client-1\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\"}}",
+            "{\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":42,\"t\":7,\"c\":\"client-1\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\",\"q\":\"0.01\"}}",
             "{\"e\":\"outboundAccountPosition\",\"E\":1720000000124,\"u\":1720000000120,\"B\":[{\"a\":\"USDT\",\"f\":\"100\",\"l\":\"0\"}]}");
         var client = new BinanceUserDataStreamClient(
             new BinanceUserDataStreamOptions
@@ -42,6 +42,7 @@ public sealed class BinanceUserDataStreamTests
         var execution = Assert.IsType<BinanceExecutionReportEvent>(enumerator.Current);
         Assert.Equal(7, execution.TradeId);
         Assert.Equal(100.50m, execution.LastExecutedPrice);
+        Assert.Equal(0.01m, execution.OriginalQuantity);
         Assert.True(await enumerator.MoveNextAsync());
         Assert.IsType<BinanceOutboundAccountPositionEvent>(enumerator.Current);
     }
@@ -199,7 +200,7 @@ public sealed class BinanceUserDataStreamTests
             using var request = JsonDocument.Parse(payload.ToArray());
             var id = request.RootElement.GetProperty("id").GetGuid();
             payloads.Add(Encoding.UTF8.GetBytes($"{{\"id\":\"{id}\",\"status\":200,\"result\":{{\"subscriptionId\":7}}}}"));
-            payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":99,\"t\":8,\"c\":\"client-99\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\"}}"));
+            payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":99,\"t\":8,\"c\":\"client-99\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\",\"q\":\"0.01\"}}"));
             payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"serverShutdown\",\"E\":1720000000124}}"));
             return ValueTask.CompletedTask;
         }

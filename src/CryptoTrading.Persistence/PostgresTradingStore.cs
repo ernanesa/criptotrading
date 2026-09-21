@@ -51,7 +51,9 @@ public sealed record LocalOpenOrderRecord(
     long? OrderId,
     string ClientOrderId,
     string Status,
-    DateTimeOffset UpdatedAtUtc);
+    DateTimeOffset UpdatedAtUtc,
+    decimal? OriginalQuantity = null,
+    decimal? CumulativeExecutedQuantity = null);
 
 public interface IExpectedExecutionFeeStore
 {
@@ -1509,7 +1511,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "SELECT symbol, order_id, client_order_id, status, updated_at FROM trading.reconciliation_open_orders WHERE active = TRUE ORDER BY client_order_id;",
+            "SELECT symbol, order_id, client_order_id, status, updated_at, original_quantity, cumulative_executed_quantity FROM trading.reconciliation_open_orders WHERE active = TRUE ORDER BY client_order_id;",
             connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new List<LocalOpenOrderRecord>();
@@ -1520,7 +1522,9 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                 reader.IsDBNull(1) ? null : reader.GetInt64(1),
                 reader.GetString(2),
                 reader.GetString(3),
-                new DateTimeOffset(reader.GetDateTime(4), TimeSpan.Zero)));
+                new DateTimeOffset(reader.GetDateTime(4), TimeSpan.Zero),
+                reader.IsDBNull(5) ? null : reader.GetDecimal(5),
+                reader.IsDBNull(6) ? null : reader.GetDecimal(6)));
         }
 
         return result;
@@ -1532,17 +1536,20 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             """
-            INSERT INTO trading.reconciliation_open_orders (symbol, order_id, client_order_id, status, updated_at, active)
-            VALUES (@symbol, @order_id, @client_order_id, @status, @updated_at, TRUE)
+            INSERT INTO trading.reconciliation_open_orders (symbol, order_id, client_order_id, status, updated_at, original_quantity, cumulative_executed_quantity, active)
+            VALUES (@symbol, @order_id, @client_order_id, @status, @updated_at, @original_quantity, @cumulative_executed_quantity, TRUE)
             ON CONFLICT (client_order_id) DO UPDATE SET
                 symbol = EXCLUDED.symbol, order_id = EXCLUDED.order_id, status = EXCLUDED.status,
-                updated_at = EXCLUDED.updated_at, active = TRUE;
+                updated_at = EXCLUDED.updated_at, original_quantity = EXCLUDED.original_quantity,
+                cumulative_executed_quantity = EXCLUDED.cumulative_executed_quantity, active = TRUE;
             """, connection);
         command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, order.Symbol.Trim().ToUpperInvariant()));
         command.Parameters.Add(Parameter("order_id", NpgsqlDbType.Bigint, order.OrderId.HasValue ? order.OrderId.Value : DBNull.Value));
         command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
         command.Parameters.Add(Parameter("status", NpgsqlDbType.Varchar, order.Status.Trim().ToUpperInvariant()));
         command.Parameters.Add(Parameter("updated_at", NpgsqlDbType.TimestampTz, order.UpdatedAtUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("original_quantity", NpgsqlDbType.Numeric, order.OriginalQuantity.HasValue ? order.OriginalQuantity.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("cumulative_executed_quantity", NpgsqlDbType.Numeric, order.CumulativeExecutedQuantity.HasValue ? order.CumulativeExecutedQuantity.Value : DBNull.Value));
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1563,9 +1570,11 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         ArgumentException.ThrowIfNullOrWhiteSpace(order.Symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(order.ClientOrderId);
         ArgumentException.ThrowIfNullOrWhiteSpace(order.Status);
-        if (order.OrderId is < 0 || order.UpdatedAtUtc.Offset != TimeSpan.Zero)
+        if (order.OrderId is < 0 || order.UpdatedAtUtc.Offset != TimeSpan.Zero ||
+            order.OriginalQuantity is <= 0 || order.CumulativeExecutedQuantity is < 0 ||
+            (order.OriginalQuantity is { } original && order.CumulativeExecutedQuantity is { } cumulative && cumulative > original))
         {
-            throw new ArgumentException("Open order identity and timestamp are invalid.", nameof(order));
+            throw new ArgumentException("Open order identity, quantities, or timestamp are invalid.", nameof(order));
         }
     }
 
