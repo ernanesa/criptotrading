@@ -34,11 +34,12 @@ public sealed class PersistenceMigrationsTests
                 "021_order_lifecycle_events.down.sql", "021_order_lifecycle_events.up.sql",
                 "022_expired_cancellation_scan.down.sql", "022_expired_cancellation_scan.up.sql",
                 "023_execution_replan_candidates.down.sql", "023_execution_replan_candidates.up.sql",
+                "024_runtime_state_persistence.down.sql", "024_runtime_state_persistence.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -91,5 +92,6 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("order_lifecycle_events", upMigrations[20].Sql, StringComparison.Ordinal);
         Assert.Contains("execution_submission_context_expiry_scan_idx", upMigrations[21].Sql, StringComparison.Ordinal);
         Assert.Contains("execution_replan_candidates", upMigrations[22].Sql, StringComparison.Ordinal);
+        Assert.Contains("runtime_state_transitions", upMigrations[23].Sql, StringComparison.Ordinal);
     }
 }

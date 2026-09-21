@@ -6,6 +6,7 @@ using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Research;
+using CryptoTrading.Domain.Runtime;
 using Npgsql;
 using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Strategies;
@@ -20,6 +21,22 @@ namespace CryptoTrading.Persistence.IntegrationTests;
 /// </summary>
 public sealed class PostgresTradingStoreIntegrationTests
 {
+    [Fact]
+    public async Task RuntimeStateCheckpointPersistsMonotonicTransitionAndAcceptsOnlyEquivalentReplay()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var transition = new RuntimeStateTransition(RuntimeState.Stopped, RuntimeState.Bootstrapping, 1, "integration-boot", DateTimeOffset.UtcNow);
+
+        await store.AppendRuntimeTransitionAsync(transition);
+        await store.AppendRuntimeTransitionAsync(transition);
+
+        Assert.Equal(new RuntimeStateCheckpoint(RuntimeState.Bootstrapping, 1), await store.ReadRuntimeStateAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendRuntimeTransitionAsync(transition with { Reason = "conflict" }));
+    }
+
     [Fact]
     public async Task TerminalCancellationAtomicallyDeactivatesOpenOrderAndPersistsIdempotentResidualCandidate()
     {
