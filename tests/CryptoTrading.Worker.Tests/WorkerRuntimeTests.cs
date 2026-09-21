@@ -180,6 +180,55 @@ public sealed class WorkerRuntimeTests
         Assert.Empty(store.Records);
     }
 
+    [Fact]
+    public async Task TestnetCancelExecutorPersistsPendingThenProjectsVenueCancellation()
+    {
+        var command = NewCancelCommand();
+        var store = new RecordingOpenOrderStore();
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "NEW", DateTimeOffset.UtcNow, 0.01m, 0m));
+        var exchange = new CancelRecordingTestnetClient(command, "CANCELED", queryStatus: "NEW");
+        var executor = CreateTestnetCancelExecutor(exchange, store);
+
+        await executor.ExecuteAsync(CancelMessageFor(command));
+
+        Assert.Equal(1, exchange.CancelCalls);
+        Assert.Equal(1, exchange.QueryCalls);
+        Assert.Empty(store.Records);
+    }
+
+    [Fact]
+    public async Task TestnetCancelExecutorQueriesAfterAmbiguousCancelAndNeverRepeatsIt()
+    {
+        var command = NewCancelCommand();
+        var store = new RecordingOpenOrderStore();
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "PARTIALLY_FILLED", DateTimeOffset.UtcNow, 0.01m, 0.004m));
+        var exchange = new CancelRecordingTestnetClient(command, "CANCELED", cancelFails: true, queryStatus: "PARTIALLY_FILLED");
+        var executor = CreateTestnetCancelExecutor(exchange, store);
+
+        await executor.ExecuteAsync(CancelMessageFor(command));
+
+        Assert.Equal(1, exchange.CancelCalls);
+        Assert.Equal(2, exchange.QueryCalls);
+        Assert.Empty(store.Records);
+    }
+
+    [Fact]
+    public async Task TestnetCancelExecutorQuarantinesUnknownCancelOutcomeWhenLookupFails()
+    {
+        var command = NewCancelCommand();
+        var store = new RecordingOpenOrderStore();
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "NEW", DateTimeOffset.UtcNow, 0.01m, 0m));
+        var exchange = new CancelRecordingTestnetClient(command, "NEW", cancelFails: true, queryFails: true);
+        var executor = CreateTestnetCancelExecutor(exchange, store);
+
+        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(CancelMessageFor(command)));
+
+        Assert.Equal(1, exchange.CancelCalls);
+        Assert.Equal(2, exchange.QueryCalls);
+        var projected = Assert.Single(store.Records);
+        Assert.Equal("UNKNOWN", projected.Status);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -267,7 +316,9 @@ public sealed class WorkerRuntimeTests
         await using var testnetProvider = testnetServices.BuildServiceProvider();
 
         _ = testnetProvider.GetRequiredService<IOptions<TradingOptions>>().Value;
-        Assert.IsType<TestnetOutboxMessageExecutor>(testnetProvider.GetRequiredService<IOutboxMessageExecutor>());
+        var executors = testnetProvider.GetServices<IOutboxMessageExecutor>();
+        Assert.Contains(executors, executor => executor is TestnetOutboxMessageExecutor);
+        Assert.Contains(executors, executor => executor is TestnetCancelOutboxMessageExecutor);
     }
 
     [Fact]
@@ -677,6 +728,15 @@ public sealed class WorkerRuntimeTests
         command.CreatedAtUtc.AddMinutes(1),
         "test-worker");
 
+    private static CancelOrderCommand NewCancelCommand() => new(
+        OrderId.New(), ClientOrderId.New(), new Symbol("BTCUSDT"), OrderSide.Buy, OrderType.Limit,
+        new Quantity(0.01m), new Quantity(0m), new Price(10_000m), CorrelationId.New(), IdempotencyKey.New(),
+        0, DateTimeOffset.UtcNow.AddMinutes(-2), DateTimeOffset.UtcNow.AddMinutes(-1), "42");
+
+    private static LeasedOutboxMessage CancelMessageFor(CancelOrderCommand command) => new(
+        Guid.NewGuid(), CancelLifecyclePlanner.CancelOrderMessageType, command.CorrelationId, command.IdempotencyKey,
+        JsonSerializer.Serialize(command), command.RequestedAtUtc, 1, command.RequestedAtUtc.AddMinutes(1), "test-worker");
+
     private static TestnetOutboxMessageExecutor CreateTestnetExecutor(
         IBinanceSpotOrderClient exchange,
         IBinanceSpotAccountClient account,
@@ -699,6 +759,28 @@ public sealed class WorkerRuntimeTests
             Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
             new OrderProjectionService(store),
             NullLogger<TestnetOutboxMessageExecutor>.Instance);
+
+    private static TestnetCancelOutboxMessageExecutor CreateTestnetCancelExecutor(
+        IBinanceSpotOrderClient exchange,
+        ILocalOpenOrderStore store) => new(
+            exchange,
+            Options.Create(new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET",
+                NoTrade = false,
+                PersistenceEnabled = true,
+                ApplyMigrations = true,
+                PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = true,
+                TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true,
+                ReconciliationEnabled = true,
+                AccountStreamEnabled = true
+            }),
+            Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
+            store,
+            new OrderProjectionService(store),
+            NullLogger<TestnetCancelOutboxMessageExecutor>.Instance);
 
     private static LeasedOutboxMessage MessageForPayload(SubmitOrderCommand command, string payload) => new(
         Guid.NewGuid(),
@@ -846,6 +928,40 @@ public sealed class WorkerRuntimeTests
 
         public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class CancelRecordingTestnetClient(CancelOrderCommand command, string finalStatus, bool cancelFails = false, bool queryFails = false, string? queryStatus = null) : IBinanceSpotOrderClient
+    {
+        public int CancelCalls { get; private set; }
+        public int QueryCalls { get; private set; }
+
+        public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            CancelCalls++;
+            if (cancelFails)
+            {
+                throw new IOException("simulated response loss");
+            }
+
+            return Task.FromResult(Result(finalStatus));
+        }
+
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            QueryCalls++;
+            if (queryFails && QueryCalls > 1)
+            {
+                throw new IOException("simulated lookup failure");
+            }
+
+            return Task.FromResult(Result(QueryCalls == 1 ? queryStatus ?? finalStatus : finalStatus));
+        }
+
+        private BinanceSpotOrderResult Result(string status) => new(42, command.Symbol.Value, command.ClientOrderId.Value, status,
+            command.LimitPrice!.Value.Value, command.OriginalQuantity.Value, status == "FILLED" ? command.OriginalQuantity.Value : command.FilledQuantity.Value,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
     private sealed class TestnetAccountClient(string baseFree = "1", string quoteFree = "1000", bool canTrade = true, bool canWithdraw = false) : IBinanceSpotAccountClient

@@ -35,6 +35,17 @@ internal static class WorkerExecutionRegistration
                 serviceProvider.GetRequiredService<ILogger<PaperOutboxMessageExecutor>>());
         });
 
+        if (string.Equals(configuration["WORKER_EXECUTION_MODE"], "TESTNET", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IOutboxMessageExecutor>(serviceProvider => new TestnetCancelOutboxMessageExecutor(
+                serviceProvider.GetRequiredService<IBinanceSpotOrderClient>(),
+                serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>(),
+                serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
+                serviceProvider.GetRequiredService<ILocalOpenOrderStore>(),
+                serviceProvider.GetRequiredService<OrderProjectionService>(),
+                serviceProvider.GetRequiredService<ILogger<TestnetCancelOutboxMessageExecutor>>()));
+        }
+
         if (!string.Equals(configuration["WORKER_EXECUTION_MODE"], "TESTNET", StringComparison.OrdinalIgnoreCase))
         {
             return services;
