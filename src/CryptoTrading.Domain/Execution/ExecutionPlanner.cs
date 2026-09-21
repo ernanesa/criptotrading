@@ -57,7 +57,8 @@ public sealed record ExecutionPlanRequest
         decimal? availableAccountLiquidityNotional = null,
         FeeReservePolicy? feeReservePolicy = null,
         EffectiveCommissionSnapshot? effectiveCommission = null,
-        TimeSpan? commissionMaximumAge = null)
+        TimeSpan? commissionMaximumAge = null,
+        bool makerFeeEligible = false)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -97,6 +98,7 @@ public sealed record ExecutionPlanRequest
         EffectiveCommission = effectiveCommission;
         CommissionMaximumAge = commissionMaximumAge ?? TimeSpan.FromMinutes(15);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(CommissionMaximumAge, TimeSpan.Zero);
+        MakerFeeEligible = makerFeeEligible;
     }
 
     public OrderIntent Intent { get; }
@@ -110,6 +112,8 @@ public sealed record ExecutionPlanRequest
     public FeeReservePolicy FeeReserve { get; }
     public EffectiveCommissionSnapshot? EffectiveCommission { get; }
     public TimeSpan CommissionMaximumAge { get; }
+    /// <summary>True only when policy and venue semantics prove a maker fee is applicable.</summary>
+    public bool MakerFeeEligible { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -185,7 +189,7 @@ public static class ExecutionPlanner
         {
             if (!effectiveCommission.TryGetEffectiveRate(
                     intent.Side,
-                    makerEligible: true,
+                    makerEligible: request.MakerFeeEligible,
                     request.EvaluatedAtUtc,
                     request.CommissionMaximumAge,
                     out var rate,

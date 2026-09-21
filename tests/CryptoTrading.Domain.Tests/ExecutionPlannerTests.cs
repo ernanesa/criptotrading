@@ -155,6 +155,28 @@ public sealed class ExecutionPlannerTests
         Assert.False(result.IsNoTrade);
     }
 
+    [Fact]
+    public void EffectiveCommissionUsesTakerRateUnlessMakerEligibilityIsExplicit()
+    {
+        var request = Request(OrderSide.Buy);
+        var commission = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(.001m, .003m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            false, false, null, null, false, Now);
+        var conservative = new ExecutionPlanRequest(
+            request.Intent, request.Decision, request.Market, Now, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2),
+            effectiveCommission: commission, commissionMaximumAge: TimeSpan.FromMinutes(1));
+        var makerPermitted = new ExecutionPlanRequest(
+            request.Intent, request.Decision, request.Market, Now, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2),
+            effectiveCommission: commission, commissionMaximumAge: TimeSpan.FromMinutes(1), makerFeeEligible: true);
+
+        Assert.Equal(.003m, ExecutionPlanner.Plan(conservative).Plan!.EstimatedCommissionRate);
+        Assert.Equal(.001m, ExecutionPlanner.Plan(makerPermitted).Plan!.EstimatedCommissionRate);
+        Assert.Equal(1_000m, ExecutionPlanner.Plan(conservative).Plan!.AuthorizedNotional);
+    }
+
     private static ExecutionPlanRequest Request(
         OrderSide side,
         ExecutionMarketSnapshot? market = null,
