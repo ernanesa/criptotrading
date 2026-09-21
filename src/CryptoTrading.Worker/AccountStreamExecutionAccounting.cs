@@ -15,7 +15,10 @@ internal static class AccountStreamExecutionAccounting
 
     public static ExecutionAccountingCommand? ToCommand(
         BinanceExecutionReportEvent execution,
-        AccountId walletAccount)
+        AccountId walletAccount,
+        ExecutionFeeEstimate? feeEstimate = null,
+        decimal feeDriftToleranceBps = ExecutionFeeDriftEvaluator.DefaultToleranceBps,
+        ExecutionFeeAssetValuation? feeAssetValuation = null)
     {
         ArgumentNullException.ThrowIfNull(execution);
         if (!string.Equals(execution.ExecutionType, "TRADE", StringComparison.OrdinalIgnoreCase)
@@ -59,7 +62,11 @@ internal static class AccountStreamExecutionAccounting
             ledgerId,
             correlationId,
             idempotency,
-            occurredAt);
+            occurredAt,
+            execution.ClientOrderId,
+            feeEstimate,
+            feeDriftToleranceBps,
+            feeAssetValuation);
     }
 
     private static (Asset Base, Asset Quote) SplitSymbol(string symbol)

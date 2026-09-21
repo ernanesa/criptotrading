@@ -100,6 +100,7 @@ public sealed class WorkerRuntimeTests
         var projection = new OrderProjectionService(store);
         var executor = new TestnetOutboxMessageExecutor(
             exchange,
+            new TestnetAccountClient(),
             Options.Create(new WorkerRuntimeOptions
             {
                 ExecutionMode = "TESTNET",
@@ -138,6 +139,7 @@ public sealed class WorkerRuntimeTests
         var projection = new OrderProjectionService(store);
         var executor = new TestnetOutboxMessageExecutor(
             exchange,
+            new TestnetAccountClient(),
             Options.Create(new WorkerRuntimeOptions
             {
                 ExecutionMode = "TESTNET",
@@ -161,6 +163,27 @@ public sealed class WorkerRuntimeTests
         Assert.Equal(1, exchange.QueryCalls);
         var projected = Assert.Single(store.Records);
         Assert.Equal("UNKNOWN", projected.Status);
+    }
+
+    [Theory]
+    [InlineData("99", "1", true, false, false, "quote")]
+    [InlineData("1000", "0.001", true, false, true, "base")]
+    [InlineData("1000", "1", false, false, false, "capabilities")]
+    [InlineData("1000", "1", true, true, false, "capabilities")]
+    public async Task TestnetExecutorBlocksUnsafePreSubmitBalanceOrCapability(
+        string quoteFree, string baseFree, bool canTrade, bool canWithdraw, bool sell, string expectedReason)
+    {
+        var command = sell ? NewCommand() with { Side = OrderSide.Sell } : NewCommand();
+        var exchange = new RecordingTestnetClient(command);
+        var executor = CreateTestnetExecutor(
+            exchange,
+            new TestnetAccountClient(baseFree, quoteFree, canTrade, canWithdraw),
+            new RecordingOpenOrderStore());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(MessageFor(command)));
+
+        Assert.Contains(expectedReason, exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, exchange.SubmitCalls);
     }
 
     [Fact]
@@ -208,6 +231,7 @@ public sealed class WorkerRuntimeTests
         testnetServices.AddSingleton<OrderProjectionService>();
         _ = testnetServices.AddOutboxExecution(configuration);
         _ = testnetServices.AddSingleton<IBinanceSpotOrderClient>(_ => new AmbiguousTestnetClient(NewCommand()));
+        _ = testnetServices.AddSingleton<IBinanceSpotAccountClient, TestnetAccountClient>();
         await using var testnetProvider = testnetServices.BuildServiceProvider();
 
         _ = testnetProvider.GetRequiredService<IOptions<TradingOptions>>().Value;
@@ -408,6 +432,17 @@ public sealed class WorkerRuntimeTests
         Assert.Throws<OptionsValidationException>(() => excessive.Validate());
     }
 
+    [Theory]
+    [InlineData(-0.01)]
+    [InlineData(10000.01)]
+    public void AutonomyFeeDriftToleranceBpsIsBounded(decimal value)
+    {
+        Assert.Throws<OptionsValidationException>(() => new WorkerRuntimeOptions
+        {
+            AutonomyFeeDriftToleranceBps = value
+        }.Validate());
+    }
+
     [Fact]
     public void RiskPolicyGateRequiresPersistence()
     {
@@ -605,6 +640,22 @@ public sealed class WorkerRuntimeTests
         command.CreatedAtUtc.AddMinutes(1),
         "test-worker");
 
+    private static TestnetOutboxMessageExecutor CreateTestnetExecutor(
+        IBinanceSpotOrderClient exchange,
+        IBinanceSpotAccountClient account,
+        ILocalOpenOrderStore store) => new(
+            exchange,
+            account,
+            Options.Create(new WorkerRuntimeOptions
+            {
+                ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true, ApplyMigrations = true,
+                PostgresConnectionString = "Host=localhost", TestnetExecutionAcknowledged = true,
+                TestnetOrderExecutionEnabled = true, RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
+            }),
+            Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
+            new OrderProjectionService(store),
+            NullLogger<TestnetOutboxMessageExecutor>.Instance);
+
     private static LeasedOutboxMessage MessageForPayload(SubmitOrderCommand command, string payload) => new(
         Guid.NewGuid(),
         OrderExecutionPipeline.SubmitOrderMessageType,
@@ -715,6 +766,30 @@ public sealed class WorkerRuntimeTests
 
         public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RecordingTestnetClient(SubmitOrderCommand command) : IBinanceSpotOrderClient
+    {
+        public int SubmitCalls { get; private set; }
+        public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default)
+        {
+            SubmitCalls++;
+            return Task.FromResult(new BinanceSpotOrderResult(1, command.Symbol.Value, command.ClientOrderId.Value, "NEW", command.ReferencePrice.Value, command.Quantity.Value, 0m, 0));
+        }
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class TestnetAccountClient(string baseFree = "1", string quoteFree = "1000", bool canTrade = true, bool canWithdraw = false) : IBinanceSpotAccountClient
+    {
+        public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, canTrade, canWithdraw, true, 0, "SPOT",
+                [new BinanceBalance("BTC", baseFree, "0"), new BinanceBalance("USDT", quoteFree, "0")]));
+
+        public Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(string? symbol = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(string symbol, BinanceTradeQuery? query = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BinanceCommissionSnapshot> GetCommissionAsync(string symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class RecordingOpenOrderStore : ILocalOpenOrderStore

@@ -14,6 +14,13 @@ public interface IBinanceSpotMarketClient
         int limit = 500,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads public aggregate trades at or before a UTC instant; it never submits an order.</summary>
+    Task<IReadOnlyList<BinanceAggregateTrade>> GetAggregateTradesAsync(
+        string symbol,
+        DateTimeOffset? endTimeUtc = null,
+        int limit = 500,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Reads the public best bid/ask book ticker; it never submits an order.</summary>
     Task<BinanceBookTicker> GetBookTickerAsync(
         string symbol,

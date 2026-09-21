@@ -17,6 +17,7 @@ namespace CryptoTrading.Worker;
 /// </summary>
 public sealed class TestnetOutboxMessageExecutor(
     IBinanceSpotOrderClient client,
+    IBinanceSpotAccountClient accountClient,
     IOptions<WorkerRuntimeOptions> options,
     IOptions<TradingOptions> tradingOptions,
     OrderProjectionService projection,
@@ -50,6 +51,8 @@ public sealed class TestnetOutboxMessageExecutor(
         {
             throw new InvalidOperationException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
         }
+
+        await ValidateAvailableBalanceAsync(command, runtime, cancellationToken).ConfigureAwait(false);
 
         var request = new BinanceSpotOrderRequest(
             command.Symbol.Value,
@@ -120,6 +123,53 @@ public sealed class TestnetOutboxMessageExecutor(
                 throw new OrderOutcomeUnknownException(command.ClientOrderId.Value, new AggregateException(ambiguous, queryFailure));
             }
         }
+    }
+
+    private async Task ValidateAvailableBalanceAsync(
+        SubmitOrderCommand command,
+        WorkerRuntimeOptions runtime,
+        CancellationToken cancellationToken)
+    {
+        var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
+        if (!account.CanTrade || account.CanWithdraw)
+        {
+            throw new InvalidOperationException("Testnet account capabilities are unsafe for order submission.");
+        }
+
+        var (baseAsset, quoteAsset) = SplitSymbol(command.Symbol.Value);
+        var requiredAsset = command.Side == OrderSide.Buy ? quoteAsset : baseAsset;
+        var free = ParseFreeBalance(account, requiredAsset);
+        if (command.Side == OrderSide.Sell)
+        {
+            if (free < command.Quantity.Value)
+            {
+                throw new InvalidOperationException("Insufficient free base balance for Testnet SELL.");
+            }
+            return;
+        }
+
+        var rate = command.EstimatedCommissionRate ?? 0m;
+        if (!new FeeReservePolicy(runtime.AutonomyFeeReserveBps).TryCalculate(command.AuthorizedNotional, rate, out var reserve) ||
+            command.AuthorizedNotional + reserve >= free)
+        {
+            throw new InvalidOperationException("Insufficient free quote balance including fee reserve for Testnet BUY.");
+        }
+    }
+
+    private static decimal ParseFreeBalance(BinanceAccountSnapshot account, string asset)
+    {
+        var value = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, asset, StringComparison.OrdinalIgnoreCase))?.Free;
+        return !string.IsNullOrWhiteSpace(value) && decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0m
+            ? parsed
+            : 0m;
+    }
+
+    private static (string Base, string Quote) SplitSymbol(string symbol)
+    {
+        const string quote = "USDT";
+        return symbol.EndsWith(quote, StringComparison.Ordinal) && symbol.Length > quote.Length
+            ? (symbol[..^quote.Length], quote)
+            : throw new InvalidOperationException($"Unsupported Testnet quote asset for pre-submit balance validation: '{symbol}'.");
     }
 
     private static async Task ProjectExchangeResultAsync(

@@ -79,3 +79,26 @@ public sealed record BinanceClockSnapshot(
     long ServerTimeMilliseconds,
     TimeSpan Offset,
     bool WithinTolerance);
+
+public sealed record BinanceCommissionRateSet(
+    [property: JsonPropertyName("maker")] string Maker,
+    [property: JsonPropertyName("taker")] string Taker,
+    [property: JsonPropertyName("buyer")] string Buyer,
+    [property: JsonPropertyName("seller")] string Seller);
+
+public sealed record BinanceCommissionDiscount(
+    [property: JsonPropertyName("enabledForAccount")] bool EnabledForAccount,
+    [property: JsonPropertyName("enabledForSymbol")] bool EnabledForSymbol,
+    [property: JsonPropertyName("discountAsset")] string? DiscountAsset,
+    [property: JsonPropertyName("discount")] string? Discount);
+
+public sealed record BinanceCommissionResponse(
+    [property: JsonPropertyName("symbol")] string Symbol,
+    [property: JsonPropertyName("standardCommission")] BinanceCommissionRateSet StandardCommission,
+    [property: JsonPropertyName("specialCommission")] BinanceCommissionRateSet SpecialCommission,
+    [property: JsonPropertyName("taxCommission")] BinanceCommissionRateSet TaxCommission,
+    [property: JsonPropertyName("discount")] BinanceCommissionDiscount Discount);
+
+public sealed record BinanceCommissionSnapshot(
+    BinanceCommissionResponse Response,
+    DateTimeOffset ObservedAtUtc);

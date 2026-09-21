@@ -2,6 +2,7 @@
 #pragma warning disable CA1056 // Environment-bound configuration is kept as text until fail-closed validation at startup.
 
 using Microsoft.Extensions.Options;
+using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Observability;
 
@@ -63,6 +64,12 @@ public sealed class WorkerRuntimeOptions
 
     /// <summary>Quote fee reserve in basis points applied to BUY sizing.</summary>
     public decimal AutonomyFeeReserveBps { get; set; } = FeeReservePolicy.DefaultReserveBps;
+
+    /// <summary>Maximum permitted expected-versus-realized commission deviation.</summary>
+    public decimal AutonomyFeeDriftToleranceBps { get; set; } = ExecutionFeeDriftEvaluator.DefaultToleranceBps;
+
+    /// <summary>Maximum age of a non-future BNB conversion quote used for fill attribution.</summary>
+    public int FeeAssetValuationMaxAgeSeconds { get; set; } = 30;
 
     public string ReconciliationAccount { get; set; } = "exchange-wallet";
 
@@ -165,6 +172,12 @@ public sealed class WorkerRuntimeOptions
                 ["WORKER_OUTBOX_BATCH_SIZE must be between 1 and 500."]);
         }
 
+        if (FeeAssetValuationMaxAgeSeconds is < 1 or > 300)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_FEE_ASSET_VALUATION_MAX_AGE_SECONDS must be between 1 and 300."]);
+        }
+
         if (LeaseSeconds is < 1 or > 3_600)
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
@@ -262,6 +275,12 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RECONCILIATION_ACCOUNT is required when reconciliation is enabled."]);
+        }
+
+        if (AutonomyFeeDriftToleranceBps is < 0m or > 10_000m)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_AUTONOMY_FEE_DRIFT_TOLERANCE_BPS must be between 0 and 10000."]);
         }
 
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationSymbols))

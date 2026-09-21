@@ -93,6 +93,70 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         return result;
     }
 
+    public async Task<IReadOnlyList<BinanceAggregateTrade>> GetAggregateTradesAsync(
+        string symbol,
+        DateTimeOffset? endTimeUtc = null,
+        int limit = 500,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        ValidateUtc(endTimeUtc, nameof(endTimeUtc));
+        if (limit is < 1 or > 1000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "Aggregate trade limit must be between 1 and 1000.");
+        }
+
+        var endpoint = $"v3/aggTrades?symbol={Uri.EscapeDataString(normalizedSymbol)}&limit={limit.ToString(CultureInfo.InvariantCulture)}";
+        if (endTimeUtc is { } endTime)
+        {
+            endpoint += $"&endTime={endTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        using var response = await httpClient.GetAsync(new Uri(endpoint, UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "aggTrades", cancellationToken).ConfigureAwait(false);
+        using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(contentStream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (document.RootElement.ValueKind is not JsonValueKind.Array)
+        {
+            throw new JsonException("Binance aggregate trades response must be an array.");
+        }
+
+        var trades = new List<BinanceAggregateTrade>(document.RootElement.GetArrayLength());
+        foreach (var row in document.RootElement.EnumerateArray())
+        {
+            if (row.ValueKind != JsonValueKind.Object ||
+                !row.TryGetProperty("a", out var aggregateId) ||
+                !row.TryGetProperty("p", out var price) ||
+                !row.TryGetProperty("q", out var quantity) ||
+                !row.TryGetProperty("f", out var firstTradeId) ||
+                !row.TryGetProperty("l", out var lastTradeId) ||
+                !row.TryGetProperty("T", out var occurredAt) ||
+                !row.TryGetProperty("m", out var buyerMaker))
+            {
+                throw new JsonException("Binance aggregate trade response is incomplete.");
+            }
+
+            var parsedPrice = ParseDecimal(price);
+            var parsedQuantity = ParseDecimal(quantity);
+            if (parsedPrice <= 0m || parsedQuantity <= 0m)
+            {
+                throw new JsonException("Binance aggregate trade contains an invalid price or quantity.");
+            }
+
+            var timestamp = DateTimeOffset.FromUnixTimeMilliseconds(occurredAt.GetInt64());
+            if (endTimeUtc is { } requestedEnd && timestamp > requestedEnd)
+            {
+                throw new JsonException("Binance aggregate trade exceeds the requested end time.");
+            }
+
+            trades.Add(new BinanceAggregateTrade(
+                aggregateId.GetInt64(), parsedPrice, parsedQuantity, firstTradeId.GetInt64(), lastTradeId.GetInt64(),
+                timestamp, buyerMaker.GetBoolean()));
+        }
+
+        return trades;
+    }
+
     public async Task<BinanceBookTicker> GetBookTickerAsync(
         string symbol,
         CancellationToken cancellationToken = default)

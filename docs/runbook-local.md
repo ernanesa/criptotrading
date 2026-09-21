@@ -117,6 +117,23 @@ ao arquivo diário `alerts-YYYYMMDD.jsonl`; o valor vazio mantém o sink em
 memória. O arquivo é criado com modo Unix `0600`. Esse canal não substitui
 webhook/on-call externo.
 
+## Commission drift
+
+Um fill com estimativa durável é comparado ao fee efetivo em quote. Comissão em
+quote é usada diretamente; comissão no ativo-base é convertida pelo preço do
+fill. Comissão BNB usa apenas o último `aggTrade` BNB/quote não posterior ao
+fill, dentro da janela configurada. Outro terceiro ativo, ou BNB sem evidência
+tempestiva, é tratado como `COMMISSION_VALUATION_UNAVAILABLE`, sem inventar uma
+conversão.
+
+Ao ocorrer `EXECUTION_FEE_DRIFT` acima de
+`WORKER_AUTONOMY_FEE_DRIFT_TOLERANCE_BPS` (25 bps por padrão), ou quando a
+valoração necessária não puder ser comprovada, o Worker registra um alerta
+crítico redigido, entra em `SafeMode` e executa reconciliação somente de
+leitura. Preserve o `clientOrderId`, `correlationId`, reason code e o hash do
+snapshot de comissão; não altere o ledger nem reenvie ordens. O retorno exige
+reconciliação saudável e reset autorizado independente.
+
 ## Evidência mínima de incidente
 
 Registrar UTC, commit, versão do dataset, `correlationId`, reason code, estado

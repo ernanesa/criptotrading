@@ -1,3 +1,4 @@
+using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
@@ -18,7 +19,12 @@ public sealed record OrderIntent
         CorrelationId correlationId,
         IdempotencyKey idempotencyKey,
         RiskEvaluationRequest riskEvaluation,
-        DateTimeOffset createdAtUtc)
+        DateTimeOffset createdAtUtc,
+        decimal? estimatedCommissionRate = null,
+        string? commissionSnapshotHash = null,
+        string? commissionSource = null,
+        DateTimeOffset? commissionObservedAtUtc = null,
+        DateTimeOffset? commissionValidUntilUtc = null)
     {
         ArgumentNullException.ThrowIfNull(riskEvaluation);
 
@@ -51,6 +57,26 @@ public sealed record OrderIntent
         IdempotencyKey = idempotencyKey;
         RiskEvaluation = riskEvaluation;
         CreatedAtUtc = createdAtUtc;
+        if (estimatedCommissionRate is < 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(estimatedCommissionRate));
+        }
+
+        if (estimatedCommissionRate is not null)
+        {
+            _ = new ExecutionFeeEstimate(
+                estimatedCommissionRate.Value,
+                commissionSnapshotHash ?? throw new ArgumentException("An estimated commission requires a snapshot hash.", nameof(commissionSnapshotHash)),
+                commissionSource ?? throw new ArgumentException("An estimated commission requires a source.", nameof(commissionSource)),
+                commissionObservedAtUtc ?? throw new ArgumentException("An estimated commission requires an observation timestamp.", nameof(commissionObservedAtUtc)),
+                commissionValidUntilUtc ?? throw new ArgumentException("An estimated commission requires a validity timestamp.", nameof(commissionValidUntilUtc)));
+        }
+
+        EstimatedCommissionRate = estimatedCommissionRate;
+        CommissionSnapshotHash = commissionSnapshotHash;
+        CommissionSource = commissionSource;
+        CommissionObservedAtUtc = commissionObservedAtUtc;
+        CommissionValidUntilUtc = commissionValidUntilUtc;
     }
 
     public OrderId OrderId { get; }
@@ -64,6 +90,11 @@ public sealed record OrderIntent
     public IdempotencyKey IdempotencyKey { get; }
     public RiskEvaluationRequest RiskEvaluation { get; }
     public DateTimeOffset CreatedAtUtc { get; }
+    public decimal? EstimatedCommissionRate { get; }
+    public string? CommissionSnapshotHash { get; }
+    public string? CommissionSource { get; }
+    public DateTimeOffset? CommissionObservedAtUtc { get; }
+    public DateTimeOffset? CommissionValidUntilUtc { get; }
 }
 
 /// <summary>Exchange-facing command; it is only created after risk authorization.</summary>
@@ -79,7 +110,12 @@ public sealed record SubmitOrderCommand(
     CorrelationId CorrelationId,
     IdempotencyKey IdempotencyKey,
     string PolicyVersion,
-    DateTimeOffset CreatedAtUtc);
+    DateTimeOffset CreatedAtUtc,
+    decimal? EstimatedCommissionRate = null,
+    string? CommissionSnapshotHash = null,
+    string? CommissionSource = null,
+    DateTimeOffset? CommissionObservedAtUtc = null,
+    DateTimeOffset? CommissionValidUntilUtc = null);
 
 public enum OutboxRecordStatus
 {
@@ -174,7 +210,12 @@ public static class OrderExecutionPipeline
             intent.CorrelationId,
             intent.IdempotencyKey,
             decision.PolicyVersion,
-            intent.CreatedAtUtc);
+            intent.CreatedAtUtc,
+            intent.EstimatedCommissionRate,
+            intent.CommissionSnapshotHash,
+            intent.CommissionSource,
+            intent.CommissionObservedAtUtc,
+            intent.CommissionValidUntilUtc);
 
         var outbox = new OutboxRecord(
             Guid.NewGuid(),

@@ -55,7 +55,9 @@ public sealed record ExecutionPlanRequest
         TimeSpan timeToLive,
         int attempt = 0,
         decimal? availableAccountLiquidityNotional = null,
-        FeeReservePolicy? feeReservePolicy = null)
+        FeeReservePolicy? feeReservePolicy = null,
+        EffectiveCommissionSnapshot? effectiveCommission = null,
+        TimeSpan? commissionMaximumAge = null)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -92,6 +94,9 @@ public sealed record ExecutionPlanRequest
         Attempt = attempt;
         AvailableAccountLiquidityNotional = availableAccountLiquidityNotional;
         FeeReserve = feeReservePolicy ?? new FeeReservePolicy();
+        EffectiveCommission = effectiveCommission;
+        CommissionMaximumAge = commissionMaximumAge ?? TimeSpan.FromMinutes(15);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(CommissionMaximumAge, TimeSpan.Zero);
     }
 
     public OrderIntent Intent { get; }
@@ -103,6 +108,8 @@ public sealed record ExecutionPlanRequest
     public int Attempt { get; }
     public decimal? AvailableAccountLiquidityNotional { get; }
     public FeeReservePolicy FeeReserve { get; }
+    public EffectiveCommissionSnapshot? EffectiveCommission { get; }
+    public TimeSpan CommissionMaximumAge { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -116,7 +123,12 @@ public sealed record ExecutionPlan(
     Price LimitPrice,
     decimal AuthorizedNotional,
     DateTimeOffset ExpiresAtUtc,
-    int Attempt);
+    int Attempt,
+    decimal? EstimatedCommissionRate = null,
+    string? CommissionSnapshotHash = null,
+    string? CommissionSource = null,
+    DateTimeOffset? CommissionObservedAtUtc = null,
+    DateTimeOffset? CommissionValidUntilUtc = null);
 
 public sealed record ExecutionPlanResult(ExecutionPlan? Plan, string? NoTradeReason)
 {
@@ -134,6 +146,7 @@ public static class ExecutionPlanner
     public const string LiquidityUnavailable = "EXECUTION_LIQUIDITY_UNAVAILABLE";
     public const string TargetNotAuthorized = "EXECUTION_TARGET_NOT_AUTHORIZED";
     public const string AccountLiquidityUnavailable = "EXECUTION_ACCOUNT_LIQUIDITY_UNAVAILABLE";
+    public const string CommissionUnavailable = "EXECUTION_COMMISSION_UNAVAILABLE";
 
     public static ExecutionPlanResult Plan(ExecutionPlanRequest request)
     {
@@ -166,9 +179,36 @@ public static class ExecutionPlanner
         // A buy consumes quote balance and must leave a strict positive
         // headroom after the configured fee reserve. A sell reduces the
         // already reconciled base position and never consumes quote reserve.
+        decimal? estimatedCommissionRate = null;
+        decimal? effectiveCommissionRate = null;
+        if (request.EffectiveCommission is { } effectiveCommission)
+        {
+            if (!effectiveCommission.TryGetEffectiveRate(
+                    intent.Side,
+                    makerEligible: true,
+                    request.EvaluatedAtUtc,
+                    request.CommissionMaximumAge,
+                    out var rate,
+                    out _))
+            {
+                return new(null, CommissionUnavailable);
+            }
+
+            effectiveCommissionRate = rate;
+            estimatedCommissionRate = rate;
+        }
+
         if (intent.Side == OrderSide.Buy && request.AvailableAccountLiquidityNotional is { } availableQuote)
         {
-            if (!request.FeeReserve.TryCalculate(decision.AuthorizedTargetNotional, out var feeReserve))
+            decimal feeReserve;
+            if (effectiveCommissionRate is { } effectiveRate)
+            {
+                if (!request.FeeReserve.TryCalculate(decision.AuthorizedTargetNotional, effectiveRate, out feeReserve))
+                {
+                    return new(null, CommissionUnavailable);
+                }
+            }
+            else if (!request.FeeReserve.TryCalculate(decision.AuthorizedTargetNotional, out feeReserve))
             {
                 return new(null, AccountLiquidityUnavailable);
             }
@@ -205,7 +245,14 @@ public static class ExecutionPlanner
                 limitPrice,
                 decision.AuthorizedTargetNotional,
                 request.EvaluatedAtUtc + request.TimeToLive,
-                request.Attempt),
+                request.Attempt,
+                estimatedCommissionRate,
+                request.EffectiveCommission?.CanonicalPayloadHash,
+                request.EffectiveCommission?.Source,
+                request.EffectiveCommission?.ObservedAtUtc,
+                request.EffectiveCommission is { } snapshot
+                    ? snapshot.ObservedAtUtc + request.CommissionMaximumAge
+                    : null),
             null);
     }
 

@@ -424,6 +424,9 @@ public sealed class AccountReconciliationServiceTests
             return Task.FromResult<IReadOnlyList<BinanceTrade>>(query?.FromId is null ? firstPage : secondPage);
         }
 
+        public Task<BinanceCommissionSnapshot> GetCommissionAsync(string symbol, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Commission is outside this reconciliation fake.");
+
         public Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceClockSnapshot(1, TimeSpan.Zero, true));
     }
