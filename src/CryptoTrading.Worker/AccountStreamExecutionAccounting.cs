@@ -66,7 +66,8 @@ internal static class AccountStreamExecutionAccounting
             execution.ClientOrderId,
             feeEstimate,
             feeDriftToleranceBps,
-            feeAssetValuation);
+            feeAssetValuation,
+            new Quantity(execution.CumulativeExecutedQuantity));
     }
 
     private static (Asset Base, Asset Quote) SplitSymbol(string symbol)

@@ -1070,6 +1070,13 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             command.OccurredAtUtc,
             command.FeeDriftToleranceBps,
             command.FeeAssetValuation);
+        var qualityComparison = ExecutionQualityEvaluator.Compare(
+            command.FeeEstimate,
+            command.Side,
+            command.Quantity,
+            command.CumulativeExecutedQuantity,
+            command.Price,
+            command.OccurredAtUtc);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
 
@@ -1093,7 +1100,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                 var existingEntry = await ReadExistingJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("Execution record exists without its journal entry.");
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true, feeComparison);
+                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true, feeComparison, qualityComparison);
             }
         }
 
@@ -1137,14 +1144,20 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                  realized_pnl_quote, average_cost_quote, client_order_id, estimated_rate,
                  fee_snapshot_hash, fee_source, fee_observed_at, fee_valid_until,
                  expected_commission_quote, actual_commission_quote, fee_deviation_bps,
-                 fee_comparison_status, fee_comparison_reason, commission_valuation_source, commission_valuation_at)
+                 fee_comparison_status, fee_comparison_reason, commission_valuation_source, commission_valuation_at,
+                 quality_reference_price, quality_authorized_quantity, quality_decision_at,
+                 cumulative_fill_ratio, implementation_shortfall_quote, decision_to_fill_latency_ms,
+                 execution_quality_status, execution_quality_reason)
             VALUES
                  (@execution_id, @trade_id, @order_id, @symbol, @base_asset, @quote_asset, @side,
                  @quantity, @price, @commission, @commission_asset, @occurred_at, @ledger_entry_id,
                  @realized_pnl_quote, @average_cost_quote, @client_order_id, @estimated_rate,
                  @fee_snapshot_hash, @fee_source, @fee_observed_at, @fee_valid_until,
                  @expected_commission_quote, @actual_commission_quote, @fee_deviation_bps,
-                 @fee_comparison_status, @fee_comparison_reason, @commission_valuation_source, @commission_valuation_at);
+                 @fee_comparison_status, @fee_comparison_reason, @commission_valuation_source, @commission_valuation_at,
+                 @quality_reference_price, @quality_authorized_quantity, @quality_decision_at,
+                 @cumulative_fill_ratio, @implementation_shortfall_quote, @decision_to_fill_latency_ms,
+                 @execution_quality_status, @execution_quality_reason);
             """,
             [
                 Parameter("execution_id", NpgsqlDbType.Varchar, command.ExecutionId),
@@ -1175,6 +1188,14 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                 Parameter("fee_comparison_reason", NpgsqlDbType.Varchar, feeComparison.Reason),
                 Parameter("commission_valuation_source", NpgsqlDbType.Varchar, feeComparison.ValuationSource),
                 Parameter("commission_valuation_at", NpgsqlDbType.TimestampTz, feeComparison.ValuationAtUtc?.UtcDateTime),
+                Parameter("quality_reference_price", NpgsqlDbType.Numeric, command.FeeEstimate?.ReferencePrice),
+                Parameter("quality_authorized_quantity", NpgsqlDbType.Numeric, command.FeeEstimate?.AuthorizedQuantity),
+                Parameter("quality_decision_at", NpgsqlDbType.TimestampTz, command.FeeEstimate?.DecisionAtUtc?.UtcDateTime),
+                Parameter("cumulative_fill_ratio", NpgsqlDbType.Numeric, qualityComparison.FillRatio),
+                Parameter("implementation_shortfall_quote", NpgsqlDbType.Numeric, qualityComparison.ImplementationShortfallQuote),
+                Parameter("decision_to_fill_latency_ms", NpgsqlDbType.Bigint, qualityComparison.DecisionToFillLatencyMilliseconds),
+                Parameter("execution_quality_status", NpgsqlDbType.Varchar, qualityComparison.Status),
+                Parameter("execution_quality_reason", NpgsqlDbType.Varchar, qualityComparison.Reason),
             ], cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction,
@@ -1200,7 +1221,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new(command.ExecutionId, entry, update.RealizedPnlQuote, averageCost, false, feeComparison);
+        return new(command.ExecutionId, entry, update.RealizedPnlQuote, averageCost, false, feeComparison, qualityComparison);
     }
 
     public async Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(

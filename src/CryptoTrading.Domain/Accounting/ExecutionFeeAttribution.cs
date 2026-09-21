@@ -1,4 +1,5 @@
 using CryptoTrading.Domain.Primitives;
+using CryptoTrading.Domain.Orders;
 
 namespace CryptoTrading.Domain.Accounting;
 
@@ -29,7 +30,8 @@ public sealed record ExecutionFeeEstimate
 
         if ((referencePrice is null) != (authorizedQuantity is null) ||
             (referencePrice is null) != (decisionAtUtc is null) ||
-            referencePrice is <= 0m || authorizedQuantity is <= 0m || decisionAtUtc?.Offset != TimeSpan.Zero)
+            referencePrice is <= 0m || authorizedQuantity is <= 0m ||
+            (decisionAtUtc is not null && decisionAtUtc.Value.Offset != TimeSpan.Zero))
         {
             throw new ArgumentException("Execution-quality expectation must be complete, positive, and UTC when present.");
         }
@@ -174,5 +176,55 @@ public static class ExecutionFeeDriftEvaluator
         return new(drift ? ExecutionFeeComparisonStatus.Drift : ExecutionFeeComparisonStatus.WithinTolerance,
             expectedQuote, actualQuote, deviationBps, drift ? "EXECUTION_FEE_DRIFT" : "WITHIN_TOLERANCE",
             valuationSource, occurredAtUtc);
+    }
+}
+
+public sealed record ExecutionQualityComparison(
+    decimal? FillRatio,
+    decimal? ImplementationShortfallQuote,
+    long? DecisionToFillLatencyMilliseconds,
+    string Status,
+    string Reason);
+
+/// <summary>Derives execution quality without inventing a benchmark for legacy fills.</summary>
+public static class ExecutionQualityEvaluator
+{
+    public static ExecutionQualityComparison Compare(
+        ExecutionFeeEstimate? expectation,
+        OrderSide side,
+        Quantity fillQuantity,
+        Quantity? cumulativeFilledQuantity,
+        Price fillPrice,
+        DateTimeOffset occurredAtUtc)
+    {
+        if (occurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Fill timestamp must be UTC.", nameof(occurredAtUtc));
+        }
+
+        if (expectation?.ReferencePrice is not { } referencePrice ||
+            expectation.AuthorizedQuantity is not { } authorizedQuantity ||
+            expectation.DecisionAtUtc is not { } decisionAtUtc ||
+            cumulativeFilledQuantity is not { } cumulativeQuantity)
+        {
+            return new(null, null, null, "NOT_COMPARABLE", "EXECUTION_BENCHMARK_UNAVAILABLE");
+        }
+
+        if (cumulativeQuantity.Value < fillQuantity.Value || cumulativeQuantity.Value > authorizedQuantity)
+        {
+            return new(null, null, null, "NOT_COMPARABLE", "CUMULATIVE_FILL_INVALID");
+        }
+
+        if (occurredAtUtc < decisionAtUtc)
+        {
+            return new(null, null, null, "NOT_COMPARABLE", "FILL_PRECEDES_DECISION");
+        }
+
+        var ratio = cumulativeQuantity.Value / authorizedQuantity;
+        var shortfall = side == OrderSide.Buy
+            ? (fillPrice.Value - referencePrice) * fillQuantity.Value
+            : (referencePrice - fillPrice.Value) * fillQuantity.Value;
+        return new(ratio, shortfall, checked((occurredAtUtc - decisionAtUtc).Ticks / TimeSpan.TicksPerMillisecond),
+            "COMPARABLE", "EXECUTION_QUALITY_COMPARABLE");
     }
 }

@@ -21,6 +21,7 @@ public sealed class AccountStreamExecutionAccountingTests
         Assert.Equal(new Asset("BTC"), first.BaseAsset);
         Assert.Equal(new Asset("USDT"), first.QuoteAsset);
         Assert.Equal(new Money(0.001m, new Asset("USDT")), first.Commission);
+        Assert.Equal(new Quantity(0.01m), first.CumulativeExecutedQuantity);
     }
 
     [Fact]
