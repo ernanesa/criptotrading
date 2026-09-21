@@ -43,6 +43,7 @@ internal static class WorkerExecutionRegistration
                 serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
                 serviceProvider.GetRequiredService<ILocalOpenOrderStore>(),
                 serviceProvider.GetRequiredService<OrderProjectionService>(),
+                serviceProvider.GetRequiredService<IOrderCancellationStore>(),
                 serviceProvider.GetRequiredService<ILogger<TestnetCancelOutboxMessageExecutor>>()));
         }
 

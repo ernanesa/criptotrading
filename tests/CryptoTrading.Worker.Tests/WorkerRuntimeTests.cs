@@ -309,6 +309,8 @@ public sealed class WorkerRuntimeTests
             AccountStreamEnabled = true
         }));
         testnetServices.AddSingleton<ILocalOpenOrderStore, RecordingOpenOrderStore>();
+        testnetServices.AddSingleton<IOrderCancellationStore>(serviceProvider =>
+            new RecordingCancellationStore(serviceProvider.GetRequiredService<ILocalOpenOrderStore>()));
         testnetServices.AddSingleton<OrderProjectionService>();
         _ = testnetServices.AddOutboxExecution(configuration);
         _ = testnetServices.AddSingleton<IBinanceSpotOrderClient>(_ => new AmbiguousTestnetClient(NewCommand()));
@@ -780,6 +782,7 @@ public sealed class WorkerRuntimeTests
             Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
             store,
             new OrderProjectionService(store),
+            new RecordingCancellationStore(store),
             NullLogger<TestnetCancelOutboxMessageExecutor>.Instance);
 
     private static LeasedOutboxMessage MessageForPayload(SubmitOrderCommand command, string payload) => new(
@@ -792,6 +795,25 @@ public sealed class WorkerRuntimeTests
         1,
         command.CreatedAtUtc.AddMinutes(1),
         "test-worker");
+
+    private sealed class RecordingCancellationStore(ILocalOpenOrderStore openOrders) : IOrderCancellationStore
+    {
+        public Task<IReadOnlyList<CancelableExecutionSnapshot>> ReadExpiredCancellableExecutionsAsync(DateTimeOffset observedAtUtc, int limit = 100, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<CancelableExecutionSnapshot>>([]);
+
+        public Task<CancelOutboxRecord> EnqueueCancellationAsync(CancelOutboxRecord record, CancellationToken cancellationToken = default) => Task.FromResult(record);
+
+        public async Task<ExecutionReplanCandidate?> ResolveTerminalCancellationAsync(TerminalCancellationResolution resolution, CancellationToken cancellationToken = default)
+        {
+            var command = resolution.Command;
+            var candidate = resolution.Resolution.ResidualQuantity.Value == 0m ? null : new ExecutionReplanCandidate(
+                Guid.NewGuid(), command.OrderId, command.ClientOrderId, resolution.CancelMessageId, resolution.LifecycleEvent.EventId,
+                command.Symbol, command.Side, command.Type, resolution.Resolution.ResidualQuantity, command.Attempt + 1,
+                command.CorrelationId, resolution.LifecycleEvent.Transition.OccurredAtUtc);
+            await openOrders.RemoveOpenOrderAsync(command.ClientOrderId.Value, cancellationToken).ConfigureAwait(false);
+            return candidate;
+        }
+    }
 
     private sealed class SubmitThenTimeoutPaperExchange : IPaperExchange
     {
