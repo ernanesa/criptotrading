@@ -10,11 +10,13 @@ namespace CryptoTrading.Worker;
 /// </summary>
 internal sealed class RuntimeSupervisorHostedService(
     IRuntimeSupervisor supervisor,
+    IRuntimeSupervisorInitializer initializer,
     IAsyncOperationalControl operationalControl,
     ILogger<RuntimeSupervisorHostedService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await initializer.InitializeAsync(stoppingToken).ConfigureAwait(false);
         await supervisor.BeginBootstrappingAsync("worker-started", stoppingToken).ConfigureAwait(false);
         try
         {

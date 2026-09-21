@@ -58,14 +58,15 @@ public sealed class RuntimeSupervisor : IRuntimeSupervisor, IDisposable, IAsyncD
     public RuntimeSupervisor(
         IRuntimeTransitionSink? transitionSink = null,
         TimeProvider? timeProvider = null,
-        long initialRevision = 0)
+        long initialRevision = 0,
+        RuntimeState initialState = RuntimeState.Stopped)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(initialRevision);
         this.transitionSink = transitionSink ?? new InMemoryRuntimeTransitionSink();
         this.timeProvider = timeProvider ?? TimeProvider.System;
-        stateMachine = new RuntimeStateMachine(RuntimeState.Stopped, initialRevision);
+        stateMachine = new RuntimeStateMachine(initialState, initialRevision);
         snapshot = new(
-            RuntimeState.Stopped,
+            initialState,
             initialRevision,
             ReconciliationHealthy: false,
             AccountStreamConnected: false,
