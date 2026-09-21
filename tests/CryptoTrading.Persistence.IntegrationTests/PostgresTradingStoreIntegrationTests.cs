@@ -430,11 +430,14 @@ public sealed class PostgresTradingStoreIntegrationTests
             7_000_000_001,
             clientOrderId,
             "NEW",
-            createdAtUtc);
+            createdAtUtc,
+            OriginalQuantity: 0.01m,
+            CumulativeExecutedQuantity: 0m);
         var updated = initial with
         {
             Status = "PARTIALLY_FILLED",
             UpdatedAtUtc = createdAtUtc.AddSeconds(1),
+            CumulativeExecutedQuantity = 0.005m,
         };
 
         await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))

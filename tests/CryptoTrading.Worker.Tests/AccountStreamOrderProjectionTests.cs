@@ -17,6 +17,8 @@ public sealed class AccountStreamOrderProjectionTests
         Assert.Equal(42, record.OrderId);
         Assert.Equal("client-42", record.ClientOrderId);
         Assert.Equal("NEW", record.Status);
+        Assert.Equal(0.01m, record.OriginalQuantity);
+        Assert.Equal(0m, record.CumulativeExecutedQuantity);
     }
 
     [Fact]
@@ -46,7 +48,44 @@ public sealed class AccountStreamOrderProjectionTests
             AccountStreamOrderProjection.ApplyAsync(new RecordingStore(), Event("UNKNOWN")));
     }
 
-    private static BinanceExecutionReportEvent Event(string status) => new(
+    [Fact]
+    public async Task CumulativeExecutionAboveOriginalQuantityFailsClosedWithoutChangingProjection()
+    {
+        var store = new RecordingStore();
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.006m));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.011m)));
+
+        var record = Assert.Single(store.Records);
+        Assert.Equal(0.006m, record.CumulativeExecutedQuantity);
+    }
+
+    [Fact]
+    public async Task CumulativeExecutionRegressionFailsClosedWithoutChangingProjection()
+    {
+        var store = new RecordingStore();
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.006m));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.005m)));
+
+        Assert.Equal(0.006m, Assert.Single(store.Records).CumulativeExecutedQuantity);
+    }
+
+    [Fact]
+    public async Task FilledExecutionMustMatchOriginalQuantity()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AccountStreamOrderProjection.ApplyAsync(
+                new RecordingStore(),
+                Event("FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.009m)));
+    }
+
+    private static BinanceExecutionReportEvent Event(
+        string status,
+        decimal? originalQuantity = 0.01m,
+        decimal? cumulativeQuantity = null) => new(
         DateTimeOffset.UtcNow,
         1_700_000_000_123,
         "BTCUSDT",
@@ -58,10 +97,11 @@ public sealed class AccountStreamOrderProjectionTests
         status == "FILLED" ? "TRADE" : "NEW",
         status,
         status == "FILLED" ? 0.01m : 0m,
-        status == "FILLED" ? 0.01m : 0m,
+        cumulativeQuantity ?? (status == "FILLED" ? 0.01m : 0m),
         100.50m,
         0.001m,
-        "USDT");
+        "USDT",
+        originalQuantity);
 
     private sealed class RecordingStore : ILocalOpenOrderStore
     {

@@ -648,9 +648,16 @@ public sealed class WorkerRuntimeTests
             account,
             Options.Create(new WorkerRuntimeOptions
             {
-                ExecutionMode = "TESTNET", NoTrade = false, PersistenceEnabled = true, ApplyMigrations = true,
-                PostgresConnectionString = "Host=localhost", TestnetExecutionAcknowledged = true,
-                TestnetOrderExecutionEnabled = true, RiskPolicyRequired = true, ReconciliationEnabled = true, AccountStreamEnabled = true
+                ExecutionMode = "TESTNET",
+                NoTrade = false,
+                PersistenceEnabled = true,
+                ApplyMigrations = true,
+                PostgresConnectionString = "Host=localhost",
+                TestnetExecutionAcknowledged = true,
+                TestnetOrderExecutionEnabled = true,
+                RiskPolicyRequired = true,
+                ReconciliationEnabled = true,
+                AccountStreamEnabled = true
             }),
             Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
             new OrderProjectionService(store),
