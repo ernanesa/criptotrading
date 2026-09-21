@@ -7,6 +7,19 @@ namespace CryptoTrading.Domain.Tests;
 
 public sealed class ExecutionAccountingTests
 {
+    [Fact]
+    public void NegativeQuoteCommissionIsRecordedAsVenueRebate()
+    {
+        var command = Command(OrderSide.Buy, new Money(-.1m, Usdt));
+
+        var entry = ExecutionAccounting.CreateLedgerEntry(command);
+        var update = ExecutionAccounting.ApplyAverageCost(command, 0m, 0m);
+
+        Assert.Contains(entry.Postings, posting => posting.Account == Wallet && posting.Amount == new Money(.1m, Usdt));
+        Assert.Contains(entry.Postings, posting => posting.Account == Fees && posting.Amount == new Money(-.1m, Usdt));
+        Assert.Equal(99.9m, update.CostQuote);
+    }
+
     private static readonly Asset Btc = new("BTC");
     private static readonly Asset Usdt = new("USDT");
     private static readonly AccountId Wallet = new("exchange-wallet");
