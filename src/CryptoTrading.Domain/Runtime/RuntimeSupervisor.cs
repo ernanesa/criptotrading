@@ -179,11 +179,17 @@ public sealed class RuntimeSupervisor : IRuntimeSupervisor, IDisposable, IAsyncD
     public Task StopAsync(string reason, CancellationToken cancellationToken = default) =>
         ExecuteAsync(async () =>
         {
-            if (stateMachine.State is not RuntimeState.Stopped and not RuntimeState.Stopping)
+            if (stateMachine.State == RuntimeState.Stopped)
+            {
+                return;
+            }
+
+            if (stateMachine.State != RuntimeState.Stopping)
             {
                 await TransitionAsync(RuntimeState.Stopping, reason, cancellationToken).ConfigureAwait(false);
-                await TransitionAsync(RuntimeState.Stopped, "runtime-stopped", cancellationToken).ConfigureAwait(false);
             }
+
+            await TransitionAsync(RuntimeState.Stopped, "runtime-stopped", cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
     private async Task AdvanceReadinessAsync(string reason, CancellationToken cancellationToken)
