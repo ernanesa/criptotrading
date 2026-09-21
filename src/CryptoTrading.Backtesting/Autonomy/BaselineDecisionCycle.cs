@@ -24,7 +24,8 @@ public sealed record BaselineDecisionCycleRequest(
     decimal? AvailableAccountLiquidityNotional = null,
     FeeReservePolicy? FeeReservePolicy = null,
     EffectiveCommissionSnapshot? EffectiveCommission = null,
-    TimeSpan? CommissionMaximumAge = null)
+    TimeSpan? CommissionMaximumAge = null,
+    BaselineFeatureSnapshot? FeatureSnapshot = null)
 {
     public void Validate()
     {
@@ -32,6 +33,10 @@ public sealed record BaselineDecisionCycleRequest(
         ArgumentNullException.ThrowIfNull(Portfolio);
         ArgumentNullException.ThrowIfNull(RiskPolicy);
         ArgumentNullException.ThrowIfNull(OperationalControl);
+        if (FeatureSnapshot is not null && FeatureSnapshot.Bars.Count == 0)
+        {
+            throw new ArgumentException("Feature snapshot requires at least one closed bar.", nameof(FeatureSnapshot));
+        }
         if (Bars.Count == 0)
         {
             throw new ArgumentException("At least one closed bar is required.", nameof(Bars));
@@ -90,12 +95,23 @@ public sealed class BaselineDecisionCycle
     /// <summary>Version participates in the durable checkpoint scope and decision identity.</summary>
     public string StrategyVersion => strategy.Parameters.Version;
 
+    /// <summary>Immutable parameters used to derive feature snapshots for this cycle.</summary>
+    public TrendFollowingParameters Parameters => strategy.Parameters;
+
     public BaselineDecisionCycleResult Evaluate(BaselineDecisionCycleRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         request.Validate();
-        var decisions = strategy.Evaluate(request.Bars);
-        var decision = decisions[^1];
+        var snapshot = request.FeatureSnapshot ?? BaselineFeatureSnapshot.Create(
+            request.Bars.Select((bar, index) => new ClosedBarEnvelope(index, bar, bar.CloseTimeUtc)).ToArray(),
+            strategy.Parameters);
+        snapshot.ValidateFor(strategy.Parameters, request.Bars);
+        if (request.EvaluatedAtUtc < snapshot.AvailableAtUtc)
+        {
+            throw new InvalidOperationException("Baseline features cannot be evaluated before the latest bar is available.");
+        }
+
+        var decision = snapshot.Decision;
         if (decision.Signal == TrendFollowingSignal.NoTrade)
         {
             return new(decision, null, null, decision.Reason.ToString());
