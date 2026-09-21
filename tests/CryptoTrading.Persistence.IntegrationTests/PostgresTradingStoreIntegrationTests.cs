@@ -21,6 +21,35 @@ namespace CryptoTrading.Persistence.IntegrationTests;
 public sealed class PostgresTradingStoreIntegrationTests
 {
     [Fact]
+    public async Task TerminalCancellationAtomicallyDeactivatesOpenOrderAndPersistsIdempotentResidualCandidate()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var now = DateTimeOffset.UtcNow;
+        var command = new CancelOrderCommand(OrderId.New(), new ClientOrderId("cancel-" + Guid.NewGuid().ToString("N")[..8]), new Symbol("BTCUSDT"),
+            OrderSide.Buy, OrderType.Limit, new Quantity(.01m), new Quantity(.005m), new Price(10_000m), CorrelationId.New(),
+            new IdempotencyKey("cancel-key-" + Guid.NewGuid().ToString("N")[..8]), 0, now.AddMinutes(-2), now.AddMinutes(-1), "42");
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord(command.Symbol.Value, 42, command.ClientOrderId.Value, "PENDING_CANCEL", now, .01m, .005m));
+        var outcome = CancelLifecyclePlanner.Resolve(command, CancelVenueStatus.Canceled, new Quantity(.005m));
+        var transition = new OrderTransition(OrderStatus.CancelPending, outcome.ProjectedStatus, new IdempotencyKey("terminal-" + command.ClientOrderId.Value), now, "42");
+        var resolution = new TerminalCancellationResolution(command, outcome, Guid.NewGuid(), OrderLifecycleEvent.Create(command.ClientOrderId.Value, transition));
+
+        var first = await store.ResolveTerminalCancellationAsync(resolution);
+        var replay = await store.ResolveTerminalCancellationAsync(resolution);
+
+        Assert.NotNull(first);
+        Assert.Equal(first, replay);
+        Assert.DoesNotContain(await store.ReadOpenOrdersAsync(), item => item.ClientOrderId == command.ClientOrderId.Value);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var count = new NpgsqlCommand("SELECT count(*) FROM trading.execution_replan_candidates WHERE cancel_message_id = @message_id;", connection);
+        count.Parameters.AddWithValue("message_id", resolution.CancelMessageId);
+        Assert.Equal(1L, await count.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task ExpiredCancellationScanSkipsAlreadyEnqueuedOrderAndReturnsNextEligibleOrder()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");

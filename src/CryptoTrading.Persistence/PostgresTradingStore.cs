@@ -125,6 +125,28 @@ public sealed record OrderLifecycleEvent(
     }
 }
 
+/// <summary>Immutable, non-dispatchable residual discovered after a terminal cancel.</summary>
+public sealed record ExecutionReplanCandidate(
+    Guid CandidateId,
+    OrderId OriginOrderId,
+    ClientOrderId OriginClientOrderId,
+    Guid CancelMessageId,
+    Guid TerminalLifecycleEventId,
+    Symbol Symbol,
+    OrderSide Side,
+    OrderType Type,
+    Quantity ResidualQuantity,
+    int NextAttempt,
+    CorrelationId CorrelationId,
+    DateTimeOffset CreatedAtUtc);
+
+/// <summary>Atomic terminal cancel outcome: journal, open-order deactivation, and optional replan candidate.</summary>
+public sealed record TerminalCancellationResolution(
+    CancelOrderCommand Command,
+    CancelResolution Resolution,
+    Guid CancelMessageId,
+    OrderLifecycleEvent LifecycleEvent);
+
 public interface IExpectedExecutionFeeStore
 {
     Task RecordExpectedExecutionFeeAsync(
@@ -153,6 +175,10 @@ public interface IOrderCancellationStore
 
     Task<CancelOutboxRecord> EnqueueCancellationAsync(
         CancelOutboxRecord record,
+        CancellationToken cancellationToken = default);
+
+    Task<ExecutionReplanCandidate?> ResolveTerminalCancellationAsync(
+        TerminalCancellationResolution resolution,
         CancellationToken cancellationToken = default);
 }
 
@@ -1988,6 +2014,67 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         return record;
     }
 
+    public async Task<ExecutionReplanCandidate?> ResolveTerminalCancellationAsync(
+        TerminalCancellationResolution resolution,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(resolution);
+        var command = resolution.Command;
+        var outcome = resolution.Resolution;
+        if (outcome.ProjectedStatus is not (OrderStatus.Filled or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired)
+            || resolution.LifecycleEvent.Transition.To != outcome.ProjectedStatus
+            || outcome.ExecutedQuantity.Value < 0m || outcome.ExecutedQuantity.Value > command.OriginalQuantity.Value
+            || outcome.ResidualQuantity.Value != command.OriginalQuantity.Value - outcome.ExecutedQuantity.Value)
+        {
+            throw new ArgumentException("Terminal cancellation resolution is inconsistent.", nameof(resolution));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await InsertLifecycleEventAsync(connection, transaction, resolution.LifecycleEvent, cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction,
+            "UPDATE trading.reconciliation_open_orders SET active = FALSE, updated_at = transaction_timestamp() WHERE client_order_id = @client_order_id;",
+            [Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value)], cancellationToken).ConfigureAwait(false);
+
+        ExecutionReplanCandidate? candidate = null;
+        if (outcome.ResidualQuantity.Value > 0m && outcome.Action == CancelResolutionAction.ReplanResidual)
+        {
+            candidate = CreateReplanCandidate(resolution);
+            var inserted = await ExecuteScalarAsync(connection, transaction,
+                """
+                INSERT INTO trading.execution_replan_candidates
+                    (candidate_id, origin_order_id, origin_client_order_id, cancel_message_id, terminal_lifecycle_event_id,
+                     symbol, side, order_type, residual_quantity, next_attempt, correlation_id, created_at)
+                VALUES (@candidate_id, @origin_order_id, @origin_client_order_id, @cancel_message_id, @terminal_lifecycle_event_id,
+                        @symbol, @side, @order_type, @residual_quantity, @next_attempt, @correlation_id, @created_at)
+                ON CONFLICT DO NOTHING RETURNING candidate_id;
+                """,
+                [Parameter("candidate_id", NpgsqlDbType.Uuid, candidate.CandidateId), Parameter("origin_order_id", NpgsqlDbType.Uuid, command.OrderId.Value),
+                 Parameter("origin_client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value), Parameter("cancel_message_id", NpgsqlDbType.Uuid, resolution.CancelMessageId),
+                 Parameter("terminal_lifecycle_event_id", NpgsqlDbType.Uuid, resolution.LifecycleEvent.EventId), Parameter("symbol", NpgsqlDbType.Varchar, command.Symbol.Value),
+                 Parameter("side", NpgsqlDbType.Varchar, command.Side.ToString().ToUpperInvariant()), Parameter("order_type", NpgsqlDbType.Varchar, command.Type.ToString().ToUpperInvariant()),
+                 Parameter("residual_quantity", NpgsqlDbType.Numeric, outcome.ResidualQuantity.Value), Parameter("next_attempt", NpgsqlDbType.Integer, command.Attempt + 1),
+                 Parameter("correlation_id", NpgsqlDbType.Uuid, command.CorrelationId.Value), Parameter("created_at", NpgsqlDbType.TimestampTz, resolution.LifecycleEvent.Transition.OccurredAtUtc.UtcDateTime)], cancellationToken).ConfigureAwait(false);
+            if (inserted is null or DBNull)
+            {
+                var existing = await ReadReplanCandidateAsync(connection, transaction, resolution.CancelMessageId, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Replan candidate uniqueness conflict has no durable record.");
+                if (existing.CandidateId != candidate.CandidateId || existing.OriginOrderId != candidate.OriginOrderId
+                    || existing.OriginClientOrderId != candidate.OriginClientOrderId || existing.CancelMessageId != candidate.CancelMessageId
+                    || existing.TerminalLifecycleEventId != candidate.TerminalLifecycleEventId || existing.Symbol != candidate.Symbol
+                    || existing.Side != candidate.Side || existing.Type != candidate.Type || existing.ResidualQuantity != candidate.ResidualQuantity
+                    || existing.NextAttempt != candidate.NextAttempt || existing.CorrelationId != candidate.CorrelationId
+                    || existing.CreatedAtUtc.UtcTicks / 10 != candidate.CreatedAtUtc.UtcTicks / 10)
+                {
+                    throw new InvalidOperationException("Replan candidate identity is already associated with different data.");
+                }
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return candidate;
+    }
+
     public async Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default)
@@ -2576,6 +2663,57 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? (reader.GetString(0), reader.GetString(1), new CorrelationId(reader.GetGuid(2)),
                 reader.IsDBNull(3) ? null : reader.GetString(3))
+            : null;
+    }
+
+    private static ExecutionReplanCandidate CreateReplanCandidate(TerminalCancellationResolution resolution)
+    {
+        var command = resolution.Command;
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes($"replan|{resolution.CancelMessageId:N}|{command.OrderId}|{command.Attempt + 1}"));
+        return new(new Guid(hash[..16]), command.OrderId, command.ClientOrderId, resolution.CancelMessageId,
+            resolution.LifecycleEvent.EventId, command.Symbol, command.Side, command.Type,
+            resolution.Resolution.ResidualQuantity, command.Attempt + 1, command.CorrelationId,
+            resolution.LifecycleEvent.Transition.OccurredAtUtc);
+    }
+
+    private static async Task InsertLifecycleEventAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, OrderLifecycleEvent lifecycleEvent, CancellationToken cancellationToken)
+    {
+        var transition = lifecycleEvent.Transition;
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.order_lifecycle_events
+                (event_id, client_order_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id)
+            VALUES (@event_id, @client_order_id, @from_status, @to_status, @idempotency_key, @occurred_at, @exchange_order_id)
+            ON CONFLICT (idempotency_key) DO NOTHING RETURNING event_id;
+            """,
+            [Parameter("event_id", NpgsqlDbType.Uuid, lifecycleEvent.EventId), Parameter("client_order_id", NpgsqlDbType.Varchar, lifecycleEvent.ClientOrderId),
+             Parameter("from_status", NpgsqlDbType.Varchar, transition.From.ToString()), Parameter("to_status", NpgsqlDbType.Varchar, transition.To.ToString()),
+             Parameter("idempotency_key", NpgsqlDbType.Varchar, transition.IdempotencyKey.Value), Parameter("occurred_at", NpgsqlDbType.TimestampTz, transition.OccurredAtUtc.UtcDateTime),
+             Parameter("exchange_order_id", NpgsqlDbType.Varchar, transition.ExchangeOrderId)], cancellationToken).ConfigureAwait(false);
+        if (inserted is not null and not DBNull) return;
+        await using var command = new NpgsqlCommand("SELECT event_id, client_order_id, from_status, to_status, occurred_at, exchange_order_id FROM trading.order_lifecycle_events WHERE idempotency_key = @idempotency_key;", connection, transaction);
+        command.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, transition.IdempotencyKey.Value));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) || reader.GetGuid(0) != lifecycleEvent.EventId
+            || !string.Equals(reader.GetString(1), lifecycleEvent.ClientOrderId, StringComparison.Ordinal)
+            || !string.Equals(reader.GetString(2), transition.From.ToString(), StringComparison.Ordinal)
+            || !string.Equals(reader.GetString(3), transition.To.ToString(), StringComparison.Ordinal)
+            || !MatchesPostgresTimestamp(reader.GetFieldValue<DateTime>(4), transition.OccurredAtUtc)
+            || (reader.IsDBNull(5) ? !string.IsNullOrWhiteSpace(transition.ExchangeOrderId) : !string.Equals(reader.GetString(5), transition.ExchangeOrderId, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("The lifecycle idempotency key is already associated with different event data.");
+        }
+    }
+
+    private static async Task<ExecutionReplanCandidate?> ReadReplanCandidateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid cancelMessageId, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("SELECT candidate_id, origin_order_id, origin_client_order_id, terminal_lifecycle_event_id, symbol, side, order_type, residual_quantity, next_attempt, correlation_id, created_at FROM trading.execution_replan_candidates WHERE cancel_message_id = @cancel_message_id;", connection, transaction);
+        command.Parameters.Add(Parameter("cancel_message_id", NpgsqlDbType.Uuid, cancelMessageId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new(reader.GetGuid(0), new OrderId(reader.GetGuid(1)), new ClientOrderId(reader.GetString(2)), cancelMessageId, reader.GetGuid(3), new Symbol(reader.GetString(4)),
+                reader.GetString(5) == "BUY" ? OrderSide.Buy : OrderSide.Sell, reader.GetString(6) == "LIMIT" ? OrderType.Limit : OrderType.Market,
+                new Quantity(reader.GetDecimal(7)), reader.GetInt32(8), new CorrelationId(reader.GetGuid(9)), new DateTimeOffset(reader.GetFieldValue<DateTime>(10).ToUniversalTime()))
             : null;
     }
 

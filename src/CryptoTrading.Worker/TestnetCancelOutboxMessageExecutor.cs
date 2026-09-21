@@ -23,6 +23,7 @@ public sealed class TestnetCancelOutboxMessageExecutor(
     IOptions<TradingOptions> tradingOptions,
     ILocalOpenOrderStore openOrders,
     OrderProjectionService projection,
+    IOrderCancellationStore cancellations,
     ILogger<TestnetCancelOutboxMessageExecutor> logger) : IOutboxMessageExecutor
 {
     public string MessageType => CancelLifecyclePlanner.CancelOrderMessageType;
@@ -165,13 +166,19 @@ public sealed class TestnetCancelOutboxMessageExecutor(
         var occurredAtUtc = result.TransactTimeMilliseconds > 0
             ? DateTimeOffset.FromUnixTimeMilliseconds(result.TransactTimeMilliseconds)
             : DateTimeOffset.UtcNow;
-        await projection.TransitionAndProjectAsync(
-            order,
-            resolution.ProjectedStatus,
-            new IdempotencyKey($"cancel-resolution:{messageId:N}:{status}"),
-            occurredAtUtc,
-            result.OrderId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        var idempotencyKey = new IdempotencyKey($"cancel-resolution:{messageId:N}:{status}");
+        if (resolution.ProjectedStatus is OrderStatus.Filled or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired)
+        {
+            var transition = order.TransitionTo(resolution.ProjectedStatus, idempotencyKey, occurredAtUtc,
+                result.OrderId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            await cancellations.ResolveTerminalCancellationAsync(
+                new TerminalCancellationResolution(command, resolution, messageId,
+                    OrderLifecycleEvent.Create(command.ClientOrderId.Value, transition)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await projection.TransitionAndProjectAsync(order, resolution.ProjectedStatus, idempotencyKey, occurredAtUtc,
+            result.OrderId.ToString(System.Globalization.CultureInfo.InvariantCulture), cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private Task<OrderTransition> ProjectUnknownAsync(Order order, LocalOpenOrderRecord existing, Guid messageId, CancellationToken cancellationToken) =>
