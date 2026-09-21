@@ -21,6 +21,40 @@ namespace CryptoTrading.Persistence.IntegrationTests;
 public sealed class PostgresTradingStoreIntegrationTests
 {
     [Fact]
+    public async Task AppendsOrderLifecycleEventsIdempotentlyAndRejectsConflictingReplay()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var clientOrderId = "ct-lifecycle-" + suffix;
+        var occurredAtUtc = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var transition = new OrderTransition(
+            OrderStatus.Validated, OrderStatus.Submitted, new IdempotencyKey("lifecycle-" + suffix), occurredAtUtc, "12345");
+        var lifecycleEvent = OrderLifecycleEvent.Create(clientOrderId, transition);
+
+        Assert.True(await store.AppendOrderLifecycleEventAsync(lifecycleEvent));
+        Assert.False(await store.AppendOrderLifecycleEventAsync(lifecycleEvent));
+
+        var conflicting = OrderLifecycleEvent.Create(
+            clientOrderId,
+            transition with { To = OrderStatus.Rejected });
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendOrderLifecycleEventAsync(conflicting));
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM trading.order_lifecycle_events WHERE client_order_id = @client_order_id;", connection);
+        command.Parameters.AddWithValue("client_order_id", clientOrderId);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task PersistsExecutionLedgerPositionAndRealizedPnlIdempotently()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");

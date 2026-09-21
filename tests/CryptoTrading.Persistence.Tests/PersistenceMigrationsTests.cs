@@ -31,11 +31,12 @@ public sealed class PersistenceMigrationsTests
                 "018_execution_fill_quality.down.sql", "018_execution_fill_quality.up.sql",
                 "019_execution_submission_context.down.sql", "019_execution_submission_context.up.sql",
                 "020_execution_commission_rebates.down.sql", "020_execution_commission_rebates.up.sql",
+                "021_order_lifecycle_events.down.sql", "021_order_lifecycle_events.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -85,5 +86,6 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("implementation_shortfall_quote", upMigrations[17].Sql, StringComparison.Ordinal);
         Assert.Contains("execution_submission_context", upMigrations[18].Sql, StringComparison.Ordinal);
         Assert.Contains("DROP CONSTRAINT IF EXISTS execution_fills_commission_non_negative", upMigrations[19].Sql, StringComparison.Ordinal);
+        Assert.Contains("order_lifecycle_events", upMigrations[20].Sql, StringComparison.Ordinal);
     }
 }
