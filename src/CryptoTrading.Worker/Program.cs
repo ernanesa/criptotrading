@@ -142,6 +142,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IExpectedExecutionFeeStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IOrderCancellationStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOrderLifecycleStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
@@ -241,6 +243,12 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
     builder.Services.AddHostedService<AccountStreamHostedService>();
 }
 builder.Services.AddHostedService<OutboxDispatcher>();
+if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) &&
+    string.Equals(builder.Configuration["WORKER_EXECUTION_MODE"], "TESTNET", StringComparison.OrdinalIgnoreCase) &&
+    !builder.Configuration.GetValue("WORKER_NO_TRADE", true))
+{
+    builder.Services.AddHostedService<ExpiredOrderCancellationHostedService>();
+}
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();
 if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
 {
