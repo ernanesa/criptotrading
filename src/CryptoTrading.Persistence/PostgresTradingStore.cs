@@ -14,6 +14,7 @@ using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Research;
+using CryptoTrading.Domain.Runtime;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
@@ -147,6 +148,8 @@ public sealed record TerminalCancellationResolution(
     Guid CancelMessageId,
     OrderLifecycleEvent LifecycleEvent);
 
+public sealed record RuntimeStateCheckpoint(RuntimeState State, long Revision);
+
 public interface IExpectedExecutionFeeStore
 {
     Task RecordExpectedExecutionFeeAsync(
@@ -184,6 +187,13 @@ public interface IOrderCancellationStore
     Task<IReadOnlyList<ExecutionReplanCandidate>> ReadReplanCandidatesAsync(
         int limit = 100,
         CancellationToken cancellationToken = default);
+}
+
+/// <summary>Durable append-only runtime lifecycle and monotonic checkpoint boundary.</summary>
+public interface IRuntimeStateStore
+{
+    Task<RuntimeStateCheckpoint> ReadRuntimeStateAsync(CancellationToken cancellationToken = default);
+    Task AppendRuntimeTransitionAsync(RuntimeStateTransition transition, CancellationToken cancellationToken = default);
 }
 
 public interface IExecutionAttributionReportStore
@@ -386,7 +396,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -2097,6 +2107,37 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         return candidates;
     }
 
+    public async Task<RuntimeStateCheckpoint> ReadRuntimeStateAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand("SELECT state, revision FROM trading.runtime_state_checkpoints WHERE scope = 'worker';", connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return new(RuntimeState.Stopped, 0);
+        return new(ParseRuntimeState(reader.GetString(0)), reader.GetInt64(1));
+    }
+
+    public async Task AppendRuntimeTransitionAsync(RuntimeStateTransition transition, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(transition);
+        if (transition.Revision < 1 || transition.OccurredAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Runtime transition revision and timestamp are invalid.", nameof(transition));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var prior = await ReadRuntimeStateForUpdateAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        if (prior.Revision != transition.Revision - 1 || prior.State != transition.From)
+        {
+            var replay = await ReadRuntimeTransitionAsync(connection, transaction, transition.Revision, cancellationToken).ConfigureAwait(false);
+            if (RuntimeTransitionsEquivalent(replay, transition)) { await transaction.CommitAsync(cancellationToken).ConfigureAwait(false); return; }
+            throw new InvalidOperationException("Runtime transition revision or predecessor state conflicts with durable checkpoint.");
+        }
+        await ExecuteAsync(connection, transaction,
+            "INSERT INTO trading.runtime_state_transitions (revision, from_state, to_state, reason, occurred_at, correlation_id) VALUES (@revision, @from_state, @to_state, @reason, @occurred_at, @correlation_id);",
+            [Parameter("revision", NpgsqlDbType.Bigint, transition.Revision), Parameter("from_state", NpgsqlDbType.Varchar, transition.From.ToString()), Parameter("to_state", NpgsqlDbType.Varchar, transition.To.ToString()), Parameter("reason", NpgsqlDbType.Varchar, transition.Reason), Parameter("occurred_at", NpgsqlDbType.TimestampTz, transition.OccurredAtUtc.UtcDateTime), Parameter("correlation_id", NpgsqlDbType.Varchar, transition.CorrelationId)], cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction,
+            "INSERT INTO trading.runtime_state_checkpoints (scope, state, revision) VALUES ('worker', @state, @revision) ON CONFLICT (scope) DO UPDATE SET state = EXCLUDED.state, revision = EXCLUDED.revision, updated_at = transaction_timestamp();",
+            [Parameter("state", NpgsqlDbType.Varchar, transition.To.ToString()), Parameter("revision", NpgsqlDbType.Bigint, transition.Revision)], cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default)
@@ -2696,6 +2737,32 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             resolution.LifecycleEvent.EventId, command.Symbol, command.Side, command.Type,
             resolution.Resolution.ResidualQuantity, command.Attempt + 1, command.CorrelationId,
             resolution.LifecycleEvent.Transition.OccurredAtUtc);
+    }
+
+    private static RuntimeState ParseRuntimeState(string value) => Enum.TryParse<RuntimeState>(value, out var state) && Enum.IsDefined(state)
+        ? state : throw new InvalidOperationException("Persisted runtime state is unsupported.");
+
+    private static bool RuntimeTransitionsEquivalent(RuntimeStateTransition? existing, RuntimeStateTransition candidate) =>
+        existing is not null && existing.From == candidate.From && existing.To == candidate.To && existing.Revision == candidate.Revision
+        && string.Equals(existing.Reason, candidate.Reason, StringComparison.Ordinal)
+        && existing.OccurredAtUtc.UtcTicks / 10 == candidate.OccurredAtUtc.UtcTicks / 10
+        && string.Equals(existing.CorrelationId, candidate.CorrelationId, StringComparison.Ordinal);
+
+    private static async Task<RuntimeStateCheckpoint> ReadRuntimeStateForUpdateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("SELECT state, revision FROM trading.runtime_state_checkpoints WHERE scope = 'worker' FOR UPDATE;", connection, transaction);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new(ParseRuntimeState(reader.GetString(0)), reader.GetInt64(1)) : new(RuntimeState.Stopped, 0);
+    }
+
+    private static async Task<RuntimeStateTransition?> ReadRuntimeTransitionAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, long revision, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("SELECT from_state, to_state, reason, occurred_at, correlation_id FROM trading.runtime_state_transitions WHERE revision = @revision;", connection, transaction);
+        command.Parameters.Add(Parameter("revision", NpgsqlDbType.Bigint, revision));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new(ParseRuntimeState(reader.GetString(0)), ParseRuntimeState(reader.GetString(1)), revision, reader.GetString(2), new DateTimeOffset(reader.GetFieldValue<DateTime>(3).ToUniversalTime()), reader.IsDBNull(4) ? null : reader.GetString(4)) : null;
     }
 
     private static async Task InsertLifecycleEventAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, OrderLifecycleEvent lifecycleEvent, CancellationToken cancellationToken)
