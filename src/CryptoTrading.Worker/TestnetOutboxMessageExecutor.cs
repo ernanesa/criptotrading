@@ -52,6 +52,7 @@ public sealed class TestnetOutboxMessageExecutor(
             throw new InvalidOperationException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
         }
 
+        ValidateCurrentCommission(command, DateTimeOffset.UtcNow);
         await ValidateAvailableBalanceAsync(command, runtime, cancellationToken).ConfigureAwait(false);
 
         var request = new BinanceSpotOrderRequest(
@@ -163,11 +164,23 @@ public sealed class TestnetOutboxMessageExecutor(
             return;
         }
 
-        var rate = command.EstimatedCommissionRate ?? 0m;
+        var rate = command.EstimatedCommissionRate!.Value;
         if (!new FeeReservePolicy(runtime.AutonomyFeeReserveBps).TryCalculate(command.AuthorizedNotional, rate, out var reserve) ||
             command.AuthorizedNotional + reserve >= free)
         {
             throw new InvalidOperationException("Insufficient free quote balance including fee reserve for Testnet BUY.");
+        }
+    }
+
+    private static void ValidateCurrentCommission(SubmitOrderCommand command, DateTimeOffset nowUtc)
+    {
+        if (nowUtc.Offset != TimeSpan.Zero || command.EstimatedCommissionRate is not { } rate || rate < 0m ||
+            string.IsNullOrWhiteSpace(command.CommissionSnapshotHash) || string.IsNullOrWhiteSpace(command.CommissionSource) ||
+            command.CommissionObservedAtUtc is not { } observedAtUtc || command.CommissionValidUntilUtc is not { } validUntilUtc ||
+            observedAtUtc.Offset != TimeSpan.Zero || validUntilUtc.Offset != TimeSpan.Zero ||
+            observedAtUtc > validUntilUtc || nowUtc > validUntilUtc)
+        {
+            throw new InvalidOperationException("Testnet submission requires a complete, currently valid commission snapshot.");
         }
     }
 
