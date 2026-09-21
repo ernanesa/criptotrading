@@ -26,7 +26,8 @@ public sealed record ExecutionAccountingCommand
         string? clientOrderId = null,
         ExecutionFeeEstimate? feeEstimate = null,
         decimal feeDriftToleranceBps = ExecutionFeeDriftEvaluator.DefaultToleranceBps,
-        ExecutionFeeAssetValuation? feeAssetValuation = null)
+        ExecutionFeeAssetValuation? feeAssetValuation = null,
+        Quantity? cumulativeExecutedQuantity = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
         if (executionId.Length > 200) throw new ArgumentOutOfRangeException(nameof(executionId));
@@ -35,6 +36,10 @@ public sealed record ExecutionAccountingCommand
         if (occurredAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Execution timestamps must be UTC.", nameof(occurredAtUtc));
         if (commission.Amount < 0m) throw new ArgumentOutOfRangeException(nameof(commission));
         if (feeDriftToleranceBps < 0m || feeDriftToleranceBps > 10_000m) throw new ArgumentOutOfRangeException(nameof(feeDriftToleranceBps));
+        if (cumulativeExecutedQuantity is { } cumulative && cumulative.Value < quantity.Value)
+        {
+            throw new ArgumentOutOfRangeException(nameof(cumulativeExecutedQuantity), "Cumulative execution quantity cannot be below this fill.");
+        }
 
         ExecutionId = executionId.Trim();
         TradeId = tradeId;
@@ -56,6 +61,7 @@ public sealed record ExecutionAccountingCommand
         FeeEstimate = feeEstimate;
         FeeDriftToleranceBps = feeDriftToleranceBps;
         FeeAssetValuation = feeAssetValuation;
+        CumulativeExecutedQuantity = cumulativeExecutedQuantity;
     }
 
     public string ExecutionId { get; }
@@ -78,6 +84,7 @@ public sealed record ExecutionAccountingCommand
     public ExecutionFeeEstimate? FeeEstimate { get; }
     public decimal FeeDriftToleranceBps { get; }
     public ExecutionFeeAssetValuation? FeeAssetValuation { get; }
+    public Quantity? CumulativeExecutedQuantity { get; }
 }
 
 public sealed record ExecutionAccountingResult(
@@ -86,7 +93,8 @@ public sealed record ExecutionAccountingResult(
     decimal? RealizedPnlQuote,
     decimal? AverageCostQuote,
     bool IsDuplicate,
-    ExecutionFeeComparison? FeeComparison = null);
+    ExecutionFeeComparison? FeeComparison = null,
+    ExecutionQualityComparison? QualityComparison = null);
 
 /// <summary>Pure construction of balanced postings for one spot trade.</summary>
 public static class ExecutionAccounting

@@ -88,6 +88,8 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal(estimate.Rate, persistedEstimate.Rate);
         Assert.Equal(estimate.SnapshotHash, persistedEstimate.SnapshotHash);
         Assert.Equal(estimate.Source, persistedEstimate.Source);
+        Assert.Equal(100m, persistedEstimate.ReferencePrice);
+        Assert.Equal(1m, persistedEstimate.AuthorizedQuantity);
 
         var tradeId = Convert.ToInt64(suffix, 16);
         var accounting = new ExecutionAccountingCommand(
@@ -95,15 +97,19 @@ public sealed class PostgresTradingStoreIntegrationTests
             submit.Symbol, new Asset("FEE" + suffix), new Asset("USDT"), OrderSide.Buy, new Quantity(1m), new Price(100m),
             new Money(.002m, new Asset("BNB")), new AccountId("integration-fee-wallet-" + suffix),
             new AccountId("integration-fee-expense-" + suffix), LedgerEntryId.New(), CorrelationId.New(), IdempotencyKey.New(), now,
-            clientOrderId.Value, estimate, 25m,
-            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 100m, now, "integration:bnb-valuation"));
+            clientOrderId.Value, persistedEstimate, 25m,
+            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 100m, now, "integration:bnb-valuation"),
+            new Quantity(1m));
         var result = await store.RecordExecutionAsync(accounting);
 
         Assert.True(result.FeeComparison!.IsDrift);
+        Assert.Equal("COMPARABLE", result.QualityComparison!.Status);
+        Assert.Equal(1m, result.QualityComparison.FillRatio);
+        Assert.Equal(0m, result.QualityComparison.ImplementationShortfallQuote);
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
         await using var query = new NpgsqlCommand(
-            "SELECT client_order_id, fee_comparison_status, fee_comparison_reason, commission_valuation_source FROM trading.execution_fills WHERE trade_id = @trade_id;",
+            "SELECT client_order_id, fee_comparison_status, fee_comparison_reason, commission_valuation_source, cumulative_fill_ratio, implementation_shortfall_quote, execution_quality_status FROM trading.execution_fills WHERE trade_id = @trade_id;",
             connection);
         query.Parameters.AddWithValue("trade_id", tradeId);
         await using var reader = await query.ExecuteReaderAsync();
@@ -112,6 +118,9 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal("DRIFT", reader.GetString(1));
         Assert.Equal("EXECUTION_FEE_DRIFT", reader.GetString(2));
         Assert.Equal("integration:bnb-valuation", reader.GetString(3));
+        Assert.Equal(1m, reader.GetDecimal(4));
+        Assert.Equal(0m, reader.GetDecimal(5));
+        Assert.Equal("COMPARABLE", reader.GetString(6));
     }
 
     [Fact]
