@@ -21,6 +21,31 @@ namespace CryptoTrading.Persistence.IntegrationTests;
 public sealed class PostgresTradingStoreIntegrationTests
 {
     [Fact]
+    public async Task ExpiredCancellationScanSkipsAlreadyEnqueuedOrderAndReturnsNextEligibleOrder()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var now = DateTimeOffset.UtcNow;
+        var first = NewExpiredSubmit("ttl-a-" + Guid.NewGuid().ToString("N")[..8], now);
+        var second = NewExpiredSubmit("ttl-b-" + Guid.NewGuid().ToString("N")[..8], now);
+        foreach (var command in new[] { first, second })
+        {
+            await store.EnqueueAsync(new OutboxRecord(Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, command.CorrelationId, command.IdempotencyKey, "ttl", command, OutboxRecordStatus.Pending, command.CreatedAtUtc));
+            await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord(command.Symbol.Value, 42, command.ClientOrderId.Value, "NEW", now, command.Quantity.Value, 0m));
+            await store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(command.ClientOrderId.Value, new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged, new IdempotencyKey("ack-" + command.ClientOrderId.Value), now, "42")));
+        }
+        var firstPlan = CancelLifecyclePlanner.Plan((await store.ReadExpiredCancellableExecutionsAsync(now)).Single(item => item.ClientOrderId == first.ClientOrderId));
+        await store.EnqueueCancellationAsync(firstPlan.OutboxRecord!);
+        await store.EnqueueCancellationAsync(firstPlan.OutboxRecord!);
+
+        var eligible = await store.ReadExpiredCancellableExecutionsAsync(now);
+
+        var snapshot = Assert.Single(eligible);
+        Assert.Equal(second.ClientOrderId, snapshot.ClientOrderId);
+    }
+    [Fact]
     public async Task AppendsOrderLifecycleEventsIdempotentlyAndRejectsConflictingReplay()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
@@ -774,4 +799,9 @@ public sealed class PostgresTradingStoreIntegrationTests
 
     private static string Hash(string value) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
+
+    private static SubmitOrderCommand NewExpiredSubmit(string clientOrderId, DateTimeOffset now) => new(
+        OrderId.New(), new ClientOrderId(clientOrderId), new Symbol("BTCUSDT"), OrderSide.Buy, OrderType.Limit,
+        new Quantity(.01m), new Price(10_000m), 100m, CorrelationId.New(), new IdempotencyKey("submit-" + clientOrderId), "ttl", now.AddMinutes(-2),
+        ExecutionAttempt: 0, ExecutionExpiresAtUtc: now.AddMinutes(-1));
 }

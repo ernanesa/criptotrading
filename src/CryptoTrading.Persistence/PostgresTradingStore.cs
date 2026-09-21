@@ -143,6 +143,19 @@ public interface IExecutionSubmissionContextStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable source and outbox boundary for expired passive-order cancellations.</summary>
+public interface IOrderCancellationStore
+{
+    Task<IReadOnlyList<CancelableExecutionSnapshot>> ReadExpiredCancellableExecutionsAsync(
+        DateTimeOffset observedAtUtc,
+        int limit = 100,
+        CancellationToken cancellationToken = default);
+
+    Task<CancelOutboxRecord> EnqueueCancellationAsync(
+        CancelOutboxRecord record,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IExecutionAttributionReportStore
 {
     Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
@@ -343,7 +356,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1826,7 +1839,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
 
         if (inserted is null or DBNull)
         {
-            var existing = await ReadExistingOutboxIdentityAsync(connection, transaction, record, cancellationToken).ConfigureAwait(false)
+            var existing = await ReadExistingOutboxIdentityAsync(connection, transaction, record.MessageId, record.IdempotencyKey.Value, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("The outbox uniqueness constraint reported a conflict, but no message was found.");
             if (!string.Equals(existing.EventType, record.MessageType, StringComparison.Ordinal)
                 || !EquivalentJson(existing.PayloadJson, payload)
@@ -1871,6 +1884,108 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             new Quantity(reader.GetDecimal(6)), new Price(reader.GetDecimal(7)), reader.GetDecimal(8), reader.GetInt32(9),
             new DateTimeOffset(reader.GetFieldValue<DateTime>(10).ToUniversalTime()),
             reader.IsDBNull(11) ? null : new DateTimeOffset(reader.GetFieldValue<DateTime>(11).ToUniversalTime()));
+    }
+
+    public async Task<IReadOnlyList<CancelableExecutionSnapshot>> ReadExpiredCancellableExecutionsAsync(
+        DateTimeOffset observedAtUtc,
+        int limit = 100,
+        CancellationToken cancellationToken = default)
+    {
+        if (observedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Cancellation scan time must be UTC.", nameof(observedAtUtc));
+        }
+
+        if (limit is < 1 or > 1_000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT context.application_order_id, context.client_order_id, context.symbol, context.side, context.order_type,
+                   COALESCE(open_order.original_quantity, context.authorized_quantity),
+                   COALESCE(open_order.cumulative_executed_quantity, 0), context.reference_price,
+                   context.correlation_id, context.execution_attempt, context.expires_at, open_order.order_id, lifecycle.to_status,
+                   submission.idempotency_key
+            FROM trading.execution_submission_context AS context
+            JOIN trading.outbox_messages AS submission ON submission.message_id = context.outbox_message_id
+            JOIN trading.reconciliation_open_orders AS open_order ON open_order.client_order_id = context.client_order_id AND open_order.active = TRUE
+            JOIN LATERAL (
+                SELECT to_status FROM trading.order_lifecycle_events
+                WHERE client_order_id = context.client_order_id
+                ORDER BY occurred_at DESC, event_id DESC LIMIT 1
+            ) AS lifecycle ON TRUE
+            WHERE context.expires_at IS NOT NULL AND context.expires_at <= @observed_at
+              AND lifecycle.to_status IN ('Acknowledged', 'PartiallyFilled')
+              AND NOT EXISTS (
+                  SELECT 1 FROM trading.outbox_messages AS cancellation
+                  WHERE cancellation.aggregate_id = replace(context.application_order_id::text, '-', '')
+                    AND cancellation.event_type = 'orders.cancel.v1')
+            ORDER BY context.expires_at, context.client_order_id
+            LIMIT @limit;
+            """, connection);
+        command.Parameters.Add(Parameter("observed_at", NpgsqlDbType.TimestampTz, observedAtUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("limit", NpgsqlDbType.Integer, limit));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<CancelableExecutionSnapshot>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var status = reader.GetString(12) switch
+            {
+                "Acknowledged" => OrderStatus.Acknowledged,
+                "PartiallyFilled" => OrderStatus.PartiallyFilled,
+                _ => throw new InvalidOperationException("Cancellation scan received a non-cancellable lifecycle status.")
+            };
+            result.Add(new CancelableExecutionSnapshot(
+                new OrderId(reader.GetGuid(0)), new ClientOrderId(reader.GetString(1)), new Symbol(reader.GetString(2)),
+                reader.GetString(3) == "BUY" ? OrderSide.Buy : OrderSide.Sell,
+                reader.GetString(4) == "LIMIT" ? OrderType.Limit : OrderType.Market,
+                new Quantity(reader.GetDecimal(5)), new Quantity(reader.GetDecimal(6)),
+                reader.GetString(4) == "LIMIT" ? new Price(reader.GetDecimal(7)) : null,
+                new CorrelationId(reader.GetGuid(8)), new IdempotencyKey(reader.GetString(13)), status,
+                reader.GetInt32(9), new DateTimeOffset(reader.GetFieldValue<DateTime>(10).ToUniversalTime()), observedAtUtc,
+                reader.IsDBNull(11) ? null : reader.GetInt64(11).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
+        return result;
+    }
+
+    public async Task<CancelOutboxRecord> EnqueueCancellationAsync(
+        CancelOutboxRecord record,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var payload = JsonSerializer.Serialize(record.Command, JsonOptions);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.outbox_messages
+                (message_id, aggregate_type, aggregate_id, event_type, payload, correlation_id, idempotency_key, occurred_at, available_at)
+            VALUES (@message_id, 'order', @aggregate_id, @event_type, @payload, @correlation_id, @idempotency_key, @occurred_at, @occurred_at)
+            ON CONFLICT DO NOTHING RETURNING message_id;
+            """,
+            [Parameter("message_id", NpgsqlDbType.Uuid, record.MessageId), Parameter("aggregate_id", NpgsqlDbType.Varchar, record.Command.OrderId.ToString()),
+             Parameter("event_type", NpgsqlDbType.Varchar, record.MessageType), Parameter("payload", NpgsqlDbType.Jsonb, payload),
+             Parameter("correlation_id", NpgsqlDbType.Uuid, record.CorrelationId.Value), Parameter("idempotency_key", NpgsqlDbType.Varchar, record.IdempotencyKey.Value),
+             Parameter("occurred_at", NpgsqlDbType.TimestampTz, record.CreatedAtUtc.UtcDateTime)], cancellationToken).ConfigureAwait(false);
+        if (inserted is null or DBNull)
+        {
+            var existing = await ReadExistingOutboxIdentityAsync(connection, transaction, record.MessageId, record.IdempotencyKey.Value, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The cancellation outbox uniqueness constraint reported a conflict, but no message was found.");
+            if (!string.Equals(existing.EventType, record.MessageType, StringComparison.Ordinal)
+                || !EquivalentJson(existing.PayloadJson, payload)
+                || existing.CorrelationId != record.CorrelationId
+                || !string.Equals(existing.IdempotencyKey, record.IdempotencyKey.Value, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("The cancellation outbox identity is already associated with different data.");
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return record;
     }
 
     public async Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
@@ -2443,7 +2558,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
     private static async Task<(string EventType, string PayloadJson, CorrelationId CorrelationId, string? IdempotencyKey)?> ReadExistingOutboxIdentityAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
-        OutboxRecord record,
+        Guid messageId,
+        string idempotencyKey,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
@@ -2454,8 +2570,8 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             ORDER BY CASE WHEN message_id = @message_id THEN 0 ELSE 1 END
             LIMIT 1;
             """, connection, transaction);
-        command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, record.MessageId));
-        command.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, record.IdempotencyKey.Value));
+        command.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, messageId));
+        command.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, idempotencyKey));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? (reader.GetString(0), reader.GetString(1), new CorrelationId(reader.GetGuid(2)),

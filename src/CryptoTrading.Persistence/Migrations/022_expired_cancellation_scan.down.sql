@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS trading.execution_submission_context_expiry_scan_idx;
