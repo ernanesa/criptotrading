@@ -2,6 +2,7 @@
 #pragma warning disable CA1031 // Supervisor converts unexpected failures into SafeMode.
 
 using System.Globalization;
+using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
@@ -97,10 +98,14 @@ internal sealed class AutonomyCycleHostedService(
             policyDocument.Policy.MaxMarketDataAge,
             now,
             lastProcessedCloseUtc);
-        if (closed.Count == 0 || lastProcessedCloseUtc is { } previous && closed[^1].CloseTimeUtc <= previous)
+        if (closed.Count == 0 || lastProcessedCloseUtc is { } previous && closed[^1].Bar.CloseTimeUtc <= previous)
         {
             return;
         }
+
+        var featureSnapshot = BaselineFeatureSnapshot.Create(
+            closed,
+            cycle.Parameters);
 
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         if (!account.CanTrade)
@@ -129,7 +134,7 @@ internal sealed class AutonomyCycleHostedService(
         var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
         var availableQuoteLiquidity = ParseBalance(quote?.Free);
         var totalQuoteBalance = availableQuoteLiquidity + ParseBalance(quote?.Locked);
-        var latest = closed[^1];
+        var latest = closed[^1].Bar;
         var unsupportedAssetBalance = account.Balances
             .Where(balance => !string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase))
@@ -188,7 +193,7 @@ internal sealed class AutonomyCycleHostedService(
                 "runtime-supervisor",
                 $"RUNTIME_NOT_READY:{runtimeSnapshot.State}");
         var request = new BaselineDecisionCycleRequest(
-            closed,
+            closed.Select(static envelope => envelope.Bar).ToArray(),
             portfolio,
             policyDocument.Policy,
             effectiveControl,
@@ -201,7 +206,8 @@ internal sealed class AutonomyCycleHostedService(
             availableQuoteLiquidity,
             new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
             commissionSnapshot,
-            policyDocument.Policy.MaxMarketDataAge);
+            policyDocument.Policy.MaxMarketDataAge,
+            featureSnapshot);
         var result = cycle.Evaluate(request);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
@@ -317,7 +323,7 @@ internal sealed class AutonomyCycleHostedService(
 
     private static decimal? ParseOptionalRate(string? value) => string.IsNullOrWhiteSpace(value) ? null : ParseBalance(value);
 
-    private static List<CloseBar> ValidateAndMapKlines(
+    internal static List<ClosedBarEnvelope> ValidateAndMapKlines(
         IReadOnlyList<BinanceSpotKline> klines,
         string symbol,
         string interval,
@@ -327,7 +333,7 @@ internal sealed class AutonomyCycleHostedService(
     {
         ArgumentNullException.ThrowIfNull(klines);
         var guard = new BinanceClosedKlineGuard(symbol, interval, maximumStaleness);
-        var accepted = new List<CloseBar>(klines.Count);
+        var accepted = new List<ClosedBarEnvelope>(klines.Count);
         foreach (var kline in klines.OrderBy(static item => item.OpenTimeUtc))
         {
             // REST returns the currently open candle as the last row. It is not
@@ -344,17 +350,20 @@ internal sealed class AutonomyCycleHostedService(
                     $"Binance kline quality gate rejected the REST snapshot: {decision.RejectionReason}.");
             }
 
-            accepted.Add(new CloseBar(
-                new Symbol(decision.Kline.Symbol),
-                decision.Kline.CloseTimeUtc,
-                decision.Kline.Close));
+            accepted.Add(new ClosedBarEnvelope(
+                accepted.Count,
+                new CloseBar(
+                    new Symbol(decision.Kline.Symbol),
+                    decision.Kline.CloseTimeUtc,
+                    decision.Kline.Close),
+                decision.Kline.AvailableAtUtc));
         }
 
         if (previousCloseUtc is { } previous && accepted.Count > 0)
         {
             var expectedNext = AddInterval(previous, interval);
-            var firstAfterCheckpoint = accepted.FirstOrDefault(bar => bar.CloseTimeUtc > previous);
-            if (firstAfterCheckpoint is not null && firstAfterCheckpoint.CloseTimeUtc > expectedNext)
+            var firstAfterCheckpoint = accepted.FirstOrDefault(bar => bar.Bar.CloseTimeUtc > previous);
+            if (firstAfterCheckpoint is not null && firstAfterCheckpoint.Bar.CloseTimeUtc > expectedNext)
             {
                 throw new InvalidOperationException("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.");
             }
