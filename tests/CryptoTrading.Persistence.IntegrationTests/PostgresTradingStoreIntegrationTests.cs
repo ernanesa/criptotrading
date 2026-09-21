@@ -77,7 +77,8 @@ public sealed class PostgresTradingStoreIntegrationTests
         var submit = new SubmitOrderCommand(
             OrderId.New(), clientOrderId, new Symbol("FEE" + suffix + "USDT"), OrderSide.Buy, OrderType.Market,
             new Quantity(1m), new Price(100m), 100m, CorrelationId.New(), IdempotencyKey.New(), "integration-fee", now,
-            estimate.Rate, estimate.SnapshotHash, estimate.Source, estimate.ObservedAtUtc, estimate.ValidUntilUtc);
+            estimate.Rate, estimate.SnapshotHash, estimate.Source, estimate.ObservedAtUtc, estimate.ValidUntilUtc,
+            ExecutionAttempt: 3, ExecutionExpiresAtUtc: now.AddMinutes(1));
         var outbox = new OutboxRecord(
             Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, submit.CorrelationId, submit.IdempotencyKey,
             "integration-fee", submit, OutboxRecordStatus.Pending, now.AddDays(1));
@@ -90,6 +91,15 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal(estimate.Source, persistedEstimate.Source);
         Assert.Equal(100m, persistedEstimate.ReferencePrice);
         Assert.Equal(1m, persistedEstimate.AuthorizedQuantity);
+        var context = await store.ReadExecutionSubmissionContextAsync(clientOrderId.Value);
+        Assert.NotNull(context);
+        Assert.Equal(submit.OrderId, context.ApplicationOrderId);
+        Assert.Equal(submit.CorrelationId, context.CorrelationId);
+        Assert.Equal(outbox.MessageId, context.OutboxMessageId);
+        Assert.Equal(3, context.ExecutionAttempt);
+        Assert.True(Math.Abs((submit.CreatedAtUtc - context.PlannedAtUtc).Ticks) < TimeSpan.TicksPerMicrosecond);
+        Assert.NotNull(context.ExpiresAtUtc);
+        Assert.True(Math.Abs((submit.ExecutionExpiresAtUtc!.Value - context.ExpiresAtUtc.Value).Ticks) < TimeSpan.TicksPerMicrosecond);
 
         var tradeId = Convert.ToInt64(suffix, 16);
         var accounting = new ExecutionAccountingCommand(

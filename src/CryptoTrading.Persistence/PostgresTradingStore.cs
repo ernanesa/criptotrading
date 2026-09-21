@@ -55,6 +55,22 @@ public sealed record LocalOpenOrderRecord(
     decimal? OriginalQuantity = null,
     decimal? CumulativeExecutedQuantity = null);
 
+/// <summary>Immutable linkage from a deterministic plan attempt to its outbox command.</summary>
+public sealed record ExecutionSubmissionContext(
+    string ClientOrderId,
+    OrderId ApplicationOrderId,
+    CorrelationId CorrelationId,
+    Guid OutboxMessageId,
+    Symbol Symbol,
+    OrderSide Side,
+    OrderType Type,
+    Quantity AuthorizedQuantity,
+    Price ReferencePrice,
+    decimal AuthorizedNotional,
+    int ExecutionAttempt,
+    DateTimeOffset PlannedAtUtc,
+    DateTimeOffset? ExpiresAtUtc);
+
 public interface IExpectedExecutionFeeStore
 {
     Task RecordExpectedExecutionFeeAsync(
@@ -62,6 +78,13 @@ public interface IExpectedExecutionFeeStore
         CancellationToken cancellationToken = default);
 
     Task<ExecutionFeeEstimate?> ReadExpectedExecutionFeeAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IExecutionSubmissionContextStore
+{
+    Task<ExecutionSubmissionContext?> ReadExecutionSubmissionContextAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default);
 }
@@ -254,7 +277,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1686,9 +1709,39 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         }
 
         await PersistExpectedExecutionFeeAsync(connection, transaction, record.Command, cancellationToken).ConfigureAwait(false);
+        await PersistExecutionSubmissionContextAsync(connection, transaction, record, cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return record;
+    }
+
+    public async Task<ExecutionSubmissionContext?> ReadExecutionSubmissionContextAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT application_order_id, correlation_id, outbox_message_id, symbol, side, order_type,
+                   authorized_quantity, reference_price, authorized_notional, execution_attempt, planned_at, expires_at
+            FROM trading.execution_submission_context
+            WHERE client_order_id = @client_order_id;
+            """, connection);
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        return new(
+            clientOrderId.Trim(), new OrderId(reader.GetGuid(0)), new CorrelationId(reader.GetGuid(1)), reader.GetGuid(2),
+            new Symbol(reader.GetString(3)), reader.GetString(4) == "BUY" ? OrderSide.Buy : OrderSide.Sell,
+            reader.GetString(5) == "LIMIT" ? OrderType.Limit : OrderType.Market,
+            new Quantity(reader.GetDecimal(6)), new Price(reader.GetDecimal(7)), reader.GetDecimal(8), reader.GetInt32(9),
+            new DateTimeOffset(reader.GetFieldValue<DateTime>(10).ToUniversalTime()),
+            reader.IsDBNull(11) ? null : new DateTimeOffset(reader.GetFieldValue<DateTime>(11).ToUniversalTime()));
     }
 
     public async Task RecordExpectedExecutionFeeAsync(
@@ -1800,6 +1853,73 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         if (!matches)
         {
             throw new InvalidOperationException("The client order identity is already associated with a different execution-fee expectation.");
+        }
+    }
+
+    private static async Task PersistExecutionSubmissionContextAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        OutboxRecord record,
+        CancellationToken cancellationToken)
+    {
+        var command = record.Command;
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.execution_submission_context
+                (client_order_id, application_order_id, correlation_id, outbox_message_id, symbol, side, order_type,
+                 authorized_quantity, reference_price, authorized_notional, execution_attempt, planned_at, expires_at)
+            VALUES
+                (@client_order_id, @application_order_id, @correlation_id, @outbox_message_id, @symbol, @side, @order_type,
+                 @authorized_quantity, @reference_price, @authorized_notional, @execution_attempt, @planned_at, @expires_at)
+            ON CONFLICT (client_order_id) DO NOTHING;
+            """,
+            [
+                Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value),
+                Parameter("application_order_id", NpgsqlDbType.Uuid, command.OrderId.Value),
+                Parameter("correlation_id", NpgsqlDbType.Uuid, command.CorrelationId.Value),
+                Parameter("outbox_message_id", NpgsqlDbType.Uuid, record.MessageId),
+                Parameter("symbol", NpgsqlDbType.Varchar, command.Symbol.Value),
+                Parameter("side", NpgsqlDbType.Varchar, command.Side == OrderSide.Buy ? "BUY" : "SELL"),
+                Parameter("order_type", NpgsqlDbType.Varchar, command.Type == OrderType.Limit ? "LIMIT" : "MARKET"),
+                Parameter("authorized_quantity", NpgsqlDbType.Numeric, command.Quantity.Value),
+                Parameter("reference_price", NpgsqlDbType.Numeric, command.ReferencePrice.Value),
+                Parameter("authorized_notional", NpgsqlDbType.Numeric, command.AuthorizedNotional),
+                Parameter("execution_attempt", NpgsqlDbType.Integer, command.ExecutionAttempt),
+                Parameter("planned_at", NpgsqlDbType.TimestampTz, command.CreatedAtUtc.UtcDateTime),
+                Parameter("expires_at", NpgsqlDbType.TimestampTz, command.ExecutionExpiresAtUtc?.UtcDateTime),
+            ], cancellationToken).ConfigureAwait(false);
+
+        await using var identityCommand = new NpgsqlCommand(
+            """
+            SELECT application_order_id, correlation_id, outbox_message_id, symbol, side, order_type,
+                   authorized_quantity, reference_price, authorized_notional, execution_attempt, planned_at, expires_at
+            FROM trading.execution_submission_context
+            WHERE client_order_id = @client_order_id;
+            """, connection, transaction);
+        identityCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value));
+        await using var reader = await identityCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("The execution submission context conflict was reported without a durable record.");
+        }
+
+        var matches = reader.GetGuid(0) == command.OrderId.Value
+            && reader.GetGuid(1) == command.CorrelationId.Value
+            && reader.GetGuid(2) == record.MessageId
+            && string.Equals(reader.GetString(3), command.Symbol.Value, StringComparison.Ordinal)
+            && string.Equals(reader.GetString(4), command.Side == OrderSide.Buy ? "BUY" : "SELL", StringComparison.Ordinal)
+            && string.Equals(reader.GetString(5), command.Type == OrderType.Limit ? "LIMIT" : "MARKET", StringComparison.Ordinal)
+            && reader.GetDecimal(6) == command.Quantity.Value
+            && reader.GetDecimal(7) == command.ReferencePrice.Value
+            && reader.GetDecimal(8) == command.AuthorizedNotional
+            && reader.GetInt32(9) == command.ExecutionAttempt
+            && MatchesPostgresTimestamp(reader.GetFieldValue<DateTime>(10), command.CreatedAtUtc)
+            && (reader.IsDBNull(11)
+                ? command.ExecutionExpiresAtUtc is null
+                : command.ExecutionExpiresAtUtc is { } expiresAtUtc && MatchesPostgresTimestamp(reader.GetFieldValue<DateTime>(11), expiresAtUtc));
+        if (!matches)
+        {
+            throw new InvalidOperationException("The client order identity is already associated with a different execution submission context.");
         }
     }
 
