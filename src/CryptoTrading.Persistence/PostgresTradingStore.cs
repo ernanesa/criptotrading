@@ -1688,7 +1688,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "SELECT estimated_rate, snapshot_hash, source, observed_at, valid_until FROM trading.execution_fee_expectations WHERE client_order_id = @client_order_id;",
+            "SELECT estimated_rate, snapshot_hash, source, observed_at, valid_until, reference_price, authorized_quantity, decision_at FROM trading.execution_fee_expectations WHERE client_order_id = @client_order_id;",
             connection);
         command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -1702,7 +1702,10 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             reader.GetString(1),
             reader.GetString(2),
             new DateTimeOffset(reader.GetFieldValue<DateTime>(3).ToUniversalTime()),
-            new DateTimeOffset(reader.GetFieldValue<DateTime>(4).ToUniversalTime()));
+            new DateTimeOffset(reader.GetFieldValue<DateTime>(4).ToUniversalTime()),
+            reader.GetDecimal(5),
+            reader.GetDecimal(6),
+            new DateTimeOffset(reader.GetFieldValue<DateTime>(7).ToUniversalTime()));
     }
 
     private static async Task PersistExpectedExecutionFeeAsync(

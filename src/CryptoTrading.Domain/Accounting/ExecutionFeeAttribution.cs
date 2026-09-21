@@ -9,7 +9,10 @@ public sealed record ExecutionFeeEstimate
         string snapshotHash,
         string source,
         DateTimeOffset observedAtUtc,
-        DateTimeOffset validUntilUtc)
+        DateTimeOffset validUntilUtc,
+        decimal? referencePrice = null,
+        decimal? authorizedQuantity = null,
+        DateTimeOffset? decisionAtUtc = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(rate, 0m);
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshotHash);
@@ -24,11 +27,21 @@ public sealed record ExecutionFeeEstimate
             throw new ArgumentException("Fee estimate validity cannot precede observation.");
         }
 
+        if ((referencePrice is null) != (authorizedQuantity is null) ||
+            (referencePrice is null) != (decisionAtUtc is null) ||
+            referencePrice is <= 0m || authorizedQuantity is <= 0m || decisionAtUtc?.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Execution-quality expectation must be complete, positive, and UTC when present.");
+        }
+
         Rate = rate;
         SnapshotHash = snapshotHash.Trim();
         Source = source.Trim();
         ObservedAtUtc = observedAtUtc;
         ValidUntilUtc = validUntilUtc;
+        ReferencePrice = referencePrice;
+        AuthorizedQuantity = authorizedQuantity;
+        DecisionAtUtc = decisionAtUtc;
     }
 
     public decimal Rate { get; }
@@ -36,6 +49,9 @@ public sealed record ExecutionFeeEstimate
     public string Source { get; }
     public DateTimeOffset ObservedAtUtc { get; }
     public DateTimeOffset ValidUntilUtc { get; }
+    public decimal? ReferencePrice { get; }
+    public decimal? AuthorizedQuantity { get; }
+    public DateTimeOffset? DecisionAtUtc { get; }
 }
 
 public enum ExecutionFeeComparisonStatus
