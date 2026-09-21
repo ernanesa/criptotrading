@@ -165,6 +165,21 @@ public sealed class WorkerRuntimeTests
         Assert.Equal("UNKNOWN", projected.Status);
     }
 
+    [Fact]
+    public async Task TestnetExecutorProjectsDefinitiveExchangeRejectionWithoutRetry()
+    {
+        var command = NewCommand();
+        var exchange = new RejectedTestnetClient();
+        var store = new RecordingOpenOrderStore();
+        var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), store);
+
+        await executor.ExecuteAsync(MessageFor(command));
+
+        Assert.Equal(1, exchange.SubmitCalls);
+        Assert.Equal(0, exchange.QueryCalls);
+        Assert.Empty(store.Records);
+    }
+
     [Theory]
     [InlineData("99", "1", true, false, false, "quote")]
     [InlineData("1000", "0.001", true, false, true, "base")]
@@ -785,6 +800,30 @@ public sealed class WorkerRuntimeTests
         }
         public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class RejectedTestnetClient : IBinanceSpotOrderClient
+    {
+        public int SubmitCalls { get; private set; }
+
+        public int QueryCalls { get; private set; }
+
+        public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default)
+        {
+            SubmitCalls++;
+            throw new BinanceOrderRejectedException(
+                request.ClientOrderId,
+                new BinanceApiException(System.Net.HttpStatusCode.BadRequest, "v3/order"));
+        }
+
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            QueryCalls++;
+            throw new NotSupportedException();
+        }
+
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class TestnetAccountClient(string baseFree = "1", string quoteFree = "1000", bool canTrade = true, bool canWithdraw = false) : IBinanceSpotAccountClient

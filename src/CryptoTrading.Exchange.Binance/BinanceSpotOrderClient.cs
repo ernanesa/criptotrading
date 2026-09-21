@@ -209,6 +209,45 @@ public sealed class BinanceOrderSubmissionAmbiguousException : IOException
 }
 
 /// <summary>
+/// Indicates that Binance definitively rejected a submission before creating an
+/// order. It is terminal for the submitted command and must not be retried.
+/// </summary>
+public sealed class BinanceOrderRejectedException : InvalidOperationException
+{
+    public BinanceOrderRejectedException()
+        : this("unknown", new BinanceApiException())
+    {
+    }
+
+    public BinanceOrderRejectedException(string message)
+        : base(message)
+    {
+        ClientOrderId = "unknown";
+    }
+
+    public BinanceOrderRejectedException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+        ClientOrderId = "unknown";
+    }
+
+    public BinanceOrderRejectedException(string clientOrderId, BinanceApiException cause)
+        : base($"Binance rejected order submission for clientOrderId '{clientOrderId}' with HTTP {(int?)RequireCause(cause).StatusCode}.", cause)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        ClientOrderId = clientOrderId;
+        StatusCode = RequireCause(cause).StatusCode;
+    }
+
+    public string ClientOrderId { get; }
+
+    public System.Net.HttpStatusCode? StatusCode { get; }
+
+    private static BinanceApiException RequireCause(BinanceApiException? cause) =>
+        cause ?? throw new ArgumentNullException(nameof(cause));
+}
+
+/// <summary>
 /// Isolated signed Spot order adapter. It is deliberately not registered by
 /// the application host. Submit has no retry path: transport uncertainty is
 /// surfaced as an ambiguous result requiring a client-order-id lookup.
@@ -262,6 +301,11 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         try
         {
             return await SendSignedAsync(HttpMethod.Post, "v3/order", parameters, request.Symbol, request.ClientOrderId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (BinanceApiException exception) when (IsDefinitiveSubmissionRejection(exception))
+        {
+            MarkActivityError(activity, exception);
+            throw new BinanceOrderRejectedException(request.ClientOrderId, exception);
         }
         catch (BinanceApiException exception) when ((int?)exception.StatusCode >= 500)
         {
@@ -423,6 +467,9 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
             throw new InvalidOperationException("Binance Spot order execution is disabled; set EnableOrderExecution=true only in an explicitly approved Testnet configuration.");
         }
     }
+
+    private static bool IsDefinitiveSubmissionRejection(BinanceApiException exception) =>
+        exception.StatusCode is { } status && (int)status is >= 400 and < 500 && status != System.Net.HttpStatusCode.TooManyRequests;
 
     private static BinanceSpotOrderResult ToResult(BinanceOrderWire wire, string expectedSymbol, string expectedClientOrderId)
     {
