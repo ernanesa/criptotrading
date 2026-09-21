@@ -196,10 +196,20 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal(0m, reader.GetDecimal(5));
         Assert.Equal("COMPARABLE", reader.GetString(6));
 
+        var lifecycle = OrderLifecycleEvent.Create(
+            clientOrderId.Value,
+            new OrderTransition(
+                OrderStatus.Submitted, OrderStatus.Acknowledged, new IdempotencyKey("ack-" + suffix), now.AddSeconds(1), "123"));
+        Assert.True(await store.AppendOrderLifecycleEventAsync(lifecycle));
+
         var report = await store.ReadExecutionAttributionReportAsync(clientOrderId.Value);
         Assert.NotNull(report);
         Assert.Equal(context, report.Context);
         Assert.Equal(0, report.OutboxAttempts);
+        var lifecycleFact = Assert.Single(report.Lifecycle);
+        Assert.Equal(OrderStatus.Submitted, lifecycleFact.From);
+        Assert.Equal(OrderStatus.Acknowledged, lifecycleFact.To);
+        Assert.Equal(lifecycle.EventId, lifecycleFact.EventId);
         var fill = Assert.Single(report.Fills);
         Assert.Equal(accounting.ExecutionId, fill.ExecutionId);
         Assert.Equal(1m, fill.CumulativeFillRatio);

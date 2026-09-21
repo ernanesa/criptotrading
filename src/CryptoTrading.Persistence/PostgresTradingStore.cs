@@ -84,12 +84,22 @@ public sealed record ExecutionFillAttributionReport(
     string FeeStatus,
     string FeeReason);
 
+/// <summary>One durable OMS transition, returned in deterministic lifecycle order.</summary>
+public sealed record OrderLifecycleAttributionReport(
+    Guid EventId,
+    OrderStatus From,
+    OrderStatus To,
+    string IdempotencyKey,
+    DateTimeOffset OccurredAtUtc,
+    string? ExchangeOrderId);
+
 /// <summary>Deterministic reconstruction from durable plan, outbox, and fill evidence.</summary>
 public sealed record ExecutionAttributionReport(
     ExecutionSubmissionContext Context,
     int OutboxAttempts,
     DateTimeOffset? OutboxProcessedAtUtc,
     string? OutboxLastError,
+    IReadOnlyList<OrderLifecycleAttributionReport> Lifecycle,
     IReadOnlyList<ExecutionFillAttributionReport> Fills);
 
 public sealed record OrderLifecycleEvent(
@@ -1910,8 +1920,30 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                 fillsReader.IsDBNull(6) ? null : fillsReader.GetInt64(6),
                 fillsReader.GetString(7), fillsReader.GetString(8), fillsReader.GetString(9), fillsReader.GetString(10)));
         }
+        await fillsReader.CloseAsync().ConfigureAwait(false);
 
-        return new(context, attempts, processedAt, lastError, fills);
+        await using var lifecycleCommand = new NpgsqlCommand(
+            """
+            SELECT event_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id
+            FROM trading.order_lifecycle_events
+            WHERE client_order_id = @client_order_id
+            ORDER BY occurred_at, event_id;
+            """, connection);
+        lifecycleCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, context.ClientOrderId));
+        await using var lifecycleReader = await lifecycleCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var lifecycle = new List<OrderLifecycleAttributionReport>();
+        while (await lifecycleReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            lifecycle.Add(new(
+                lifecycleReader.GetGuid(0),
+                ParseOrderStatus(lifecycleReader.GetString(1)),
+                ParseOrderStatus(lifecycleReader.GetString(2)),
+                lifecycleReader.GetString(3),
+                new DateTimeOffset(lifecycleReader.GetFieldValue<DateTime>(4).ToUniversalTime()),
+                lifecycleReader.IsDBNull(5) ? null : lifecycleReader.GetString(5)));
+        }
+
+        return new(context, attempts, processedAt, lastError, lifecycle, fills);
     }
 
     public async Task RecordExpectedExecutionFeeAsync(
@@ -2095,6 +2127,11 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
 
     private static bool MatchesPostgresTimestamp(DateTime storedUtc, DateTimeOffset expectedUtc) =>
         Math.Abs(storedUtc.ToUniversalTime().Ticks - expectedUtc.UtcDateTime.Ticks) < TimeSpan.TicksPerMicrosecond;
+
+    private static OrderStatus ParseOrderStatus(string value) =>
+        Enum.TryParse<OrderStatus>(value, ignoreCase: false, out var status) && Enum.IsDefined(status)
+            ? status
+            : throw new InvalidOperationException($"Persisted lifecycle contains an unsupported order status '{value}'.");
 
     public async Task<DateTimeOffset?> GetLastProcessedCloseAsync(
         string scope,
