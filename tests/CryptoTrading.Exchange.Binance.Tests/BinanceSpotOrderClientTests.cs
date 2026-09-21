@@ -133,6 +133,22 @@ public sealed class BinanceSpotOrderClientTests
     }
 
     [Fact]
+    public async Task DefinitiveClientRejectionIsTypedAndIsNeverRetried()
+    {
+        using var handler = new RecordingHandler(
+            HttpStatusCode.BadRequest,
+            "{\"serverTime\":1789905600000}",
+            "{\"code\":-1013,\"msg\":\"Filter failure: LOT_SIZE\"}");
+        var client = CreateClient(handler, enableExecution: true);
+
+        var exception = await Assert.ThrowsAsync<BinanceOrderRejectedException>(() => client.SubmitAsync(Request()));
+
+        Assert.Equal("ct-test-1", exception.ClientOrderId);
+        Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
     public void OrderInputsAndEnvironmentAreBounded()
     {
         Assert.Throws<ArgumentException>(() => new BinanceSpotOrderRequest("BTC-USDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Market, 1m, "ct-test-1"));

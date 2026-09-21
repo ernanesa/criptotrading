@@ -93,6 +93,21 @@ public sealed class TestnetOutboxMessageExecutor(
             await ProjectExchangeResultAsync(order, result, projection, message.MessageId, cancellationToken).ConfigureAwait(false);
             TestnetExecutorLog.Submitted(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, recovered: false);
         }
+        catch (BinanceOrderRejectedException rejected)
+        {
+            if (!string.Equals(rejected.ClientOrderId, command.ClientOrderId.Value, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Binance rejection client identity does not match the submitted command.", rejected);
+            }
+
+            await projection.TransitionAndProjectAsync(
+                order,
+                OrderStatus.Rejected,
+                new IdempotencyKey($"rejected:{message.MessageId:N}"),
+                DateTimeOffset.UtcNow,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            TestnetExecutorLog.Rejected(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, rejected.StatusCode);
+        }
         catch (BinanceOrderSubmissionAmbiguousException ambiguous)
         {
             // A submit may have reached Binance before the response was lost.
@@ -237,4 +252,7 @@ internal static partial class TestnetExecutorLog
 {
     [LoggerMessage(LogLevel.Information, "Testnet order command accepted. MessageId={MessageId} Symbol={Symbol} ClientOrderId={ClientOrderId} Recovered={Recovered}")]
     public static partial void Submitted(ILogger logger, Guid messageId, string symbol, string clientOrderId, bool recovered);
+
+    [LoggerMessage(LogLevel.Warning, "Testnet order command rejected by Binance. MessageId={MessageId} Symbol={Symbol} ClientOrderId={ClientOrderId} StatusCode={StatusCode}")]
+    public static partial void Rejected(ILogger logger, Guid messageId, string symbol, string clientOrderId, System.Net.HttpStatusCode? statusCode);
 }
