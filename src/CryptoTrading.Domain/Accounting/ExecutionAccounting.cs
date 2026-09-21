@@ -34,7 +34,6 @@ public sealed record ExecutionAccountingCommand
         ArgumentOutOfRangeException.ThrowIfNegative(orderId);
         if (quantity.Value <= 0m) throw new ArgumentOutOfRangeException(nameof(quantity));
         if (occurredAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Execution timestamps must be UTC.", nameof(occurredAtUtc));
-        if (commission.Amount < 0m) throw new ArgumentOutOfRangeException(nameof(commission));
         if (feeDriftToleranceBps < 0m || feeDriftToleranceBps > 10_000m) throw new ArgumentOutOfRangeException(nameof(feeDriftToleranceBps));
         if (cumulativeExecutedQuantity is { } cumulative && cumulative.Value < quantity.Value)
         {
@@ -112,7 +111,7 @@ public static class ExecutionAccounting
             new(venueSettlement, command.QuoteAsset, command.Side == OrderSide.Buy ? notional : -notional),
         };
 
-        if (command.Commission.Amount > 0m)
+        if (command.Commission.Amount != 0m)
         {
             postings.Add(new LedgerPosting(command.WalletAccount, command.Commission.Asset, -command.Commission.Amount));
             postings.Add(new LedgerPosting(command.FeesAccount, command.Commission.Asset, command.Commission.Amount));
