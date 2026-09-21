@@ -71,6 +71,27 @@ public sealed record ExecutionSubmissionContext(
     DateTimeOffset PlannedAtUtc,
     DateTimeOffset? ExpiresAtUtc);
 
+public sealed record ExecutionFillAttributionReport(
+    string ExecutionId,
+    DateTimeOffset OccurredAtUtc,
+    decimal Quantity,
+    decimal Price,
+    decimal? CumulativeFillRatio,
+    decimal? ImplementationShortfallQuote,
+    long? DecisionToFillLatencyMilliseconds,
+    string QualityStatus,
+    string QualityReason,
+    string FeeStatus,
+    string FeeReason);
+
+/// <summary>Deterministic reconstruction from durable plan, outbox, and fill evidence.</summary>
+public sealed record ExecutionAttributionReport(
+    ExecutionSubmissionContext Context,
+    int OutboxAttempts,
+    DateTimeOffset? OutboxProcessedAtUtc,
+    string? OutboxLastError,
+    IReadOnlyList<ExecutionFillAttributionReport> Fills);
+
 public interface IExpectedExecutionFeeStore
 {
     Task RecordExpectedExecutionFeeAsync(
@@ -85,6 +106,13 @@ public interface IExpectedExecutionFeeStore
 public interface IExecutionSubmissionContextStore
 {
     Task<ExecutionSubmissionContext?> ReadExecutionSubmissionContextAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default);
+}
+
+public interface IExecutionAttributionReportStore
+{
+    Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default);
 }
@@ -277,7 +305,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IExecutionAttributionReportStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1742,6 +1770,57 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             new Quantity(reader.GetDecimal(6)), new Price(reader.GetDecimal(7)), reader.GetDecimal(8), reader.GetInt32(9),
             new DateTimeOffset(reader.GetFieldValue<DateTime>(10).ToUniversalTime()),
             reader.IsDBNull(11) ? null : new DateTimeOffset(reader.GetFieldValue<DateTime>(11).ToUniversalTime()));
+    }
+
+    public async Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        var context = await ReadExecutionSubmissionContextAsync(clientOrderId, cancellationToken).ConfigureAwait(false);
+        if (context is null)
+        {
+            return null;
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var outboxCommand = new NpgsqlCommand(
+            "SELECT attempts, processed_at, last_error FROM trading.outbox_messages WHERE message_id = @message_id;", connection);
+        outboxCommand.Parameters.Add(Parameter("message_id", NpgsqlDbType.Uuid, context.OutboxMessageId));
+        await using var outboxReader = await outboxCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await outboxReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("Execution submission context references a missing outbox message.");
+        }
+
+        var attempts = outboxReader.GetInt32(0);
+        DateTimeOffset? processedAt = outboxReader.IsDBNull(1) ? null : new DateTimeOffset(outboxReader.GetFieldValue<DateTime>(1).ToUniversalTime());
+        var lastError = outboxReader.IsDBNull(2) ? null : outboxReader.GetString(2);
+        await outboxReader.CloseAsync().ConfigureAwait(false);
+
+        await using var fillsCommand = new NpgsqlCommand(
+            """
+            SELECT execution_id, occurred_at, quantity, price, cumulative_fill_ratio, implementation_shortfall_quote,
+                   decision_to_fill_latency_ms, execution_quality_status, execution_quality_reason,
+                   fee_comparison_status, fee_comparison_reason
+            FROM trading.execution_fills
+            WHERE client_order_id = @client_order_id
+            ORDER BY occurred_at, execution_id;
+            """, connection);
+        fillsCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, context.ClientOrderId));
+        await using var fillsReader = await fillsCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var fills = new List<ExecutionFillAttributionReport>();
+        while (await fillsReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            fills.Add(new(
+                fillsReader.GetString(0), new DateTimeOffset(fillsReader.GetFieldValue<DateTime>(1).ToUniversalTime()),
+                fillsReader.GetDecimal(2), fillsReader.GetDecimal(3),
+                fillsReader.IsDBNull(4) ? null : fillsReader.GetDecimal(4),
+                fillsReader.IsDBNull(5) ? null : fillsReader.GetDecimal(5),
+                fillsReader.IsDBNull(6) ? null : fillsReader.GetInt64(6),
+                fillsReader.GetString(7), fillsReader.GetString(8), fillsReader.GetString(9), fillsReader.GetString(10)));
+        }
+
+        return new(context, attempts, processedAt, lastError, fills);
     }
 
     public async Task RecordExpectedExecutionFeeAsync(
