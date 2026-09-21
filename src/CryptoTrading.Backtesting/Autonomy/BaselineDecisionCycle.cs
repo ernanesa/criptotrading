@@ -195,7 +195,9 @@ public sealed class BaselineDecisionCycle
                 plan.Plan.CommissionSnapshotHash,
                 plan.Plan.CommissionSource,
                 plan.Plan.CommissionObservedAtUtc,
-                plan.Plan.CommissionValidUntilUtc);
+                plan.Plan.CommissionValidUntilUtc,
+                plan.Plan.Attempt,
+                plan.Plan.ExpiresAtUtc);
             execution = OrderExecutionPipeline.Evaluate(passiveIntent, request.RiskPolicy, request.OperationalControl);
             return new(decision, passiveIntent, execution, execution.IsDispatchable ? null : string.Join(',', execution.Decision.ReasonCodes));
         }

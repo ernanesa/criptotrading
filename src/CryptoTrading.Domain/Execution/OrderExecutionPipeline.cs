@@ -24,7 +24,9 @@ public sealed record OrderIntent
         string? commissionSnapshotHash = null,
         string? commissionSource = null,
         DateTimeOffset? commissionObservedAtUtc = null,
-        DateTimeOffset? commissionValidUntilUtc = null)
+        DateTimeOffset? commissionValidUntilUtc = null,
+        int executionAttempt = 0,
+        DateTimeOffset? executionExpiresAtUtc = null)
     {
         ArgumentNullException.ThrowIfNull(riskEvaluation);
 
@@ -57,6 +59,16 @@ public sealed record OrderIntent
         IdempotencyKey = idempotencyKey;
         RiskEvaluation = riskEvaluation;
         CreatedAtUtc = createdAtUtc;
+        if (executionAttempt is < 0 or > 1_000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(executionAttempt));
+        }
+
+        if (executionExpiresAtUtc is { } expiresAtUtc &&
+            (expiresAtUtc.Offset != TimeSpan.Zero || expiresAtUtc < createdAtUtc))
+        {
+            throw new ArgumentException("Execution expiry must be UTC and cannot precede intent creation.", nameof(executionExpiresAtUtc));
+        }
         if (estimatedCommissionRate is < 0m)
         {
             throw new ArgumentOutOfRangeException(nameof(estimatedCommissionRate));
@@ -77,6 +89,8 @@ public sealed record OrderIntent
         CommissionSource = commissionSource;
         CommissionObservedAtUtc = commissionObservedAtUtc;
         CommissionValidUntilUtc = commissionValidUntilUtc;
+        ExecutionAttempt = executionAttempt;
+        ExecutionExpiresAtUtc = executionExpiresAtUtc;
     }
 
     public OrderId OrderId { get; }
@@ -95,6 +109,8 @@ public sealed record OrderIntent
     public string? CommissionSource { get; }
     public DateTimeOffset? CommissionObservedAtUtc { get; }
     public DateTimeOffset? CommissionValidUntilUtc { get; }
+    public int ExecutionAttempt { get; }
+    public DateTimeOffset? ExecutionExpiresAtUtc { get; }
 }
 
 /// <summary>Exchange-facing command; it is only created after risk authorization.</summary>
@@ -115,7 +131,9 @@ public sealed record SubmitOrderCommand(
     string? CommissionSnapshotHash = null,
     string? CommissionSource = null,
     DateTimeOffset? CommissionObservedAtUtc = null,
-    DateTimeOffset? CommissionValidUntilUtc = null);
+    DateTimeOffset? CommissionValidUntilUtc = null,
+    int ExecutionAttempt = 0,
+    DateTimeOffset? ExecutionExpiresAtUtc = null);
 
 public enum OutboxRecordStatus
 {
@@ -215,7 +233,9 @@ public static class OrderExecutionPipeline
             intent.CommissionSnapshotHash,
             intent.CommissionSource,
             intent.CommissionObservedAtUtc,
-            intent.CommissionValidUntilUtc);
+            intent.CommissionValidUntilUtc,
+            intent.ExecutionAttempt,
+            intent.ExecutionExpiresAtUtc);
 
         var outbox = new OutboxRecord(
             Guid.NewGuid(),

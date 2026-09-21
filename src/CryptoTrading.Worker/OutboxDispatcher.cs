@@ -135,7 +135,9 @@ public sealed class PaperOutboxMessageExecutor(
             ReadOptionalString(root, "commissionSnapshotHash"),
             ReadOptionalString(root, "commissionSource"),
             ReadOptionalDateTimeOffset(root, "commissionObservedAtUtc"),
-            ReadOptionalDateTimeOffset(root, "commissionValidUntilUtc"));
+            ReadOptionalDateTimeOffset(root, "commissionValidUntilUtc"),
+            ReadOptionalInt32(root, "executionAttempt") ?? 0,
+            ReadOptionalDateTimeOffset(root, "executionExpiresAtUtc"));
 
         if (command.Quantity.Value <= 0m)
         {
@@ -170,6 +172,11 @@ public sealed class PaperOutboxMessageExecutor(
     private static decimal? ReadOptionalDecimal(JsonElement root, string property) =>
         TryReadValue(root, property, out var value) && value.ValueKind != JsonValueKind.Null
             ? value.GetDecimal()
+            : null;
+
+    private static int? ReadOptionalInt32(JsonElement root, string property) =>
+        TryReadValue(root, property, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetInt32()
             : null;
 
     private static string? ReadOptionalString(JsonElement root, string property) =>
