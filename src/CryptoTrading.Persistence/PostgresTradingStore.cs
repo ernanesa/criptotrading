@@ -92,6 +92,29 @@ public sealed record ExecutionAttributionReport(
     string? OutboxLastError,
     IReadOnlyList<ExecutionFillAttributionReport> Fills);
 
+public sealed record OrderLifecycleEvent(
+    Guid EventId,
+    string ClientOrderId,
+    OrderTransition Transition)
+{
+    /// <summary>Creates a replay-stable journal identity from the immutable transition.</summary>
+    public static OrderLifecycleEvent Create(string clientOrderId, OrderTransition transition)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        ArgumentNullException.ThrowIfNull(transition);
+        var normalizedClientOrderId = clientOrderId.Trim();
+        var canonical = string.Join('|',
+            normalizedClientOrderId,
+            transition.From,
+            transition.To,
+            transition.IdempotencyKey.Value,
+            transition.OccurredAtUtc.UtcDateTime.Ticks,
+            transition.ExchangeOrderId ?? string.Empty);
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        return new OrderLifecycleEvent(new Guid(hash.AsSpan(0, 16)), normalizedClientOrderId, transition);
+    }
+}
+
 public interface IExpectedExecutionFeeStore
 {
     Task RecordExpectedExecutionFeeAsync(
@@ -115,6 +138,11 @@ public interface IExecutionAttributionReportStore
     Task<ExecutionAttributionReport?> ReadExecutionAttributionReportAsync(
         string clientOrderId,
         CancellationToken cancellationToken = default);
+}
+
+public interface IOrderLifecycleStore
+{
+    Task<bool> AppendOrderLifecycleEventAsync(OrderLifecycleEvent lifecycleEvent, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Durable outbox operations required by a dispatcher.</summary>
@@ -305,7 +333,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IExecutionAttributionReportStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1692,6 +1720,69 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
             throw new InvalidOperationException(
                 $"Trade ID {tradeId} is already associated with symbol '{existingSymbol}', not '{normalizedSymbol}'.");
         }
+    }
+
+    public async Task<bool> AppendOrderLifecycleEventAsync(
+        OrderLifecycleEvent lifecycleEvent,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(lifecycleEvent);
+        ArgumentException.ThrowIfNullOrWhiteSpace(lifecycleEvent.ClientOrderId);
+        var transition = lifecycleEvent.Transition;
+        if (transition.OccurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Lifecycle timestamps must be UTC.", nameof(lifecycleEvent));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO trading.order_lifecycle_events
+                (event_id, client_order_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id)
+            VALUES (@event_id, @client_order_id, @from_status, @to_status, @idempotency_key, @occurred_at, @exchange_order_id)
+            ON CONFLICT (idempotency_key) DO NOTHING
+            RETURNING event_id;
+            """, connection);
+        command.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, lifecycleEvent.EventId));
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, lifecycleEvent.ClientOrderId.Trim()));
+        command.Parameters.Add(Parameter("from_status", NpgsqlDbType.Varchar, transition.From.ToString()));
+        command.Parameters.Add(Parameter("to_status", NpgsqlDbType.Varchar, transition.To.ToString()));
+        command.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, transition.IdempotencyKey.Value));
+        command.Parameters.Add(Parameter("occurred_at", NpgsqlDbType.TimestampTz, transition.OccurredAtUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("exchange_order_id", NpgsqlDbType.Varchar, transition.ExchangeOrderId));
+        var inserted = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (inserted is not null and not DBNull)
+        {
+            return true;
+        }
+
+        await using var existingCommand = new NpgsqlCommand(
+            """
+            SELECT event_id, client_order_id, from_status, to_status, occurred_at, exchange_order_id
+            FROM trading.order_lifecycle_events
+            WHERE idempotency_key = @idempotency_key;
+            """, connection);
+        existingCommand.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, transition.IdempotencyKey.Value));
+        await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("The lifecycle journal uniqueness constraint reported a conflict, but no event was found.");
+        }
+
+        var equivalent = reader.GetGuid(0) == lifecycleEvent.EventId
+            && string.Equals(reader.GetString(1), lifecycleEvent.ClientOrderId.Trim(), StringComparison.Ordinal)
+            && string.Equals(reader.GetString(2), transition.From.ToString(), StringComparison.Ordinal)
+            && string.Equals(reader.GetString(3), transition.To.ToString(), StringComparison.Ordinal)
+            && MatchesPostgresTimestamp(reader.GetFieldValue<DateTime>(4), transition.OccurredAtUtc)
+            && (reader.IsDBNull(5)
+                ? string.IsNullOrWhiteSpace(transition.ExchangeOrderId)
+                : string.Equals(reader.GetString(5), transition.ExchangeOrderId, StringComparison.Ordinal));
+        if (!equivalent)
+        {
+            throw new InvalidOperationException("The lifecycle idempotency key is already associated with different event data.");
+        }
+
+        return false;
     }
 
     /// <summary>Enqueues a command durably; duplicate identity is accepted only for identical payload.</summary>

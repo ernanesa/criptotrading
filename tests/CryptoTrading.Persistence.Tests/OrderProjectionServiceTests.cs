@@ -112,6 +112,24 @@ public sealed class OrderProjectionServiceTests
     }
 
     [Fact]
+    public async Task LifecycleTransitionIsPersistedBeforeItsCurrentStateProjection()
+    {
+        var store = new FakeOpenOrderStore();
+        var lifecycle = new FakeOrderLifecycleStore();
+        var service = new OrderProjectionService(store, lifecycle);
+        var order = NewOrder();
+
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2));
+
+        Assert.Collection(
+            lifecycle.Events,
+            item => Assert.Equal((OrderStatus.Created, OrderStatus.Validated), (item.Transition.From, item.Transition.To)),
+            item => Assert.Equal((OrderStatus.Validated, OrderStatus.Submitted), (item.Transition.From, item.Transition.To)));
+        Assert.Single(store.Upserts);
+    }
+
+    [Fact]
     public async Task InvalidTransitionAndInvalidExchangeIdentityDoNotWriteProjection()
     {
         var store = new FakeOpenOrderStore();
@@ -168,6 +186,19 @@ public sealed class OrderProjectionServiceTests
         {
             Removed.Add(clientOrderId);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FakeOrderLifecycleStore : IOrderLifecycleStore
+    {
+        public List<OrderLifecycleEvent> Events { get; } = [];
+
+        public Task<bool> AppendOrderLifecycleEventAsync(
+            OrderLifecycleEvent lifecycleEvent,
+            CancellationToken cancellationToken = default)
+        {
+            Events.Add(lifecycleEvent);
+            return Task.FromResult(true);
         }
     }
 }

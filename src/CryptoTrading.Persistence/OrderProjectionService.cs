@@ -13,11 +13,13 @@ namespace CryptoTrading.Persistence;
 public sealed class OrderProjectionService
 {
     private readonly ILocalOpenOrderStore store;
+    private readonly IOrderLifecycleStore? lifecycleStore;
 
-    public OrderProjectionService(ILocalOpenOrderStore store)
+    public OrderProjectionService(ILocalOpenOrderStore store, IOrderLifecycleStore? lifecycleStore = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         this.store = store;
+        this.lifecycleStore = lifecycleStore;
     }
 
     public async Task<OrderTransition> TransitionAndProjectAsync(
@@ -32,12 +34,13 @@ public sealed class OrderProjectionService
         ArgumentNullException.ThrowIfNull(order);
         _ = ParseExchangeOrderId(exchangeOrderId);
         var transition = order.TransitionTo(target, idempotencyKey, occurredAtUtc, exchangeOrderId);
+        await PersistLifecycleAsync(order, transition, cancellationToken).ConfigureAwait(false);
         await ProjectAsync(order, transition, projectBeforeSubmission, cancellationToken).ConfigureAwait(false);
         return transition;
     }
 
     /// <summary>Retries projection of the aggregate's current state after a persistence failure.</summary>
-    public Task ProjectCurrentAsync(
+    public async Task ProjectCurrentAsync(
         Order order,
         bool projectBeforeSubmission = false,
         CancellationToken cancellationToken = default)
@@ -46,8 +49,14 @@ public sealed class OrderProjectionService
         var transition = order.Transitions
             .OrderByDescending(static item => item.OccurredAtUtc)
             .First();
-        return ProjectAsync(order, transition, projectBeforeSubmission, cancellationToken);
+        await PersistLifecycleAsync(order, transition, cancellationToken).ConfigureAwait(false);
+        await ProjectAsync(order, transition, projectBeforeSubmission, cancellationToken).ConfigureAwait(false);
     }
+
+    private Task PersistLifecycleAsync(Order order, OrderTransition transition, CancellationToken cancellationToken) =>
+        lifecycleStore?.AppendOrderLifecycleEventAsync(
+            OrderLifecycleEvent.Create(order.ClientOrderId.Value, transition), cancellationToken)
+        ?? Task.CompletedTask;
 
     private async Task ProjectAsync(
         Order order,
