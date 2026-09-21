@@ -102,6 +102,21 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         return BinanceAuthenticatedResponseValidator.Validate(trades);
     }
 
+    public async Task<BinanceCommissionSnapshot> GetCommissionAsync(
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        var response = await SendSignedAsync<BinanceCommissionResponse>(
+            "v3/account/commission",
+            [new("symbol", normalizedSymbol)],
+            cancellationToken).ConfigureAwait(false);
+        return new(
+            BinanceAuthenticatedResponseValidator.Validate(response, normalizedSymbol),
+            timeProvider.GetUtcNow());
+    }
+
     public async Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default)
     {
         var sentAt = timeProvider.GetUtcNow();

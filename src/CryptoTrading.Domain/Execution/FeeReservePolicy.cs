@@ -41,4 +41,25 @@ public sealed record FeeReservePolicy
             return false;
         }
     }
+
+    public bool TryCalculate(decimal authorizedNotional, decimal effectiveCommissionRate, out decimal reserveNotional)
+    {
+        reserveNotional = 0m;
+        if (authorizedNotional < 0m || effectiveCommissionRate < 0m)
+        {
+            return false;
+        }
+
+        try
+        {
+            var configured = checked(authorizedNotional * ReserveBps / 10_000m);
+            var effective = checked(authorizedNotional * effectiveCommissionRate);
+            reserveNotional = Math.Max(configured, effective);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
 }

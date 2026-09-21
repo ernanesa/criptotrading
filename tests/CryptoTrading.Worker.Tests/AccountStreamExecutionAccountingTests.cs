@@ -33,6 +33,28 @@ public sealed class AccountStreamExecutionAccountingTests
         Assert.Null(command);
     }
 
+    [Fact]
+    public void TradeReportCarriesExpectedFeeAttributionAndTolerance()
+    {
+        var estimate = new ExecutionFeeEstimate(
+            .001m,
+            "snapshot-hash",
+            "binance-account-commission",
+            DateTimeOffset.UnixEpoch,
+            DateTimeOffset.UnixEpoch.AddMinutes(5));
+
+        var command = AccountStreamExecutionAccounting.ToCommand(
+            Event(),
+            new AccountId("exchange-wallet"),
+            estimate,
+            12.5m);
+
+        Assert.NotNull(command);
+        Assert.Equal("client-42", command!.ClientOrderId);
+        Assert.Equal(estimate, command.FeeEstimate);
+        Assert.Equal(12.5m, command.FeeDriftToleranceBps);
+    }
+
     private static BinanceExecutionReportEvent Event() => new(
         DateTimeOffset.UtcNow,
         1_700_000_000_123,

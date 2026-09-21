@@ -55,6 +55,24 @@ public sealed class BinanceSpotMarketClientTests
         Assert.Equal("/api/v3/ticker/bookTicker?symbol=BTCUSDT", handler.Request!.RequestUri!.PathAndQuery);
     }
 
+    [Fact]
+    public async Task AggregateTradesUseNonFutureEndTimeAndParseMatchingEngineEvidence()
+    {
+        using var handler = new RecordingHandler(
+            "[{\"a\":17,\"p\":\"600.12\",\"q\":\"1.5\",\"f\":91,\"l\":92,\"T\":1720000000000,\"m\":true,\"M\":true}]");
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        var client = new BinanceSpotMarketClient(httpClient);
+        var end = DateTimeOffset.FromUnixTimeMilliseconds(1_720_000_000_001);
+
+        var result = await client.GetAggregateTradesAsync("bnbusdt", end, 1000);
+
+        var trade = Assert.Single(result);
+        Assert.Equal(17, trade.AggregateTradeId);
+        Assert.Equal(600.12m, trade.Price);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1_720_000_000_000), trade.OccurredAtUtc);
+        Assert.Equal("/api/v3/aggTrades?symbol=BNBUSDT&limit=1000&endTime=1720000000001", handler.Request!.RequestUri!.PathAndQuery);
+    }
+
     [Theory]
     [InlineData("2d")]
     [InlineData("1D")]

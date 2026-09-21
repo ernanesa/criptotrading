@@ -22,7 +22,9 @@ public sealed record BaselineDecisionCycleRequest(
     TimeSpan? ExecutionMarketMaxAge = null,
     TimeSpan? ExecutionTimeToLive = null,
     decimal? AvailableAccountLiquidityNotional = null,
-    FeeReservePolicy? FeeReservePolicy = null)
+    FeeReservePolicy? FeeReservePolicy = null,
+    EffectiveCommissionSnapshot? EffectiveCommission = null,
+    TimeSpan? CommissionMaximumAge = null)
 {
     public void Validate()
     {
@@ -153,7 +155,9 @@ public sealed class BaselineDecisionCycle
                     request.ExecutionMarketMaxAge ?? request.RiskPolicy.MaxMarketDataAge,
                     request.ExecutionTimeToLive ?? TimeSpan.FromMinutes(1),
                     availableAccountLiquidityNotional: request.AvailableAccountLiquidityNotional,
-                    feeReservePolicy: request.FeeReservePolicy));
+                    feeReservePolicy: request.FeeReservePolicy,
+                    effectiveCommission: request.EffectiveCommission,
+                    commissionMaximumAge: request.CommissionMaximumAge));
             if (plan.Plan is null)
             {
                 return new(
@@ -186,7 +190,12 @@ public sealed class BaselineDecisionCycle
                 intent.CorrelationId,
                 plan.Plan.IdempotencyKey,
                 passiveRisk,
-                request.EvaluatedAtUtc);
+                request.EvaluatedAtUtc,
+                plan.Plan.EstimatedCommissionRate,
+                plan.Plan.CommissionSnapshotHash,
+                plan.Plan.CommissionSource,
+                plan.Plan.CommissionObservedAtUtc,
+                plan.Plan.CommissionValidUntilUtc);
             execution = OrderExecutionPipeline.Evaluate(passiveIntent, request.RiskPolicy, request.OperationalControl);
             return new(decision, passiveIntent, execution, execution.IsDispatchable ? null : string.Join(',', execution.Decision.ReasonCodes));
         }

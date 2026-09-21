@@ -75,6 +75,21 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
+    public async Task SubmissionUsesMandatoryRulesRefreshRatherThanCachedLookup()
+    {
+        var inner = new FakeOrderClient();
+        var rules = new RefreshTrackingRulesProvider(TradingRules());
+        var client = new BinancePreTradeValidatedOrderClient(inner, rules);
+
+        _ = await client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-refresh", 1_000m));
+
+        Assert.Equal(0, rules.GetCalls);
+        Assert.Equal(1, rules.RefreshCalls);
+        Assert.Equal(1, inner.SubmitCalls);
+    }
+
+    [Fact]
     public async Task MarketOrderIsRejectedBecauseNotionalCannotBeProvenLocally()
     {
         var inner = new FakeOrderClient();
@@ -105,6 +120,24 @@ public sealed class BinancePreTradeValidationTests
         public Task<BinanceSymbolTradingRules> RefreshAsync(string symbol, CancellationToken cancellationToken = default) => Task.FromResult(rules);
     }
 
+    private sealed class RefreshTrackingRulesProvider(BinanceSymbolTradingRules rules) : IBinanceSymbolTradingRulesProvider
+    {
+        public int GetCalls { get; private set; }
+        public int RefreshCalls { get; private set; }
+
+        public Task<BinanceSymbolTradingRules> GetAsync(string symbol, CancellationToken cancellationToken = default)
+        {
+            GetCalls++;
+            return Task.FromResult(rules);
+        }
+
+        public Task<BinanceSymbolTradingRules> RefreshAsync(string symbol, CancellationToken cancellationToken = default)
+        {
+            RefreshCalls++;
+            return Task.FromResult(rules);
+        }
+    }
+
     private sealed class FakeMarketClient(BinanceSymbolTradingRules rules) : IBinanceSpotMarketClient
     {
         public int GetTradingRulesCalls { get; private set; }
@@ -129,6 +162,9 @@ public sealed class BinancePreTradeValidationTests
 
         public Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc = null, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<BinanceSpotKline>>([]);
+
+        public Task<IReadOnlyList<BinanceAggregateTrade>> GetAggregateTradesAsync(string symbol, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<BinanceAggregateTrade>>([]);
 
         public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceBookTicker("BTCUSDT", 100m, 1m, 101m, 1m, DateTimeOffset.UtcNow));

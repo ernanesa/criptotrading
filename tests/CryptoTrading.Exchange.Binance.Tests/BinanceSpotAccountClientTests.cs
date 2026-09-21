@@ -41,6 +41,38 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [Fact]
+    public async Task CommissionRequestIsSignedReadOnlyAndPreservesAllRateComponents()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account/commission", "{\"symbol\":\"BTCUSDT\",\"standardCommission\":{\"maker\":\"0.001\",\"taker\":\"0.002\",\"buyer\":\"0.0001\",\"seller\":\"0.0002\"},\"specialCommission\":{\"maker\":\"0.003\",\"taker\":\"0.004\",\"buyer\":\"0.005\",\"seller\":\"0.006\"},\"taxCommission\":{\"maker\":\"0.00001\",\"taker\":\"0.00002\",\"buyer\":\"0.00003\",\"seller\":\"0.00004\"},\"discount\":{\"enabledForAccount\":true,\"enabledForSymbol\":false,\"discountAsset\":\"BNB\",\"discount\":\"0.75\"}}"));
+        var client = CreateClient(handler);
+
+        var snapshot = await client.GetCommissionAsync(" btcusdt ");
+
+        Assert.Equal("BTCUSDT", snapshot.Response.Symbol);
+        Assert.Equal("0.003", snapshot.Response.SpecialCommission.Maker);
+        Assert.Equal("BNB", snapshot.Response.Discount.DiscountAsset);
+        Assert.Equal(2, handler.Requests.Count);
+        var request = handler.Requests[1];
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("/api/v3/account/commission", request.RequestUri!.AbsolutePath);
+        Assert.Contains("symbol=BTCUSDT", request.RequestUri.Query, StringComparison.Ordinal);
+        Assert.Contains("signature=", request.RequestUri.Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CommissionResponseWithMissingComponentFailsClosed()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account/commission", "{\"symbol\":\"BTCUSDT\",\"standardCommission\":{\"maker\":\"0.001\",\"taker\":\"0.002\",\"buyer\":\"0\",\"seller\":\"0\"},\"specialCommission\":null,\"taxCommission\":{\"maker\":\"0\",\"taker\":\"0\",\"buyer\":\"0\",\"seller\":\"0\"},\"discount\":{\"enabledForAccount\":false,\"enabledForSymbol\":false,\"discountAsset\":null,\"discount\":null}}"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetCommissionAsync("BTCUSDT"));
+    }
+
+    [Fact]
     public async Task OpenOrdersAndTradesUseReadOnlyGetEndpointsAndNormalizeFilters()
     {
         using var handler = new RecordingHandler(

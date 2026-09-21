@@ -59,6 +59,62 @@ public sealed class PostgresTradingStoreIntegrationTests
     }
 
     [Fact]
+    public async Task PersistsFeeExpectationAndDriftComparisonForAnExecution()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var now = DateTimeOffset.UtcNow;
+        var clientOrderId = new ClientOrderId("fee-" + suffix);
+        var estimate = new ExecutionFeeEstimate(.001m, "fee-snapshot-" + suffix, "integration", now, now.AddMinutes(5));
+        var submit = new SubmitOrderCommand(
+            OrderId.New(), clientOrderId, new Symbol("FEE" + suffix + "USDT"), OrderSide.Buy, OrderType.Market,
+            new Quantity(1m), new Price(100m), 100m, CorrelationId.New(), IdempotencyKey.New(), "integration-fee", now,
+            estimate.Rate, estimate.SnapshotHash, estimate.Source, estimate.ObservedAtUtc, estimate.ValidUntilUtc);
+        var outbox = new OutboxRecord(
+            Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, submit.CorrelationId, submit.IdempotencyKey,
+            "integration-fee", submit, OutboxRecordStatus.Pending, now.AddDays(1));
+
+        await store.EnqueueAsync(outbox);
+        var persistedEstimate = await store.ReadExpectedExecutionFeeAsync(clientOrderId.Value);
+        Assert.NotNull(persistedEstimate);
+        Assert.Equal(estimate.Rate, persistedEstimate.Rate);
+        Assert.Equal(estimate.SnapshotHash, persistedEstimate.SnapshotHash);
+        Assert.Equal(estimate.Source, persistedEstimate.Source);
+
+        var tradeId = Convert.ToInt64(suffix, 16);
+        var accounting = new ExecutionAccountingCommand(
+            "fee-trade-" + suffix, tradeId, tradeId,
+            submit.Symbol, new Asset("FEE" + suffix), new Asset("USDT"), OrderSide.Buy, new Quantity(1m), new Price(100m),
+            new Money(.002m, new Asset("BNB")), new AccountId("integration-fee-wallet-" + suffix),
+            new AccountId("integration-fee-expense-" + suffix), LedgerEntryId.New(), CorrelationId.New(), IdempotencyKey.New(), now,
+            clientOrderId.Value, estimate, 25m,
+            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 100m, now, "integration:bnb-valuation"));
+        var result = await store.RecordExecutionAsync(accounting);
+
+        Assert.True(result.FeeComparison!.IsDrift);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var query = new NpgsqlCommand(
+            "SELECT client_order_id, fee_comparison_status, fee_comparison_reason, commission_valuation_source FROM trading.execution_fills WHERE trade_id = @trade_id;",
+            connection);
+        query.Parameters.AddWithValue("trade_id", tradeId);
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(clientOrderId.Value, reader.GetString(0));
+        Assert.Equal("DRIFT", reader.GetString(1));
+        Assert.Equal("EXECUTION_FEE_DRIFT", reader.GetString(2));
+        Assert.Equal("integration:bnb-valuation", reader.GetString(3));
+    }
+
+    [Fact]
     public async Task PersistsLedgerAndOutboxWithLeaseRetryAndIdempotency()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");

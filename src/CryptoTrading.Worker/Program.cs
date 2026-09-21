@@ -1,5 +1,6 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Domain.Accounting;
+using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Exchange.Paper;
@@ -56,6 +57,9 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AutonomyInterval = builder.Configuration["WORKER_AUTONOMY_INTERVAL"] ?? "1m";
         options.AutonomyKlineLimit = builder.Configuration.GetValue("WORKER_AUTONOMY_KLINE_LIMIT", 100);
         options.AutonomyEntryTargetNotional = builder.Configuration.GetValue("WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL", 100m);
+        options.AutonomyFeeReserveBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_RESERVE_BPS", FeeReservePolicy.DefaultReserveBps);
+        options.AutonomyFeeDriftToleranceBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_DRIFT_TOLERANCE_BPS", ExecutionFeeDriftEvaluator.DefaultToleranceBps);
+        options.FeeAssetValuationMaxAgeSeconds = builder.Configuration.GetValue("WORKER_FEE_ASSET_VALUATION_MAX_AGE_SECONDS", 30);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
         options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
@@ -113,7 +117,8 @@ builder.Services.AddSingleton<CryptoTrading.Observability.TradingAlertDispatcher
 builder.Services.AddSingleton<CryptoTrading.Shadow.ShadowReportWriter>(serviceProvider =>
     new CryptoTrading.Shadow.ShadowReportWriter(serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ShadowReportDirectory));
 _ = builder.Services.AddOutboxExecution(builder.Configuration);
-if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
+if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) ||
+    builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {
     _ = builder.Services.AddBinanceSpotMarketClient();
     builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle>(_ =>
@@ -134,6 +139,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
     _ = builder.Services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IExecutionAccountingStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IExpectedExecutionFeeStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
@@ -211,6 +218,7 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
 }
 if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {
+    builder.Services.AddSingleton<IExecutionFeeAssetValuationProvider, BinanceFeeAssetValuationProvider>();
     _ = builder.Services.AddSingleton<IBinanceUserDataStreamClient>(serviceProvider => new BinanceUserDataStreamApiClient(
         new BinanceUserDataStreamApiOptions
         {

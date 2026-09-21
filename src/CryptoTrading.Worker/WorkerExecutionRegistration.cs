@@ -22,6 +22,7 @@ internal static class WorkerExecutionRegistration
             {
                 return new TestnetOutboxMessageExecutor(
                     serviceProvider.GetRequiredService<IBinanceSpotOrderClient>(),
+                    serviceProvider.GetRequiredService<IBinanceSpotAccountClient>(),
                     runtimeOptions,
                     serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
                     serviceProvider.GetRequiredService<OrderProjectionService>(),

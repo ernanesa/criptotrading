@@ -25,6 +25,8 @@ internal sealed class AccountStreamHostedService(
     IAccountStreamEventStore eventStore,
     ILocalOpenOrderStore openOrderStore,
     IExecutionAccountingStore executionAccountingStore,
+    IExpectedExecutionFeeStore expectedExecutionFeeStore,
+    IExecutionFeeAssetValuationProvider feeAssetValuationProvider,
     IAsyncOperationalControl operationalControl,
     AccountReconciliationService reconciliation,
     ReconciliationReportWriter reconciliationReportWriter,
@@ -54,12 +56,24 @@ internal sealed class AccountStreamHostedService(
                 if (userEvent is BinanceExecutionReportEvent execution)
                 {
                     await AccountStreamOrderProjection.ApplyAsync(openOrderStore, execution, stoppingToken).ConfigureAwait(false);
+                    var feeEstimate = await expectedExecutionFeeStore
+                        .ReadExpectedExecutionFeeAsync(execution.ClientOrderId, stoppingToken)
+                        .ConfigureAwait(false);
+                    var feeAssetValuation = await feeAssetValuationProvider.ResolveAsync(execution, stoppingToken).ConfigureAwait(false);
                     var accounting = AccountStreamExecutionAccounting.ToCommand(
                         execution,
-                        new AccountId(options.Value.ReconciliationAccount));
+                        new AccountId(options.Value.ReconciliationAccount),
+                        feeEstimate,
+                        options.Value.AutonomyFeeDriftToleranceBps,
+                        feeAssetValuation);
                     if (accounting is not null)
                     {
-                        _ = await executionAccountingStore.RecordExecutionAsync(accounting, stoppingToken).ConfigureAwait(false);
+                        var accountingResult = await executionAccountingStore.RecordExecutionAsync(accounting, stoppingToken).ConfigureAwait(false);
+                        if (feeEstimate is not null && accountingResult.FeeComparison is { } comparison &&
+                            (comparison.IsDrift || comparison.Status == ExecutionFeeComparisonStatus.NotComparable))
+                        {
+                            await HandleFeeComparisonFailureAsync(execution, comparison, stoppingToken).ConfigureAwait(false);
+                        }
                     }
                 }
 
@@ -154,6 +168,21 @@ internal sealed class AccountStreamHostedService(
             // the caller still throws the original stream/storage failure.
             AccountStreamLog.ControlFailure(logger, exception.GetType().Name);
         }
+    }
+
+    private async Task HandleFeeComparisonFailureAsync(
+        BinanceExecutionReportEvent execution,
+        ExecutionFeeComparison comparison,
+        CancellationToken cancellationToken)
+    {
+        _ = await ExecutionFeeDriftAlertPublisher.PublishAsync(
+            execution,
+            comparison,
+            alertDispatcher,
+            DateTimeOffset.UtcNow,
+            cancellationToken).ConfigureAwait(false);
+        await EnterSafeModeAsync(comparison.Reason, cancellationToken).ConfigureAwait(false);
+        await ReconcileAfterReconnectAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal static AccountStreamEventRecord ToRecord(BinanceUserDataEvent userEvent)

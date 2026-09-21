@@ -22,7 +22,10 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var rules = await rulesProvider.GetAsync(request.Symbol, cancellationToken).ConfigureAwait(false);
+        // Execution must revalidate the venue rules immediately before the
+        // external boundary; a still-fresh cache is insufficient after a
+        // delayed outbox delivery or exchange filter change.
+        var rules = await rulesProvider.RefreshAsync(request.Symbol, cancellationToken).ConfigureAwait(false);
         var validation = request.Type switch
         {
             BinanceSpotOrderType.Limit => rules.ValidateLimitOrder(request.Price!.Value, request.Quantity),

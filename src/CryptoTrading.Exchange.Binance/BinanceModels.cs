@@ -15,6 +15,16 @@ public sealed record BinanceSpotKline(
     decimal Volume,
     string Interval);
 
+/// <summary>Public aggregate trade evidence emitted by the Binance matching engine.</summary>
+public sealed record BinanceAggregateTrade(
+    long AggregateTradeId,
+    decimal Price,
+    decimal Quantity,
+    long FirstTradeId,
+    long LastTradeId,
+    DateTimeOffset OccurredAtUtc,
+    bool IsBuyerMaker);
+
 /// <summary>
 /// Public top-of-book evidence. Binance does not include an observation timestamp
 /// in this REST payload; the adapter stamps the UTC receive time after validation.

@@ -53,6 +53,17 @@ public sealed record LocalOpenOrderRecord(
     string Status,
     DateTimeOffset UpdatedAtUtc);
 
+public interface IExpectedExecutionFeeStore
+{
+    Task RecordExpectedExecutionFeeAsync(
+        SubmitOrderCommand command,
+        CancellationToken cancellationToken = default);
+
+    Task<ExecutionFeeEstimate?> ReadExpectedExecutionFeeAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Durable outbox operations required by a dispatcher.</summary>
 public interface IOutboxStore
 {
@@ -241,7 +252,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1047,6 +1058,16 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
     {
         ArgumentNullException.ThrowIfNull(command);
         var entry = ExecutionAccounting.CreateLedgerEntry(command);
+        var feeComparison = ExecutionFeeDriftEvaluator.Compare(
+            command.FeeEstimate,
+            command.Commission,
+            command.Quantity,
+            command.Price,
+            command.BaseAsset,
+            command.QuoteAsset,
+            command.OccurredAtUtc,
+            command.FeeDriftToleranceBps,
+            command.FeeAssetValuation);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
 
@@ -1070,7 +1091,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
                 var existingEntry = await ReadExistingJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("Execution record exists without its journal entry.");
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true);
+                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true, feeComparison);
             }
         }
 
@@ -1111,11 +1132,17 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
             INSERT INTO trading.execution_fills
                 (execution_id, trade_id, order_id, symbol, base_asset, quote_asset, side,
                  quantity, price, commission, commission_asset, occurred_at, ledger_entry_id,
-                 realized_pnl_quote, average_cost_quote)
+                 realized_pnl_quote, average_cost_quote, client_order_id, estimated_rate,
+                 fee_snapshot_hash, fee_source, fee_observed_at, fee_valid_until,
+                 expected_commission_quote, actual_commission_quote, fee_deviation_bps,
+                 fee_comparison_status, fee_comparison_reason, commission_valuation_source, commission_valuation_at)
             VALUES
-                (@execution_id, @trade_id, @order_id, @symbol, @base_asset, @quote_asset, @side,
+                 (@execution_id, @trade_id, @order_id, @symbol, @base_asset, @quote_asset, @side,
                  @quantity, @price, @commission, @commission_asset, @occurred_at, @ledger_entry_id,
-                 @realized_pnl_quote, @average_cost_quote);
+                 @realized_pnl_quote, @average_cost_quote, @client_order_id, @estimated_rate,
+                 @fee_snapshot_hash, @fee_source, @fee_observed_at, @fee_valid_until,
+                 @expected_commission_quote, @actual_commission_quote, @fee_deviation_bps,
+                 @fee_comparison_status, @fee_comparison_reason, @commission_valuation_source, @commission_valuation_at);
             """,
             [
                 Parameter("execution_id", NpgsqlDbType.Varchar, command.ExecutionId),
@@ -1133,6 +1160,19 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
                 Parameter("ledger_entry_id", NpgsqlDbType.Uuid, entry.Id.Value),
                 Parameter("realized_pnl_quote", NpgsqlDbType.Numeric, update.RealizedPnlQuote),
                 Parameter("average_cost_quote", NpgsqlDbType.Numeric, averageCost),
+                Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId),
+                Parameter("estimated_rate", NpgsqlDbType.Numeric, command.FeeEstimate?.Rate),
+                Parameter("fee_snapshot_hash", NpgsqlDbType.Varchar, command.FeeEstimate?.SnapshotHash),
+                Parameter("fee_source", NpgsqlDbType.Varchar, command.FeeEstimate?.Source),
+                Parameter("fee_observed_at", NpgsqlDbType.TimestampTz, command.FeeEstimate?.ObservedAtUtc.UtcDateTime),
+                Parameter("fee_valid_until", NpgsqlDbType.TimestampTz, command.FeeEstimate?.ValidUntilUtc.UtcDateTime),
+                Parameter("expected_commission_quote", NpgsqlDbType.Numeric, feeComparison.ExpectedQuote),
+                Parameter("actual_commission_quote", NpgsqlDbType.Numeric, feeComparison.ActualQuote),
+                Parameter("fee_deviation_bps", NpgsqlDbType.Numeric, feeComparison.DeviationBps),
+                Parameter("fee_comparison_status", NpgsqlDbType.Varchar, FeeComparisonStatus(feeComparison.Status)),
+                Parameter("fee_comparison_reason", NpgsqlDbType.Varchar, feeComparison.Reason),
+                Parameter("commission_valuation_source", NpgsqlDbType.Varchar, feeComparison.ValuationSource),
+                Parameter("commission_valuation_at", NpgsqlDbType.TimestampTz, feeComparison.ValuationAtUtc?.UtcDateTime),
             ], cancellationToken).ConfigureAwait(false);
 
         await ExecuteAsync(connection, transaction,
@@ -1158,7 +1198,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new(command.ExecutionId, entry, update.RealizedPnlQuote, averageCost, false);
+        return new(command.ExecutionId, entry, update.RealizedPnlQuote, averageCost, false, feeComparison);
     }
 
     public async Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(
@@ -1615,9 +1655,118 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
             }
         }
 
+        await PersistExpectedExecutionFeeAsync(connection, transaction, record.Command, cancellationToken).ConfigureAwait(false);
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return record;
     }
+
+    public async Task RecordExpectedExecutionFeeAsync(
+        SubmitOrderCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await PersistExpectedExecutionFeeAsync(connection, transaction, command, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<ExecutionFeeEstimate?> ReadExpectedExecutionFeeAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT estimated_rate, snapshot_hash, source, observed_at, valid_until FROM trading.execution_fee_expectations WHERE client_order_id = @client_order_id;",
+            connection);
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        return new ExecutionFeeEstimate(
+            reader.GetDecimal(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            new DateTimeOffset(reader.GetFieldValue<DateTime>(3).ToUniversalTime()),
+            new DateTimeOffset(reader.GetFieldValue<DateTime>(4).ToUniversalTime()));
+    }
+
+    private static async Task PersistExpectedExecutionFeeAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SubmitOrderCommand command,
+        CancellationToken cancellationToken)
+    {
+        if (command.EstimatedCommissionRate is not { } rate)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(command.CommissionSnapshotHash) ||
+            string.IsNullOrWhiteSpace(command.CommissionSource) ||
+            command.CommissionObservedAtUtc is not { } observedAtUtc ||
+            command.CommissionValidUntilUtc is not { } validUntilUtc)
+        {
+            throw new InvalidOperationException("An estimated commission requires complete snapshot attribution.");
+        }
+
+        _ = new ExecutionFeeEstimate(rate, command.CommissionSnapshotHash, command.CommissionSource, observedAtUtc, validUntilUtc);
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.execution_fee_expectations
+                (client_order_id, order_id, symbol, side, estimated_rate, snapshot_hash, source, observed_at, valid_until)
+            VALUES
+                (@client_order_id, @order_id, @symbol, @side, @estimated_rate, @snapshot_hash, @source, @observed_at, @valid_until)
+            ON CONFLICT (client_order_id) DO NOTHING;
+            """,
+            [
+                Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value),
+                Parameter("order_id", NpgsqlDbType.Uuid, command.OrderId.Value),
+                Parameter("symbol", NpgsqlDbType.Varchar, command.Symbol.Value),
+                Parameter("side", NpgsqlDbType.Varchar, command.Side == OrderSide.Buy ? "BUY" : "SELL"),
+                Parameter("estimated_rate", NpgsqlDbType.Numeric, rate),
+                Parameter("snapshot_hash", NpgsqlDbType.Varchar, command.CommissionSnapshotHash),
+                Parameter("source", NpgsqlDbType.Varchar, command.CommissionSource),
+                Parameter("observed_at", NpgsqlDbType.TimestampTz, observedAtUtc.UtcDateTime),
+                Parameter("valid_until", NpgsqlDbType.TimestampTz, validUntilUtc.UtcDateTime),
+            ], cancellationToken).ConfigureAwait(false);
+
+        await using var identityCommand = new NpgsqlCommand(
+            """
+            SELECT order_id, symbol, side, estimated_rate, snapshot_hash, source, observed_at, valid_until
+            FROM trading.execution_fee_expectations
+            WHERE client_order_id = @client_order_id;
+            """,
+            connection,
+            transaction);
+        identityCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value));
+        await using var reader = await identityCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("The execution-fee expectation conflict was reported without a durable record.");
+        }
+
+        var matches = reader.GetGuid(0) == command.OrderId.Value
+            && string.Equals(reader.GetString(1), command.Symbol.Value, StringComparison.Ordinal)
+            && string.Equals(reader.GetString(2), command.Side == OrderSide.Buy ? "BUY" : "SELL", StringComparison.Ordinal)
+            && reader.GetDecimal(3) == rate
+            && string.Equals(reader.GetString(4), command.CommissionSnapshotHash, StringComparison.Ordinal)
+            && string.Equals(reader.GetString(5), command.CommissionSource, StringComparison.Ordinal)
+            && MatchesPostgresTimestamp(reader.GetFieldValue<DateTime>(6), observedAtUtc)
+            && MatchesPostgresTimestamp(reader.GetFieldValue<DateTime>(7), validUntilUtc);
+        if (!matches)
+        {
+            throw new InvalidOperationException("The client order identity is already associated with a different execution-fee expectation.");
+        }
+    }
+
+    private static bool MatchesPostgresTimestamp(DateTime storedUtc, DateTimeOffset expectedUtc) =>
+        Math.Abs(storedUtc.ToUniversalTime().Ticks - expectedUtc.UtcDateTime.Ticks) < TimeSpan.TicksPerMicrosecond;
 
     public async Task<DateTimeOffset?> GetLastProcessedCloseAsync(
         string scope,
@@ -2375,6 +2524,14 @@ public sealed class PostgresTradingStore : IOutboxStore, IAutonomyCheckpointStor
         using var rightDocument = JsonDocument.Parse(right);
         return JsonElement.DeepEquals(leftDocument.RootElement, rightDocument.RootElement);
     }
+
+    private static string FeeComparisonStatus(ExecutionFeeComparisonStatus status) => status switch
+    {
+        ExecutionFeeComparisonStatus.NotComparable => "NOT_COMPARABLE",
+        ExecutionFeeComparisonStatus.WithinTolerance => "WITHIN_TOLERANCE",
+        ExecutionFeeComparisonStatus.Drift => "DRIFT",
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported fee-comparison status."),
+    };
 
     private static NpgsqlParameter Parameter(string name, NpgsqlDbType type, object? value) =>
         new(name, type) { Value = value ?? DBNull.Value };

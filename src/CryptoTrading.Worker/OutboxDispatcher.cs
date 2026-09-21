@@ -130,7 +130,12 @@ public sealed class PaperOutboxMessageExecutor(
             new CorrelationId(ReadGuid(root, "correlationId")),
             new IdempotencyKey(ReadString(root, "idempotencyKey")),
             ReadString(root, "policyVersion"),
-            ReadValue(root, "createdAtUtc").GetDateTimeOffset());
+            ReadValue(root, "createdAtUtc").GetDateTimeOffset(),
+            ReadOptionalDecimal(root, "estimatedCommissionRate"),
+            ReadOptionalString(root, "commissionSnapshotHash"),
+            ReadOptionalString(root, "commissionSource"),
+            ReadOptionalDateTimeOffset(root, "commissionObservedAtUtc"),
+            ReadOptionalDateTimeOffset(root, "commissionValidUntilUtc"));
 
         if (command.Quantity.Value <= 0m)
         {
@@ -162,6 +167,21 @@ public sealed class PaperOutboxMessageExecutor(
 
     private static decimal ReadDecimal(JsonElement root, string property) => ReadValue(root, property).GetDecimal();
 
+    private static decimal? ReadOptionalDecimal(JsonElement root, string property) =>
+        TryReadValue(root, property, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetDecimal()
+            : null;
+
+    private static string? ReadOptionalString(JsonElement root, string property) =>
+        TryReadValue(root, property, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetString()
+            : null;
+
+    private static DateTimeOffset? ReadOptionalDateTimeOffset(JsonElement root, string property) =>
+        TryReadValue(root, property, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetDateTimeOffset()
+            : null;
+
     private static T ReadEnum<T>(JsonElement root, string property) where T : struct, Enum
     {
         var value = ReadValue(root, property);
@@ -192,20 +212,31 @@ public sealed class PaperOutboxMessageExecutor(
 
     private static JsonElement ReadValue(JsonElement root, string property)
     {
-        var value = root.EnumerateObject()
+        if (!TryReadValue(root, property, out var value))
+        {
+            throw new JsonException($"Property '{property}' is missing.");
+        }
+
+        return value;
+    }
+
+    private static bool TryReadValue(JsonElement root, string property, out JsonElement value)
+    {
+        value = root.EnumerateObject()
             .FirstOrDefault(candidate => string.Equals(candidate.Name, property, StringComparison.OrdinalIgnoreCase)).Value;
         if (value.ValueKind == JsonValueKind.Undefined)
         {
-            throw new JsonException($"Property '{property}' is missing.");
+            return false;
         }
 
         var nested = value.ValueKind == JsonValueKind.Object
             ? value.EnumerateObject()
                 .FirstOrDefault(candidate => string.Equals(candidate.Name, "value", StringComparison.OrdinalIgnoreCase)).Value
             : default;
-        return value.ValueKind == JsonValueKind.Object && nested.ValueKind != JsonValueKind.Undefined
+        value = value.ValueKind == JsonValueKind.Object && nested.ValueKind != JsonValueKind.Undefined
             ? nested
             : value;
+        return true;
     }
 }
 

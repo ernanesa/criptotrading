@@ -33,6 +33,7 @@ internal sealed class AutonomyCycleHostedService(
     BaselineDecisionCycle cycle,
     ILogger<AutonomyCycleHostedService> logger) : BackgroundService
 {
+    private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var runtime = options.Value;
@@ -106,6 +107,21 @@ internal sealed class AutonomyCycleHostedService(
         {
             throw new InvalidOperationException("Binance account does not currently allow trading.");
         }
+
+        var commission = await accountClient.GetCommissionAsync(runtime.AutonomySymbol, cancellationToken).ConfigureAwait(false);
+        var discountValuation = await ResolveDiscountValuationAsync(
+            commission,
+            runtime.AutonomySymbol,
+            account,
+            marketClient,
+            cancellationToken).ConfigureAwait(false);
+        var commissionSnapshot = MapCommission(
+            commission,
+            runtime.AutonomySymbol,
+            runtime.ReconciliationAccount,
+            account,
+            now,
+            discountValuation);
 
         var btc = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase));
         var btcQuantity = ParseBalance(btc?.Free) + ParseBalance(btc?.Locked);
@@ -183,7 +199,9 @@ internal sealed class AutonomyCycleHostedService(
             policyDocument.Policy.MaxMarketDataAge,
             TimeSpan.FromMinutes(1),
             availableQuoteLiquidity,
-            new FeeReservePolicy(runtime.AutonomyFeeReserveBps));
+            new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
+            commissionSnapshot,
+            policyDocument.Policy.MaxMarketDataAge);
         var result = cycle.Evaluate(request);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
@@ -221,6 +239,83 @@ internal sealed class AutonomyCycleHostedService(
 
         return parsed;
     }
+
+    private static EffectiveCommissionSnapshot MapCommission(
+        BinanceCommissionSnapshot snapshot,
+        string symbol,
+        string accountScope,
+        BinanceAccountSnapshot account,
+        DateTimeOffset observedAtUtc,
+        (bool Available, decimal? Price, DateTimeOffset? ObservedAtUtc, string? Source) discountValuation)
+    {
+        var response = snapshot.Response;
+        var discountEnabled = response.Discount.EnabledForAccount && response.Discount.EnabledForSymbol;
+        return new EffectiveCommissionSnapshot(
+            new Symbol(symbol),
+            "testnet",
+            accountScope,
+            MapRates(response.StandardCommission),
+            MapRates(response.SpecialCommission),
+            MapRates(response.TaxCommission),
+            response.Discount.EnabledForAccount,
+            response.Discount.EnabledForSymbol,
+            response.Discount.DiscountAsset,
+            ParseOptionalRate(response.Discount.Discount),
+            !discountEnabled || discountValuation.Available,
+            snapshot.ObservedAtUtc <= observedAtUtc ? snapshot.ObservedAtUtc : observedAtUtc,
+            discountAssetQuotePrice: discountValuation.Price,
+            discountAssetValuationAtUtc: discountValuation.ObservedAtUtc,
+            discountAssetValuationSource: discountValuation.Source);
+    }
+
+    private static async Task<(bool Available, decimal? Price, DateTimeOffset? ObservedAtUtc, string? Source)> ResolveDiscountValuationAsync(
+        BinanceCommissionSnapshot commission,
+        string symbol,
+        BinanceAccountSnapshot account,
+        IBinanceSpotMarketClient marketClient,
+        CancellationToken cancellationToken)
+    {
+        var discount = commission.Response.Discount;
+        if (!discount.EnabledForAccount || !discount.EnabledForSymbol)
+        {
+            return (false, null, null, null);
+        }
+
+        if (!string.Equals(discount.DiscountAsset, "BNB", StringComparison.OrdinalIgnoreCase))
+        {
+            return (false, null, null, null);
+        }
+
+        var bnb = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, "BNB", StringComparison.OrdinalIgnoreCase));
+        if (ParseBalance(bnb?.Free) + ParseBalance(bnb?.Locked) <= 0m)
+        {
+            return (false, null, null, null);
+        }
+
+        var normalized = new Symbol(symbol).Value;
+        var quote = QuoteAssets.FirstOrDefault(asset => normalized.EndsWith(asset, StringComparison.Ordinal));
+        if (quote is null || normalized.Length <= quote.Length || string.Equals(quote, "BNB", StringComparison.Ordinal))
+        {
+            return (false, null, null, null);
+        }
+
+        try
+        {
+            var ticker = await marketClient.GetBookTickerAsync("BNB" + quote, cancellationToken).ConfigureAwait(false);
+            return ticker.BidPrice > 0m && ticker.ObservedAtUtc.Offset == TimeSpan.Zero
+                ? (true, ticker.BidPrice, ticker.ObservedAtUtc, "binance:GET:/api/v3/ticker/bookTicker")
+                : (false, null, null, null);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or BinanceApiException or FormatException)
+        {
+            return (false, null, null, null);
+        }
+    }
+
+    private static CommissionRateSet MapRates(BinanceCommissionRateSet rates) => new(
+        ParseBalance(rates.Maker), ParseBalance(rates.Taker), ParseBalance(rates.Buyer), ParseBalance(rates.Seller));
+
+    private static decimal? ParseOptionalRate(string? value) => string.IsNullOrWhiteSpace(value) ? null : ParseBalance(value);
 
     private static List<CloseBar> ValidateAndMapKlines(
         IReadOnlyList<BinanceSpotKline> klines,

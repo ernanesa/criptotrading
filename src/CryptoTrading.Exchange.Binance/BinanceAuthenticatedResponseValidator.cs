@@ -151,6 +151,57 @@ internal static class BinanceAuthenticatedResponseValidator
         return trades;
     }
 
+    public static BinanceCommissionResponse Validate(BinanceCommissionResponse? response, string expectedSymbol)
+    {
+        if (response is null || response.StandardCommission is null || response.SpecialCommission is null ||
+            response.TaxCommission is null || response.Discount is null)
+        {
+            throw Invalid("commission response is incomplete");
+        }
+
+        var symbol = NormalizeSymbol(response.Symbol, "symbol");
+        if (!string.Equals(symbol, NormalizeSymbol(expectedSymbol, "expectedSymbol"), StringComparison.Ordinal))
+        {
+            throw Invalid("commission response symbol does not match the request");
+        }
+
+        Validate(response.StandardCommission, "standardCommission");
+        Validate(response.SpecialCommission, "specialCommission");
+        Validate(response.TaxCommission, "taxCommission");
+        Validate(response.Discount);
+        return response;
+    }
+
+    private static void Validate(BinanceCommissionRateSet? rates, string fieldName)
+    {
+        if (rates is null)
+        {
+            throw Invalid($"{fieldName} is required");
+        }
+
+        ParseNonNegativeDecimal(rates.Maker, $"{fieldName}.maker");
+        ParseNonNegativeDecimal(rates.Taker, $"{fieldName}.taker");
+        ParseNonNegativeDecimal(rates.Buyer, $"{fieldName}.buyer");
+        ParseNonNegativeDecimal(rates.Seller, $"{fieldName}.seller");
+    }
+
+    private static void Validate(BinanceCommissionDiscount? discount)
+    {
+        if (discount is null)
+        {
+            throw Invalid("discount is required");
+        }
+
+        if (discount.EnabledForAccount && discount.EnabledForSymbol)
+        {
+            NormalizeAsset(discount.DiscountAsset, "discountAsset");
+            if (ParseNonNegativeDecimal(discount.Discount, "discount") > 1m)
+            {
+                throw Invalid("discount must be between zero and one");
+            }
+        }
+    }
+
     public static BinanceTrade Validate(BinanceTrade? trade)
     {
         if (trade is null)

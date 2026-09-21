@@ -22,7 +22,11 @@ public sealed record ExecutionAccountingCommand
         LedgerEntryId ledgerEntryId,
         CorrelationId correlationId,
         IdempotencyKey idempotencyKey,
-        DateTimeOffset occurredAtUtc)
+        DateTimeOffset occurredAtUtc,
+        string? clientOrderId = null,
+        ExecutionFeeEstimate? feeEstimate = null,
+        decimal feeDriftToleranceBps = ExecutionFeeDriftEvaluator.DefaultToleranceBps,
+        ExecutionFeeAssetValuation? feeAssetValuation = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
         if (executionId.Length > 200) throw new ArgumentOutOfRangeException(nameof(executionId));
@@ -30,6 +34,7 @@ public sealed record ExecutionAccountingCommand
         if (quantity.Value <= 0m) throw new ArgumentOutOfRangeException(nameof(quantity));
         if (occurredAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Execution timestamps must be UTC.", nameof(occurredAtUtc));
         if (commission.Amount < 0m) throw new ArgumentOutOfRangeException(nameof(commission));
+        if (feeDriftToleranceBps < 0m || feeDriftToleranceBps > 10_000m) throw new ArgumentOutOfRangeException(nameof(feeDriftToleranceBps));
 
         ExecutionId = executionId.Trim();
         TradeId = tradeId;
@@ -47,6 +52,10 @@ public sealed record ExecutionAccountingCommand
         CorrelationId = correlationId;
         IdempotencyKey = idempotencyKey;
         OccurredAtUtc = occurredAtUtc;
+        ClientOrderId = clientOrderId?.Trim();
+        FeeEstimate = feeEstimate;
+        FeeDriftToleranceBps = feeDriftToleranceBps;
+        FeeAssetValuation = feeAssetValuation;
     }
 
     public string ExecutionId { get; }
@@ -65,6 +74,10 @@ public sealed record ExecutionAccountingCommand
     public CorrelationId CorrelationId { get; }
     public IdempotencyKey IdempotencyKey { get; }
     public DateTimeOffset OccurredAtUtc { get; }
+    public string? ClientOrderId { get; }
+    public ExecutionFeeEstimate? FeeEstimate { get; }
+    public decimal FeeDriftToleranceBps { get; }
+    public ExecutionFeeAssetValuation? FeeAssetValuation { get; }
 }
 
 public sealed record ExecutionAccountingResult(
@@ -72,7 +85,8 @@ public sealed record ExecutionAccountingResult(
     LedgerEntry LedgerEntry,
     decimal? RealizedPnlQuote,
     decimal? AverageCostQuote,
-    bool IsDuplicate);
+    bool IsDuplicate,
+    ExecutionFeeComparison? FeeComparison = null);
 
 /// <summary>Pure construction of balanced postings for one spot trade.</summary>
 public static class ExecutionAccounting

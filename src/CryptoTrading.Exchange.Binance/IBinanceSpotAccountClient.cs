@@ -17,5 +17,9 @@ public interface IBinanceSpotAccountClient
         BinanceTradeQuery? query = null,
         CancellationToken cancellationToken = default);
 
+    Task<BinanceCommissionSnapshot> GetCommissionAsync(
+        string symbol,
+        CancellationToken cancellationToken = default);
+
     Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default);
 }
