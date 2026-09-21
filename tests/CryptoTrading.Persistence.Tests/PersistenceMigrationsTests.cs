@@ -27,11 +27,12 @@ public sealed class PersistenceMigrationsTests
                 "014_autonomy_equity_high_water_marks.down.sql", "014_autonomy_equity_high_water_marks.up.sql",
                 "015_execution_fee_attribution.down.sql", "015_execution_fee_attribution.up.sql",
                 "016_open_order_quantities.down.sql", "016_open_order_quantities.up.sql",
+                "017_execution_quality_expectations.down.sql", "017_execution_quality_expectations.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -77,5 +78,6 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("execution_fee_expectations", upMigrations[14].Sql, StringComparison.Ordinal);
         Assert.Contains("fee_comparison_status", upMigrations[14].Sql, StringComparison.Ordinal);
         Assert.Contains("cumulative_executed_quantity", upMigrations[15].Sql, StringComparison.Ordinal);
+        Assert.Contains("reference_price", upMigrations[16].Sql, StringComparison.Ordinal);
     }
 }

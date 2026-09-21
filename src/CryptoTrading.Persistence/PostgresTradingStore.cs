@@ -1728,9 +1728,11 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         await ExecuteAsync(connection, transaction,
             """
             INSERT INTO trading.execution_fee_expectations
-                (client_order_id, order_id, symbol, side, estimated_rate, snapshot_hash, source, observed_at, valid_until)
+                (client_order_id, order_id, symbol, side, estimated_rate, snapshot_hash, source, observed_at, valid_until,
+                 reference_price, authorized_quantity, decision_at)
             VALUES
-                (@client_order_id, @order_id, @symbol, @side, @estimated_rate, @snapshot_hash, @source, @observed_at, @valid_until)
+                (@client_order_id, @order_id, @symbol, @side, @estimated_rate, @snapshot_hash, @source, @observed_at, @valid_until,
+                 @reference_price, @authorized_quantity, @decision_at)
             ON CONFLICT (client_order_id) DO NOTHING;
             """,
             [
@@ -1743,6 +1745,9 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                 Parameter("source", NpgsqlDbType.Varchar, command.CommissionSource),
                 Parameter("observed_at", NpgsqlDbType.TimestampTz, observedAtUtc.UtcDateTime),
                 Parameter("valid_until", NpgsqlDbType.TimestampTz, validUntilUtc.UtcDateTime),
+                Parameter("reference_price", NpgsqlDbType.Numeric, command.ReferencePrice.Value),
+                Parameter("authorized_quantity", NpgsqlDbType.Numeric, command.Quantity.Value),
+                Parameter("decision_at", NpgsqlDbType.TimestampTz, command.CreatedAtUtc.UtcDateTime),
             ], cancellationToken).ConfigureAwait(false);
 
         await using var identityCommand = new NpgsqlCommand(
