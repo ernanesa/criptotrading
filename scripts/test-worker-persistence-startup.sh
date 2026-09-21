@@ -24,12 +24,15 @@ if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
 elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
     dotnet_command="$DOTNET_ROOT/dotnet"
 fi
+worker_assembly="$repo_root/src/CryptoTrading.Worker/bin/Release/net11.0/CryptoTrading.Worker.dll"
+[[ -f "$worker_assembly" ]] || { echo 'Worker Release assembly is required; run dotnet build before this startup harness.' >&2; exit 2; }
 
 compose=(docker compose --project-name "$compose_project" --file "$repo_root/compose.yaml")
 worker_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-worker-startup.XXXXXX")"
+restart_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-worker-restart.XXXXXX")"
 cleanup() {
-    rm -f -- "$worker_log"
-    "${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
+    rm -f -- "$worker_log" "$restart_log"
+    "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -52,12 +55,16 @@ export WORKER_RISK_POLICY_REQUIRED=false WORKER_SHADOW_ENABLED=false
 # No Binance variables are exported: account-stream/reconciliation are disabled
 # and the Worker therefore cannot construct an authenticated client.
 
-set +e
-timeout --signal=TERM --kill-after=5s 12s "$dotnet_command" run \
-    --project "$repo_root/src/CryptoTrading.Worker/CryptoTrading.Worker.csproj" \
-    --no-restore --configuration Release >"$worker_log" 2>&1
-worker_status=$?
-set -e
+run_worker() {
+    local log_path="$1"
+    set +e
+    timeout --foreground --signal=TERM --kill-after=15s 12s "$dotnet_command" "$worker_assembly" >"$log_path" 2>&1
+    local status=$?
+    set -e
+    printf '%s' "$status"
+}
+
+worker_status="$(run_worker "$worker_log")"
 
 # timeout(1) means the host stayed alive until the harness stopped it. A clean
 # early exit is also accepted only if the expected migration log was emitted.
@@ -73,7 +80,37 @@ if rg -qi 'Unhandled exception|fail(ed)? to start|BINANCE_API_KEY.*required' "$w
 fi
 if [[ "$worker_status" != 0 && "$worker_status" != 124 && "$worker_status" != 143 ]]; then
     echo "Worker exited unexpectedly with status $worker_status." >&2
+    sed -n '1,160p' "$worker_log" >&2
     exit 1
 fi
 
-echo "Worker persistence startup passed: PAPER/NO_TRADE, PostgreSQL migration and audit sink wiring verified (exit=$worker_status)."
+restart_status="$(run_worker "$restart_log")"
+if ! rg -q 'Trading persistence migrations applied|Trading PostgreSQL connectivity verified' "$restart_log"; then
+    echo 'Restarted Worker did not report PostgreSQL connectivity/migration success.' >&2
+    sed -n '1,120p' "$restart_log" >&2
+    exit 1
+fi
+if rg -qi 'Unhandled exception|fail(ed)? to start|BINANCE_API_KEY.*required' "$restart_log"; then
+    echo 'Restarted Worker emitted a fatal configuration/runtime error.' >&2
+    sed -n '1,120p' "$restart_log" >&2
+    exit 1
+fi
+if [[ "$restart_status" != 0 && "$restart_status" != 124 && "$restart_status" != 143 ]]; then
+    echo "Restarted Worker exited unexpectedly with status $restart_status." >&2
+    sed -n '1,160p' "$restart_log" >&2
+    exit 1
+fi
+
+runtime_sequence="$("${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" -Atqc \
+    "SELECT string_agg(revision::text || ':' || from_state || '>' || to_state, ',' ORDER BY revision) FROM trading.runtime_state_transitions;")"
+runtime_checkpoint="$("${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" -Atqc \
+    "SELECT state || ':' || revision::text FROM trading.runtime_state_checkpoints WHERE scope = 'worker';")"
+expected_sequence='1:Stopped>Bootstrapping,2:Bootstrapping>Stopping,3:Stopping>Stopped,4:Stopped>Bootstrapping,5:Bootstrapping>SafeMode,6:SafeMode>Stopping,7:Stopping>Stopped'
+if [[ "$runtime_sequence" != "$expected_sequence" || "$runtime_checkpoint" != 'Stopped:7' ]]; then
+    echo 'Worker runtime checkpoint did not restore fail-closed after migration-backed restart.' >&2
+    echo "observed transitions: $runtime_sequence" >&2
+    echo "observed checkpoint: $runtime_checkpoint" >&2
+    exit 1
+fi
+
+echo "Worker persistence startup passed: PAPER/NO_TRADE, migrations, checkpoint-backed fail-closed restart and audit sink wiring verified (exits=$worker_status/$restart_status)."
