@@ -15,8 +15,11 @@
   snapshot fresco (`cf34b65`); ausência na lista open orders continua
   inconclusiva e bloqueante.
 - `TASK-US-196-02-02`: contrato puro de TTL/cancelamento/replan e residual
-  (`aae53e1`) foi criado e testado; wiring mutável do Worker/adapter Testnet
-  permanece **In Progress** e não autoriza cancelamento real.
+  (`aae53e1`), consumidor Testnet de cancelamento (`016472e`) e produtor TTL
+  durável (`a5c1d19`) foram criados e testados. Permanecem **In Progress** a
+  resolução terminal com candidatura de replan e a evidência Testnet mutável;
+  os componentes continuam desativados por padrão e não autorizam cancelamento
+  real sem os gates independentes.
 - Novo requisito de custo efetivo: a reserva fixa de 25 bps não substitui a
   consulta da comissão vigente por símbolo. A implementação deverá consultar,
   versionar e validar maker/taker, buyer/seller, special/tax e desconto BNB;
