@@ -181,6 +181,23 @@ public sealed class WorkerRuntimeTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TestnetExecutorBlocksMissingOrExpiredCommissionSnapshotBeforeSubmission(bool expired)
+    {
+        var command = expired
+            ? NewCommand() with { CommissionValidUntilUtc = DateTimeOffset.UtcNow.AddSeconds(-1) }
+            : NewCommand() with { EstimatedCommissionRate = null };
+        var exchange = new RecordingTestnetClient(command);
+        var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), new RecordingOpenOrderStore());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(MessageFor(command)));
+
+        Assert.Contains("commission snapshot", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, exchange.SubmitCalls);
+    }
+
+    [Theory]
     [InlineData("99", "1", true, false, false, "quote")]
     [InlineData("1000", "0.001", true, false, true, "base")]
     [InlineData("1000", "1", false, false, false, "capabilities")]
@@ -642,7 +659,12 @@ public sealed class WorkerRuntimeTests
         CorrelationId.New(),
         IdempotencyKey.New(),
         "risk-v1",
-        DateTimeOffset.UtcNow);
+        DateTimeOffset.UtcNow,
+        0.001m,
+        "test-commission-snapshot",
+        "test:commission",
+        DateTimeOffset.UtcNow.AddSeconds(-1),
+        DateTimeOffset.UtcNow.AddMinutes(1));
 
     private static LeasedOutboxMessage MessageFor(SubmitOrderCommand command) => new(
         Guid.NewGuid(),
