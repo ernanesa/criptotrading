@@ -131,6 +131,16 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal(1m, reader.GetDecimal(4));
         Assert.Equal(0m, reader.GetDecimal(5));
         Assert.Equal("COMPARABLE", reader.GetString(6));
+
+        var report = await store.ReadExecutionAttributionReportAsync(clientOrderId.Value);
+        Assert.NotNull(report);
+        Assert.Equal(context, report.Context);
+        Assert.Equal(0, report.OutboxAttempts);
+        var fill = Assert.Single(report.Fills);
+        Assert.Equal(accounting.ExecutionId, fill.ExecutionId);
+        Assert.Equal(1m, fill.CumulativeFillRatio);
+        Assert.Equal("COMPARABLE", fill.QualityStatus);
+        Assert.Equal("DRIFT", fill.FeeStatus);
     }
 
     [Fact]
