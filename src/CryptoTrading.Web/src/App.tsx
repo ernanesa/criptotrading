@@ -5,7 +5,10 @@ import { EnvironmentBanner } from './components/EnvironmentBanner';
 import { Navigation, type NavTab } from './components/Navigation';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { OperationalOverviewView } from './views/OperationalOverviewView';
+import { RealtimeTradingView } from './views/RealtimeTradingView';
 import { DecisionTraceView } from './views/DecisionTraceView';
+import { ResearchDashboardView } from './views/ResearchDashboardView';
+import { AutonomyDashboardView } from './views/AutonomyDashboardView';
 import { RiskControlView } from './views/RiskControlView';
 import { Shield, Clock } from 'lucide-react';
 
@@ -51,26 +54,24 @@ const AppContent: React.FC = () => {
       <main className="flex-1 max-w-7xl w-full mx-auto p-6">
         <ErrorBoundary>
           {currentTab === 'overview' && <OperationalOverviewView />}
+          {currentTab === 'realtime' && <RealtimeTradingView />}
           {currentTab === 'decisions' && <DecisionTraceView />}
+          {currentTab === 'research' && <ResearchDashboardView />}
+          {currentTab === 'autonomy' && <AutonomyDashboardView />}
           {currentTab === 'risk' && <RiskControlView />}
         </ErrorBoundary>
       </main>
 
       {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-900/40 py-4 px-6 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Shield className="w-3.5 h-3.5 text-cyan-500" />
-            <span>CryptoTrading Autonomous System v1.0 — Console de Operação Read-Only</span>
+            <span>Binance Spot Trading Bot — Fail-Closed Read-Only Operational Shell (R1.0 Ready)</span>
           </div>
-
-          <div className="flex items-center gap-4 font-mono text-[11px]">
-            <div className="flex items-center gap-1.5 text-slate-400">
-              <Clock className="w-3.5 h-3.5 text-slate-500" />
-              <span>{currentTimeUtc}</span>
-            </div>
-            <span>|</span>
-            <span>Local Loopback 127.0.0.1</span>
+          <div className="flex items-center gap-2 font-mono">
+            <Clock className="w-3.5 h-3.5 text-slate-500" />
+            <span>{currentTimeUtc}</span>
           </div>
         </div>
       </footer>
