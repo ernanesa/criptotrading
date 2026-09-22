@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Navigation, type NavTab } from '../components/Navigation';
 import { AutonomyDashboardView } from '../views/AutonomyDashboardView';
 import { BenchmarkDashboardView } from '../views/BenchmarkDashboardView';
+import { FinancialPerformanceView } from '../views/FinancialPerformanceView';
 import { RealtimeTradingView } from '../views/RealtimeTradingView';
 import { ResearchDashboardView } from '../views/ResearchDashboardView';
 
@@ -15,6 +16,20 @@ describe('RealtimeTradingView (US-101)', () => {
     expect(screen.getByText('Posições Abertas')).toBeInTheDocument();
     expect(screen.getByText('Ordens Abertas no Livro (OMS)')).toBeInTheDocument();
     expect(screen.getByText('ct-ord-20260921-001')).toBeInTheDocument();
+  });
+});
+
+describe('FinancialPerformanceView (Capital & PnL)', () => {
+  it('renders capital invested, current NAV and PnL for day, week, month and year', () => {
+    render(<FinancialPerformanceView />);
+    expect(screen.getByTestId('financial-performance-view')).toBeInTheDocument();
+    expect(screen.getByText('Patrimônio, Capital Investido & Lucro (P&L)')).toBeInTheDocument();
+    expect(screen.getByText('Capital Investido (Aporte)')).toBeInTheDocument();
+    expect(screen.getByText('Patrimônio Atual (NAV)')).toBeInTheDocument();
+    expect(screen.getAllByText('Hoje (Dia / 24 Horas)')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('Semana (Últimos 7 Dias)')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('Mês (Últimos 30 Dias)')[0]).toBeInTheDocument();
+    expect(screen.getAllByText('Ano (Acumulado / YTD)')[0]).toBeInTheDocument();
   });
 });
 
@@ -63,7 +78,7 @@ describe('AutonomyDashboardView (US-104)', () => {
 });
 
 describe('Navigation tab bar', () => {
-  it('renders all 7 navigation tabs and invokes callback', () => {
+  it('renders all 8 navigation tabs and invokes callback', () => {
     let selected: NavTab = 'overview';
     const onSelect = (tab: NavTab) => {
       selected = tab;
@@ -74,6 +89,11 @@ describe('Navigation tab bar', () => {
     expect(realtimeTab).toBeInTheDocument();
     fireEvent.click(realtimeTab);
     expect(selected).toBe('realtime');
+
+    const performanceTab = screen.getByTestId('nav-tab-performance');
+    expect(performanceTab).toBeInTheDocument();
+    fireEvent.click(performanceTab);
+    expect(selected).toBe('performance');
 
     const benchmarkTab = screen.getByTestId('nav-tab-benchmarks');
     expect(benchmarkTab).toBeInTheDocument();

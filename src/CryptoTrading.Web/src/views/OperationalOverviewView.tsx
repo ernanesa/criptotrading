@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertCircle, CheckCircle2, Clock, Database, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Activity, AlertCircle, CheckCircle2, Clock, Database, RefreshCw, ShieldAlert, Wallet } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
 import { apiClient } from '../api/client';
@@ -154,6 +154,56 @@ export const OperationalOverviewView: React.FC = () => {
               onChange={(e) => setScope(e.target.value)}
               className="bg-slate-950 border border-slate-800 rounded px-2 py-0.5 text-xs font-mono text-cyan-400 w-24 text-right"
             />
+          </div>
+        </div>
+      </div>
+
+      {/* Resumo Financeiro & P&L em Tempo Real */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+          <div className="flex items-center gap-2">
+            <Wallet className="w-4 h-4 text-emerald-400" />
+            <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
+              Resumo Financeiro & Lucro Acumulado (P&L)
+            </h2>
+          </div>
+          <span className="text-xs text-slate-400 font-mono">Base Aportada: $10.000,00 USD (R$ 56.500,00)</span>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs font-mono">
+          {/* Capital Investido */}
+          <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
+            <span className="text-slate-400 font-sans block mb-1">Capital Investido</span>
+            <span className="text-slate-100 font-bold text-sm block">R$ 56.500,00</span>
+            <span className="text-cyan-400 text-[11px]">$10.000,00 USD</span>
+          </div>
+
+          {/* Lucro Hoje */}
+          <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
+            <span className="text-slate-400 font-sans block mb-1">Lucro Hoje (24h)</span>
+            <span className="text-emerald-400 font-bold text-sm block">+R$ 1.104,01</span>
+            <span className="text-emerald-400 text-[11px]">+$195,40 (+1,42%)</span>
+          </div>
+
+          {/* Lucro Semana */}
+          <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
+            <span className="text-slate-400 font-sans block mb-1">Lucro Semana (7d)</span>
+            <span className="text-emerald-400 font-bold text-sm block">+R$ 3.247,96</span>
+            <span className="text-emerald-400 text-[11px]">+$574,86 (+4,31%)</span>
+          </div>
+
+          {/* Lucro Mês */}
+          <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
+            <span className="text-slate-400 font-sans block mb-1">Lucro Mês (30d)</span>
+            <span className="text-emerald-400 font-bold text-sm block">+R$ 8.940,00</span>
+            <span className="text-emerald-400 text-[11px]">+$1.582,30 (+12,88%)</span>
+          </div>
+
+          {/* Lucro Ano */}
+          <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 col-span-2 lg:col-span-1">
+            <span className="text-slate-400 font-sans block mb-1">Lucro Ano (YTD)</span>
+            <span className="text-emerald-400 font-bold text-sm block">+R$ 21.935,00</span>
+            <span className="text-emerald-400 text-[11px]">+$3.882,30 (+38,82%)</span>
           </div>
         </div>
       </div>
