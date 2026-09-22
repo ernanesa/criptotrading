@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/CryptoTrading.Configuration/CryptoTrading.Configuration.csproj" />
+    <ProjectReference Include="../../src/CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <ProjectReference Include="../../src/CryptoTrading.Persistence/CryptoTrading.Persistence.csproj" />
+  </ItemGroup>
+</Project>

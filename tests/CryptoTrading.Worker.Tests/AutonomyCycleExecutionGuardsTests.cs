@@ -250,6 +250,9 @@ public sealed class AutonomyCycleExecutionGuardsTests
             Commits.Add(commit);
             return Task.CompletedTask;
         }
+
+        public Task<AutonomyDecisionCommit?> ReadDecisionCommitAsync(string decisionId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Commits.FirstOrDefault(c => string.Equals(c.DecisionId, decisionId, StringComparison.OrdinalIgnoreCase)));
     }
 
     private sealed class FakeOpenOrderStore(IReadOnlyList<LocalOpenOrderRecord> orders) : ILocalOpenOrderStore

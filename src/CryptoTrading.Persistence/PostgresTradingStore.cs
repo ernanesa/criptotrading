@@ -216,6 +216,8 @@ public interface IAutonomyDecisionCommitStore
     Task<DateTimeOffset?> GetLastProcessedCloseAsync(string scope, CancellationToken cancellationToken = default);
 
     Task CommitAsync(AutonomyDecisionCommit commit, CancellationToken cancellationToken = default);
+
+    Task<AutonomyDecisionCommit?> ReadDecisionCommitAsync(string decisionId, CancellationToken cancellationToken = default);
 }
 
 public interface IExpectedExecutionFeeStore
@@ -274,6 +276,8 @@ public interface IExecutionAttributionReportStore
 public interface IOrderLifecycleStore
 {
     Task<bool> AppendOrderLifecycleEventAsync(OrderLifecycleEvent lifecycleEvent, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<OrderLifecycleEvent>> ReadOrderLifecycleEventsAsync(string clientOrderId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Durable outbox operations required by a dispatcher.</summary>
@@ -1916,6 +1920,37 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         return false;
     }
 
+    public async Task<IReadOnlyList<OrderLifecycleEvent>> ReadOrderLifecycleEventsAsync(
+        string clientOrderId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT event_id, client_order_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id
+            FROM trading.order_lifecycle_events
+            WHERE client_order_id = @client_order_id
+            ORDER BY occurred_at ASC;
+            """, connection);
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var events = new List<OrderLifecycleEvent>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var eventId = reader.GetGuid(0);
+            var id = reader.GetString(1);
+            var from = Enum.Parse<OrderStatus>(reader.GetString(2), ignoreCase: true);
+            var to = Enum.Parse<OrderStatus>(reader.GetString(3), ignoreCase: true);
+            var idempotencyKey = new IdempotencyKey(reader.GetString(4));
+            var occurredAt = new DateTimeOffset(DateTime.SpecifyKind(reader.GetFieldValue<DateTime>(5), DateTimeKind.Utc));
+            var exchangeOrderId = reader.IsDBNull(6) ? null : reader.GetString(6);
+            events.Add(new OrderLifecycleEvent(eventId, id, new OrderTransition(from, to, idempotencyKey, occurredAt, exchangeOrderId)));
+        }
+
+        return events;
+    }
+
     /// <summary>Enqueues a command durably; duplicate identity is accepted only for identical payload.</summary>
     public async Task<OutboxRecord> EnqueueAsync(
         OutboxRecord record,
@@ -2575,6 +2610,22 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is DateTime timestamp
             ? new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc))
+            : null;
+    }
+
+    public async Task<AutonomyDecisionCommit?> ReadDecisionCommitAsync(
+        string decisionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(decisionId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            "SELECT payload FROM trading.autonomy_decisions WHERE decision_id = @decision_id;",
+            connection);
+        command.Parameters.Add(Parameter("decision_id", NpgsqlDbType.Varchar, decisionId.Trim()));
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is string payload
+            ? JsonSerializer.Deserialize<AutonomyDecisionCommit>(payload, JsonOptions)
             : null;
     }
 

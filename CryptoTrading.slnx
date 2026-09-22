@@ -18,6 +18,7 @@
     <Project Path="tools/CryptoTrading.PublicOosRunner/CryptoTrading.PublicOosRunner.csproj" />
     <Project Path="tools/CryptoTrading.GovernedEvidenceRunner/CryptoTrading.GovernedEvidenceRunner.csproj" />
     <Project Path="tools/CryptoTrading.GovernedEvidenceFixture/CryptoTrading.GovernedEvidenceFixture.csproj" />
+    <Project Path="tools/CryptoTrading.AutonomyDecisionReconstructor/CryptoTrading.AutonomyDecisionReconstructor.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj" />
