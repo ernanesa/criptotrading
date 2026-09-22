@@ -200,5 +200,11 @@ public sealed class OrderProjectionServiceTests
             Events.Add(lifecycleEvent);
             return Task.FromResult(true);
         }
+
+        public Task<IReadOnlyList<OrderLifecycleEvent>> ReadOrderLifecycleEventsAsync(
+            string clientOrderId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<OrderLifecycleEvent>>(
+                Events.Where(e => string.Equals(e.ClientOrderId, clientOrderId, StringComparison.OrdinalIgnoreCase)).ToList());
     }
 }
