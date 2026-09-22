@@ -1,5 +1,5 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { generateCorrelationId } from '../api/client';
 
 interface Props {
@@ -44,10 +44,7 @@ export class ErrorBoundary extends Component<Props, State> {
       }
 
       return (
-        <div
-          className="min-h-[400px] flex items-center justify-center p-6"
-          data-testid="error-boundary-card"
-        >
+        <div className="min-h-[400px] flex items-center justify-center p-6" data-testid="error-boundary-card">
           <div className="max-w-md w-full bg-slate-900 border border-rose-900/60 rounded-xl p-6 shadow-2xl">
             <div className="flex items-center gap-3 text-rose-400 mb-4">
               <AlertTriangle className="w-8 h-8 flex-shrink-0" />
@@ -69,6 +66,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </p>
 
             <button
+              type="button"
               onClick={this.handleReset}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-lg text-sm transition-colors cursor-pointer"
             >

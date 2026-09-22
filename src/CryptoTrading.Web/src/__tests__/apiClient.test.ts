@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { apiRequest, ApiError, apiClient } from '../api/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, apiClient, apiRequest } from '../api/client';
 
 describe('apiClient', () => {
   const originalFetch = globalThis.fetch;
@@ -36,7 +36,7 @@ describe('apiClient', () => {
       new Response(JSON.stringify({ error: 'Forbidden' }), {
         status: 403,
         headers: { 'Content-Type': 'application/json' },
-      })
+      }),
     );
 
     await expect(apiClient.getOperationalStatus()).rejects.toThrowError(ApiError);
@@ -49,7 +49,7 @@ describe('apiClient', () => {
     globalThis.fetch = vi.fn().mockResolvedValue(
       new Response(null, {
         status: 503,
-      })
+      }),
     );
 
     await expect(apiClient.getActiveRiskPolicy()).rejects.toThrowError(ApiError);

@@ -1,5 +1,5 @@
-import React from 'react';
-import { LayoutDashboard, Activity, FileSearch, Compass, Cpu, ShieldCheck } from 'lucide-react';
+import { Activity, Compass, Cpu, FileSearch, LayoutDashboard, ShieldCheck } from 'lucide-react';
+import type React from 'react';
 
 export type NavTab = 'overview' | 'realtime' | 'decisions' | 'research' | 'autonomy' | 'risk';
 
@@ -26,6 +26,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onSelectTab 
           const isActive = currentTab === item.id;
           return (
             <button
+              type="button"
               key={item.id}
               onClick={() => onSelectTab(item.id)}
               className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors duration-150 cursor-pointer whitespace-nowrap ${

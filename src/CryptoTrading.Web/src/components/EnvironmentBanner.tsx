@@ -1,7 +1,7 @@
-import React from 'react';
+import { Activity, Lock, ShieldAlert } from 'lucide-react';
+import type React from 'react';
 import type { OperationalStatusResponse } from '../types/api';
 import { StatusBadge } from './StatusBadge';
-import { ShieldAlert, Lock, Activity } from 'lucide-react';
 
 interface EnvironmentBannerProps {
   status?: OperationalStatusResponse | null;
@@ -24,8 +24,8 @@ export const EnvironmentBanner: React.FC<EnvironmentBannerProps> = ({
         isKillSwitch
           ? 'bg-rose-950/90 border-rose-800 text-rose-100'
           : isSafeMode
-          ? 'bg-amber-950/90 border-amber-800 text-amber-100'
-          : 'bg-slate-900/90 border-slate-800 text-slate-200'
+            ? 'bg-amber-950/90 border-amber-800 text-amber-100'
+            : 'bg-slate-900/90 border-slate-800 text-slate-200'
       } backdrop-blur sticky top-0 z-50 px-4 py-2.5 shadow-md`}
       data-testid="environment-banner"
     >
@@ -79,9 +79,7 @@ export const EnvironmentBanner: React.FC<EnvironmentBannerProps> = ({
           </div>
 
           {status && (
-            <div className="text-[11px] text-slate-500 font-mono hidden md:inline-block">
-              Rev #{status.revision}
-            </div>
+            <div className="text-[11px] text-slate-500 font-mono hidden md:inline-block">Rev #{status.revision}</div>
           )}
         </div>
       </div>

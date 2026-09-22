@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiClient, ApiError } from '../api/client';
+import { AlertTriangle, ArrowRight, CheckCircle2, FileCode, Search, XCircle } from 'lucide-react';
+import type React from 'react';
+import { useState } from 'react';
+import { ApiError, apiClient } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { Search, CheckCircle2, XCircle, FileCode, AlertTriangle, ArrowRight } from 'lucide-react';
 
 export const DecisionTraceView: React.FC = () => {
   const [decisionIdInput, setDecisionIdInput] = useState('');
@@ -73,7 +74,8 @@ export const DecisionTraceView: React.FC = () => {
           <div className="text-xs">
             <h3 className="font-bold text-amber-200 mb-1">Persistência Indisponível (503)</h3>
             <p className="text-amber-300/80">
-              O banco de dados PostgreSQL não está conectado na API. Configure `POSTGRES_CONNECTION_STRING` para permitir consultas aos commits de decisão.
+              O banco de dados PostgreSQL não está conectado na API. Configure `POSTGRES_CONNECTION_STRING` para
+              permitir consultas aos commits de decisão.
             </p>
           </div>
         </div>
@@ -122,8 +124,8 @@ export const DecisionTraceView: React.FC = () => {
                     report.commit.outcome === 'NO_TRADE'
                       ? 'text-amber-400'
                       : report.commit.outcome === 'BLOCKED'
-                      ? 'text-rose-400'
-                      : 'text-emerald-400'
+                        ? 'text-rose-400'
+                        : 'text-emerald-400'
                   }`}
                 >
                   {report.commit.outcome}

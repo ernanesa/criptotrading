@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 
 const ProblemChild: React.FC<{ shouldThrow?: boolean }> = ({ shouldThrow }) => {
@@ -14,7 +14,7 @@ describe('ErrorBoundary', () => {
     render(
       <ErrorBoundary>
         <ProblemChild shouldThrow={false} />
-      </ErrorBoundary>
+      </ErrorBoundary>,
     );
 
     expect(screen.getByText('Operação normal do componente')).toBeInTheDocument();
@@ -27,7 +27,7 @@ describe('ErrorBoundary', () => {
     render(
       <ErrorBoundary>
         <ProblemChild shouldThrow={true} />
-      </ErrorBoundary>
+      </ErrorBoundary>,
     );
 
     expect(screen.getByTestId('error-boundary-card')).toBeInTheDocument();
