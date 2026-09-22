@@ -22,6 +22,56 @@ namespace CryptoTrading.Persistence.IntegrationTests;
 public sealed class PostgresTradingStoreIntegrationTests
 {
     [Fact]
+    public async Task AutonomyDecisionCommitAtomicallyPersistsDispatchableEvidenceOutboxAndCheckpoint()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var now = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
+        var commit = NewAutonomyCommit("dispatch-" + Guid.NewGuid().ToString("N")[..8], now, dispatchable: true);
+
+        await store.CommitAsync(commit);
+        await store.CommitAsync(commit);
+
+        Assert.Equal(now, await store.GetLastProcessedCloseAsync(commit.CheckpointScope));
+        Assert.NotNull(await store.ReadExecutionSubmissionContextAsync(commit.OutboxRecord!.Command.ClientOrderId.Value));
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT count(*) FROM trading.autonomy_decisions WHERE decision_id = @decision_id;", connection);
+        command.Parameters.AddWithValue("decision_id", commit.DecisionId);
+        Assert.Equal(1L, await command.ExecuteScalarAsync());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.CommitAsync(commit with { FeatureFingerprint = Hash("conflicting-feature") }));
+    }
+
+    [Fact]
+    public async Task AutonomyDecisionCommitPersistsNoTradeAndCheckpointWithoutOutbox()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync();
+        var now = new DateTimeOffset(2026, 9, 21, 12, 1, 0, TimeSpan.Zero);
+        var commit = NewAutonomyCommit("no-trade-" + Guid.NewGuid().ToString("N")[..8], now, dispatchable: false);
+
+        await store.CommitAsync(commit);
+
+        Assert.Equal(now, await store.GetLastProcessedCloseAsync(commit.CheckpointScope));
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            "SELECT outcome, outbox_message_id IS NULL FROM trading.autonomy_decisions WHERE decision_id = @decision_id;", connection);
+        command.Parameters.AddWithValue("decision_id", commit.DecisionId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("NO_TRADE", reader.GetString(0));
+        Assert.True(reader.GetBoolean(1));
+    }
+
+    [Fact]
     public async Task RuntimeStateCheckpointPersistsMonotonicTransitionAndAcceptsOnlyEquivalentReplay()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
@@ -385,7 +435,10 @@ public sealed class PostgresTradingStoreIntegrationTests
                 "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         }
 
-        var now = DateTimeOffset.UtcNow;
+        // The integration script deliberately preserves its volume between
+        // runs. Use a deterministic historical lease window so unrelated
+        // prior outbox messages cannot be claimed by this recovery proof.
+        var now = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var correlationId = CorrelationId.New();
         var commandKey = IdempotencyKey.New();
         var command = new SubmitOrderCommand(
@@ -846,6 +899,27 @@ public sealed class PostgresTradingStoreIntegrationTests
 
     private static string Hash(string value) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
+
+    private static AutonomyDecisionCommit NewAutonomyCommit(string suffix, DateTimeOffset closeTimeUtc, bool dispatchable)
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var command = new SubmitOrderCommand(
+            OrderId.New(), new ClientOrderId("decision-" + suffix), symbol, OrderSide.Buy, OrderType.Limit,
+            new Quantity(.01m), new Price(10_000m), 100m, CorrelationId.New(), new IdempotencyKey("decision-" + suffix),
+            "policy-v1", closeTimeUtc, ExecutionAttempt: 0, ExecutionExpiresAtUtc: closeTimeUtc.AddMinutes(1));
+        var outbox = dispatchable
+            ? new OutboxRecord(Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, command.CorrelationId,
+                command.IdempotencyKey, command.PolicyVersion, command, OutboxRecordStatus.Pending, closeTimeUtc)
+            : null;
+        var risk = dispatchable
+            ? new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "policy-v1", [])
+            : null;
+        return new AutonomyDecisionCommit(
+            "ad-" + suffix, "PAPER", "integration-account", "integration:" + suffix, symbol, "baseline", "1.0.0",
+            closeTimeUtc, closeTimeUtc, "baseline-feature-snapshot.v1", Hash("config"), Hash("feature"),
+            dispatchable ? "EnterLong" : "NoTrade", dispatchable ? "CrossUp" : "InsufficientHistory", risk,
+            dispatchable ? "DISPATCHABLE" : "NO_TRADE", dispatchable ? null : "INSUFFICIENT_HISTORY", "{}", outbox);
+    }
 
     private static SubmitOrderCommand NewExpiredSubmit(string clientOrderId, DateTimeOffset now) => new(
         OrderId.New(), new ClientOrderId(clientOrderId), new Symbol("BTCUSDT"), OrderSide.Buy, OrderType.Limit,

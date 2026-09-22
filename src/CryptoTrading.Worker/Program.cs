@@ -138,6 +138,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IAutonomyDecisionCommitStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IExecutionAccountingStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IExpectedExecutionFeeStore>(serviceProvider =>

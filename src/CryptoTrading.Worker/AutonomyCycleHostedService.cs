@@ -2,6 +2,9 @@
 #pragma warning disable CA1031 // Supervisor converts unexpected failures into SafeMode.
 
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
@@ -27,8 +30,7 @@ internal sealed class AutonomyCycleHostedService(
     IBinanceSpotAccountClient accountClient,
     IRiskPolicyStore riskPolicyStore,
     IAutonomyRiskContextStore riskContextStore,
-    IOutboxStore outboxStore,
-    IAutonomyCheckpointStore checkpointStore,
+    IAutonomyDecisionCommitStore decisionCommitStore,
     IAsyncOperationalControl operationalControl,
     CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
     BaselineDecisionCycle cycle,
@@ -76,7 +78,7 @@ internal sealed class AutonomyCycleHostedService(
     {
         var now = DateTimeOffset.UtcNow;
         var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}:{cycle.StrategyVersion}";
-        var lastProcessedCloseUtc = await checkpointStore
+        var lastProcessedCloseUtc = await decisionCommitStore
             .GetLastProcessedCloseAsync(checkpointScope, cancellationToken)
             .ConfigureAwait(false);
         var policyDocument = await riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken).ConfigureAwait(false)
@@ -209,27 +211,69 @@ internal sealed class AutonomyCycleHostedService(
             policyDocument.Policy.MaxMarketDataAge,
             featureSnapshot);
         var result = cycle.Evaluate(request);
+        var outbox = GetDispatchableOutbox(result);
+        var outcome = result.IsNoTrade ? "NO_TRADE" : outbox is not null ? "DISPATCHABLE" : "BLOCKED";
+        var reason = result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
+        await decisionCommitStore.CommitAsync(
+            CreateDecisionCommit(runtime, checkpointScope, featureSnapshot, result, outcome, reason, outbox),
+            cancellationToken).ConfigureAwait(false);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
         {
-            await checkpointStore.SetLastProcessedCloseAsync(checkpointScope, latest.CloseTimeUtc, cancellationToken).ConfigureAwait(false);
             AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, result.NoTradeReason ?? "UNSPECIFIED");
             return;
         }
 
-        if (result.Execution is not { IsDispatchable: true, OutboxRecord: { } outbox })
+        if (outbox is null)
         {
             AutonomyCycleLog.Blocked(
                 logger,
                 latest.CloseTimeUtc,
-                result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []));
+                reason);
             return;
         }
 
-        _ = await outboxStore.EnqueueAsync(outbox, cancellationToken).ConfigureAwait(false);
-        await checkpointStore.SetLastProcessedCloseAsync(checkpointScope, latest.CloseTimeUtc, cancellationToken).ConfigureAwait(false);
         AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
     }
+
+    private static AutonomyDecisionCommit CreateDecisionCommit(
+        WorkerRuntimeOptions runtime,
+        string checkpointScope,
+        BaselineFeatureSnapshot featureSnapshot,
+        BaselineDecisionCycleResult result,
+        string outcome,
+        string reason,
+        OutboxRecord? outbox)
+    {
+        var decision = result.Decision;
+        var environment = runtime.ExecutionMode.Trim().ToUpperInvariant();
+        var accountScope = runtime.ReconciliationAccount.Trim();
+        var canonicalIdentity = string.Join('|', environment, accountScope, decision.Symbol.Value,
+            decision.StrategyId, decision.StrategyVersion, decision.CloseTimeUtc.ToString("O", CultureInfo.InvariantCulture));
+        var decisionId = "ad-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalIdentity)));
+        var risk = result.Execution?.Decision;
+        var trace = JsonSerializer.Serialize(new
+        {
+            featureSnapshot.Decision.BarIndex,
+            featureSnapshot.Decision.FastEma,
+            featureSnapshot.Decision.SlowEma,
+            featureSnapshot.Decision.FeeRate,
+            featureSnapshot.Decision.SlippageRate,
+            featureSnapshot.Decision.EstimatedRoundTripCostRate,
+            Result = outcome,
+            Reason = reason,
+            IntentClientOrderId = result.Intent?.ClientOrderId.Value,
+            OutboxMessageId = outbox?.MessageId,
+        });
+        return new(
+            decisionId, environment, accountScope, checkpointScope, decision.Symbol, decision.StrategyId, decision.StrategyVersion,
+            decision.CloseTimeUtc, featureSnapshot.AvailableAtUtc, featureSnapshot.SchemaVersion,
+            featureSnapshot.ConfigurationFingerprint, featureSnapshot.FeatureFingerprint, decision.Signal.ToString(), decision.Reason.ToString(),
+            risk, outcome, string.IsNullOrWhiteSpace(reason) ? null : reason, trace, outbox);
+    }
+
+    private static OutboxRecord? GetDispatchableOutbox(BaselineDecisionCycleResult result) =>
+        result.Execution is { IsDispatchable: true } execution ? execution.OutboxRecord : null;
 
     private static decimal ParseBalance(string? value)
     {
