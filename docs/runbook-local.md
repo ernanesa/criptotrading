@@ -148,3 +148,27 @@ segredos, tokens, payloads privados e identificadores pessoais.
 4. Qualquer integração privada continua bloqueada até revogação das chaves
    anteriormente expostas e geração de novas chaves Testnet com permissões
    mínimas.
+
+## Reconstrução de decisão autônoma (US-198)
+
+Para auditar e reconstruir o histórico determinístico de uma decisão autônoma (incluindo features, sinal, veredito de risco, contexto de submissão do OMS, projeção de taxas e eventos de ciclo de vida da ordem):
+
+```bash
+dotnet run --project tools/CryptoTrading.AutonomyDecisionReconstructor -- --decision-id <decisionId>
+```
+
+Para saída estruturada em JSON (adequada para ingestão em pipelines de auditoria ou arquivamento de incidentes):
+
+```bash
+dotnet run --project tools/CryptoTrading.AutonomyDecisionReconstructor -- --decision-id <decisionId> --json
+```
+
+O comando valida que o hash canônico SHA-256 bate estritamente com os dados persistidos. Qualquer divergência resulta em código de saída `3` (falha de auditoria).
+
+## Procedimento de Rollback e Retomada Segura
+
+1. Em caso de divergência ou detecção de anomalia, o `FailureClassifier` direciona o runtime para `SafeMode` ou `KillSwitch`.
+2. Para rollback de emergência:
+   - Acionar comando de `KillSwitch` via supervisor operacional ou API.
+   - Qualquer ordem em status `UNKNOWN` bloqueia novas exposições automaticamente.
+   - O reinício do Worker sempre reidrata o checkpoint durável como `SafeMode` e exige reconciliação completa antes de qualquer ciclo de decisão.
