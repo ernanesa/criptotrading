@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Activity, AlertCircle, CheckCircle2, Clock, Database, RefreshCw, ShieldAlert } from 'lucide-react';
+import type React from 'react';
+import { useState } from 'react';
 import { apiClient } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { Activity, CheckCircle2, AlertCircle, Clock, Database, RefreshCw, ShieldAlert } from 'lucide-react';
 
 export const OperationalOverviewView: React.FC = () => {
   const [scope, setScope] = useState('BTCUSDT');
@@ -55,6 +56,7 @@ export const OperationalOverviewView: React.FC = () => {
         </div>
 
         <button
+          type="button"
           onClick={handleManualRefresh}
           disabled={isRefreshing}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors disabled:opacity-50 cursor-pointer"
@@ -136,7 +138,8 @@ export const OperationalOverviewView: React.FC = () => {
           </div>
           <div className="text-sm font-mono font-bold text-slate-200 mb-2 break-all">
             {checkpointQuery.data?.lastProcessedCloseUtc ? (
-              new Date(checkpointQuery.data.lastProcessedCloseUtc).toISOString().replace('T', ' ').substring(0, 19) + ' UTC'
+              new Date(checkpointQuery.data.lastProcessedCloseUtc).toISOString().replace('T', ' ').substring(0, 19) +
+              ' UTC'
             ) : checkpointQuery.isLoading ? (
               <span className="text-slate-500">consultando...</span>
             ) : (

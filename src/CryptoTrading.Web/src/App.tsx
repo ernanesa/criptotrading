@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
+import { Clock, Shield } from 'lucide-react';
+import type React from 'react';
+import { useEffect, useState } from 'react';
 import { apiClient } from './api/client';
 import { EnvironmentBanner } from './components/EnvironmentBanner';
-import { Navigation, type NavTab } from './components/Navigation';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { Navigation, type NavTab } from './components/Navigation';
+import { AutonomyDashboardView } from './views/AutonomyDashboardView';
+import { DecisionTraceView } from './views/DecisionTraceView';
 import { OperationalOverviewView } from './views/OperationalOverviewView';
 import { RealtimeTradingView } from './views/RealtimeTradingView';
-import { DecisionTraceView } from './views/DecisionTraceView';
 import { ResearchDashboardView } from './views/ResearchDashboardView';
-import { AutonomyDashboardView } from './views/AutonomyDashboardView';
 import { RiskControlView } from './views/RiskControlView';
-import { Shield, Clock } from 'lucide-react';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,7 +28,7 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentTimeUtc(new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC');
+      setCurrentTimeUtc(`${new Date().toISOString().replace('T', ' ').substring(0, 19)} UTC`);
     }, 1000);
     return () => clearInterval(timer);
   }, []);
@@ -41,11 +42,7 @@ const AppContent: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans selection:bg-cyan-500 selection:text-slate-950">
       {/* Top Banner */}
-      <EnvironmentBanner
-        status={statusQuery.data}
-        isLoading={statusQuery.isLoading}
-        environmentName="TESTNET"
-      />
+      <EnvironmentBanner status={statusQuery.data} isLoading={statusQuery.isLoading} environmentName="TESTNET" />
 
       {/* Navigation Bar */}
       <Navigation currentTab={currentTab} onSelectTab={setCurrentTab} />

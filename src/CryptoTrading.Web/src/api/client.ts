@@ -1,16 +1,16 @@
 import type {
-  OperationalStatusResponse,
-  CheckpointResponse,
-  RiskPolicyDocument,
   AutonomyDecisionReconstructionReport,
+  CheckpointResponse,
   HealthStatusResponse,
+  OperationalStatusResponse,
+  RiskPolicyDocument,
 } from '../types/api';
 
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
-    public readonly correlationId?: string | null
+    public readonly correlationId?: string | null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -21,7 +21,7 @@ export function generateCorrelationId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
   }
-  return 'corr-' + Math.random().toString(36).substring(2, 15);
+  return `corr-${Math.random().toString(36).substring(2, 15)}`;
 }
 
 export interface RequestOptions extends RequestInit {

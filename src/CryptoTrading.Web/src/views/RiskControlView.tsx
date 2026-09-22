@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { apiClient, ApiError } from '../api/client';
+import { AlertTriangle, FileText, ShieldAlert, ShieldCheck } from 'lucide-react';
+import type React from 'react';
+import { useState } from 'react';
+import { ApiError, apiClient } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
-import { ShieldCheck, ShieldAlert, AlertTriangle, FileText } from 'lucide-react';
 
 export const RiskControlView: React.FC = () => {
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
@@ -24,7 +25,8 @@ export const RiskControlView: React.FC = () => {
           <span>Controle de Risco & Governança da RiskPolicy</span>
         </h1>
         <p className="text-xs text-slate-400 mt-1">
-          Limites matemáticos rígidos, aprovações de dois fatores e barreiras operacionais do motor de risco (US-040..US-044).
+          Limites matemáticos rígidos, aprovações de dois fatores e barreiras operacionais do motor de risco
+          (US-040..US-044).
         </p>
       </div>
 
@@ -33,8 +35,8 @@ export const RiskControlView: React.FC = () => {
         <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-5 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-amber-200">
-            <strong className="block mb-0.5 text-amber-300">Persistência Indisponível (503):</strong>
-            O armazenamento PostgreSQL da RiskPolicy não está conectado no host local da API.
+            <strong className="block mb-0.5 text-amber-300">Persistência Indisponível (503):</strong>O armazenamento
+            PostgreSQL da RiskPolicy não está conectado no host local da API.
           </div>
         </div>
       )}
@@ -53,9 +55,7 @@ export const RiskControlView: React.FC = () => {
               <div className="flex items-center gap-3">
                 <ShieldCheck className="w-6 h-6 text-emerald-400" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">
-                    RiskPolicy Document v{doc.policy.version}
-                  </h2>
+                  <h2 className="text-sm font-bold text-slate-100">RiskPolicy Document v{doc.policy.version}</h2>
                   <span className="text-[11px] font-mono text-slate-400">
                     Hash: {doc.documentHash.substring(0, 16)}...
                   </span>
@@ -125,10 +125,12 @@ export const RiskControlView: React.FC = () => {
                   <span className="text-slate-500">Approval ID:</span> {doc.approvalId || 'N/A'}
                 </div>
                 <div className="md:col-span-2">
-                  <span className="text-slate-500">Janela de Validade:</span> {new Date(doc.effectiveFromUtc).toISOString()} até {new Date(doc.expiresAtUtc).toISOString()}
+                  <span className="text-slate-500">Janela de Validade:</span>{' '}
+                  {new Date(doc.effectiveFromUtc).toISOString()} até {new Date(doc.expiresAtUtc).toISOString()}
                 </div>
                 <div>
-                  <span className="text-slate-500">Aprovado em:</span> {doc.approvedAtUtc ? new Date(doc.approvedAtUtc).toISOString() : 'N/A'}
+                  <span className="text-slate-500">Aprovado em:</span>{' '}
+                  {doc.approvedAtUtc ? new Date(doc.approvedAtUtc).toISOString() : 'N/A'}
                 </div>
               </div>
             </div>
@@ -145,12 +147,13 @@ export const RiskControlView: React.FC = () => {
               <span>Intervenção Operacional de Emergência (Kill Switch)</span>
             </h2>
             <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-              O acionamento do Kill Switch força a transição do supervisor para o modo terminal, cancela ordens ativas
-              e rejeita categoricamente qualquer nova submissão de ordem pelo robô.
+              O acionamento do Kill Switch força a transição do supervisor para o modo terminal, cancela ordens ativas e
+              rejeita categoricamente qualquer nova submissão de ordem pelo robô.
             </p>
           </div>
 
           <button
+            type="button"
             onClick={() => setShowKillSwitchModal(true)}
             className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-900/30 transition-colors cursor-pointer flex items-center gap-2 whitespace-nowrap"
           >
@@ -173,25 +176,33 @@ export const RiskControlView: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Você está prestes a solicitar a ativação do <strong>Kill Switch</strong> no ambiente local.
-              Esta operação exige step-up e autorização administrativa segregada.
+              Você está prestes a solicitar a ativação do <strong>Kill Switch</strong> no ambiente local. Esta operação
+              exige step-up e autorização administrativa segregada.
             </p>
 
             <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs font-mono text-slate-400 space-y-1">
-              <div><strong>Política:</strong> API Web permanece estritamente read-only</div>
-              <div><strong>Comando:</strong> Executável via control plane externo autenticado</div>
+              <div>
+                <strong>Política:</strong> API Web permanece estritamente read-only
+              </div>
+              <div>
+                <strong>Comando:</strong> Executável via control plane externo autenticado
+              </div>
             </div>
 
             <div className="flex gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => setShowKillSwitchModal(false)}
                 className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg transition-colors cursor-pointer"
               >
                 Cancelar
               </button>
               <button
+                type="button"
                 onClick={() => {
-                  alert('Comando registrado no buffer de segurança. Como a API Web é configurada em modo somente leitura (DenyApiOperationalControlResetAuthorizer), utilize o CLI ou script administrativo para mutação de controle de emergência.');
+                  alert(
+                    'Comando registrado no buffer de segurança. Como a API Web é configurada em modo somente leitura (DenyApiOperationalControlResetAuthorizer), utilize o CLI ou script administrativo para mutação de controle de emergência.',
+                  );
                   setShowKillSwitchModal(false);
                 }}
                 className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"

@@ -1,9 +1,9 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { Navigation, type NavTab } from '../components/Navigation';
+import { AutonomyDashboardView } from '../views/AutonomyDashboardView';
 import { RealtimeTradingView } from '../views/RealtimeTradingView';
 import { ResearchDashboardView } from '../views/ResearchDashboardView';
-import { AutonomyDashboardView } from '../views/AutonomyDashboardView';
-import { Navigation, type NavTab } from '../components/Navigation';
 
 describe('RealtimeTradingView (US-101)', () => {
   it('renders ticker and open positions table', () => {

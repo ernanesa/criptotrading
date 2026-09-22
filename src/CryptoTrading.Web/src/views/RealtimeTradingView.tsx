@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
 import { Activity, ArrowDownRight, ArrowUpRight, Clock, Layers, ShieldCheck, TrendingUp } from 'lucide-react';
+import type React from 'react';
+import { useEffect, useState } from 'react';
 
 interface Position {
   symbol: string;
@@ -91,7 +92,9 @@ export const RealtimeTradingView: React.FC = () => {
                 SPOT TESTNET
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">Stream de ticks em tempo real com validação determinística de spread</p>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Stream de ticks em tempo real com validação determinística de spread
+            </p>
           </div>
         </div>
 
@@ -105,18 +108,28 @@ export const RealtimeTradingView: React.FC = () => {
           </div>
           <div>
             <div className="text-xs text-slate-400">Variação 24h</div>
-            <div className={`font-mono font-semibold flex items-center ${priceChange24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {priceChange24h >= 0 ? <ArrowUpRight className="w-4 h-4 mr-0.5" /> : <ArrowDownRight className="w-4 h-4 mr-0.5" />}
+            <div
+              className={`font-mono font-semibold flex items-center ${priceChange24h >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}
+            >
+              {priceChange24h >= 0 ? (
+                <ArrowUpRight className="w-4 h-4 mr-0.5" />
+              ) : (
+                <ArrowDownRight className="w-4 h-4 mr-0.5" />
+              )}
               {priceChange24h > 0 ? `+${priceChange24h}%` : `${priceChange24h}%`}
             </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">Máx 24h</div>
-            <div className="font-mono text-slate-200">${high24h.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+            <div className="font-mono text-slate-200">
+              ${high24h.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">Mín 24h</div>
-            <div className="font-mono text-slate-200">${low24h.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+            <div className="font-mono text-slate-200">
+              ${low24h.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">Volume 24h</div>
@@ -162,8 +175,12 @@ export const RealtimeTradingView: React.FC = () => {
                       <td className="py-3 px-3 text-slate-300">{pos.size} BTC</td>
                       <td className="py-3 px-3 text-slate-300">${pos.entryPrice.toFixed(2)}</td>
                       <td className="py-3 px-3 text-slate-300">${pos.markPrice.toFixed(2)}</td>
-                      <td className={`py-3 px-3 text-right font-bold ${pos.unrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {pos.unrealizedPnl >= 0 ? `+$${pos.unrealizedPnl.toFixed(2)}` : `-$${Math.abs(pos.unrealizedPnl).toFixed(2)}`}
+                      <td
+                        className={`py-3 px-3 text-right font-bold ${pos.unrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}
+                      >
+                        {pos.unrealizedPnl >= 0
+                          ? `+$${pos.unrealizedPnl.toFixed(2)}`
+                          : `-$${Math.abs(pos.unrealizedPnl).toFixed(2)}`}
                         <span className="text-[10px] ml-1 font-normal opacity-80">({pos.unrealizedPnlPercent}%)</span>
                       </td>
                     </tr>
@@ -199,11 +216,13 @@ export const RealtimeTradingView: React.FC = () => {
                     <tr key={ord.clientOrderId} className="hover:bg-slate-800/30 transition-colors">
                       <td className="py-3 px-3 font-mono text-cyan-400 font-medium">{ord.clientOrderId}</td>
                       <td className="py-3 px-3">
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          ord.side === 'BUY'
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                        }`}>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            ord.side === 'BUY'
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                          }`}
+                        >
                           {ord.side}
                         </span>
                       </td>
@@ -212,11 +231,13 @@ export const RealtimeTradingView: React.FC = () => {
                         {ord.executedQty} / {ord.origQty} BTC
                       </td>
                       <td className="py-3 px-3">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                          ord.status === 'PARTIALLY_FILLED'
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                            : 'bg-slate-800 text-slate-300 border border-slate-700'
-                        }`}>
+                        <span
+                          className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                            ord.status === 'PARTIALLY_FILLED'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              : 'bg-slate-800 text-slate-300 border border-slate-700'
+                          }`}
+                        >
                           {ord.status}
                         </span>
                       </td>

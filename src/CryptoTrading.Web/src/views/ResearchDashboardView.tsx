@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { BarChart3, Award, GitBranch, Compass } from 'lucide-react';
+import { Award, BarChart3, Compass, GitBranch } from 'lucide-react';
+import type React from 'react';
+import { useState } from 'react';
 
 interface StrategyMetrics {
   name: string;
@@ -90,7 +91,7 @@ const STRATEGY_DATA: Record<string, StrategyMetrics> = {
     family: 'Mean Reversion',
     netReturn: 26.8,
     sharpeRatio: 2.15,
-    sortinoRatio: 3.10,
+    sortinoRatio: 3.1,
     maxDrawdown: 4.8,
     calmarRatio: 5.58,
     winRate: 67.4,
@@ -131,7 +132,9 @@ export const ResearchDashboardView: React.FC = () => {
             <Compass className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-xl font-bold tracking-tight text-slate-100">Laboratório Quantitativo & Benchmarks Macroeconômicos</h2>
+            <h2 className="text-xl font-bold tracking-tight text-slate-100">
+              Laboratório Quantitativo & Benchmarks Macroeconômicos
+            </h2>
             <p className="text-xs text-slate-400 mt-0.5">
               Comparação da estratégia contra CDI, SELIC, Tesouro IPCA+, IBOVESPA e inflação oficial (IPCA)
             </p>
@@ -142,6 +145,7 @@ export const ResearchDashboardView: React.FC = () => {
         <div className="flex flex-wrap gap-2">
           {Object.entries(STRATEGY_DATA).map(([key, s]) => (
             <button
+              type="button"
               key={key}
               onClick={() => setSelectedKey(key)}
               className={`px-3 py-1.5 rounded text-xs font-semibold transition-all cursor-pointer ${
@@ -174,7 +178,9 @@ export const ResearchDashboardView: React.FC = () => {
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800 rounded p-3">
-          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Excedente vs {benchmark.badge}</div>
+          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
+            Excedente vs {benchmark.badge}
+          </div>
           <div className="text-xl font-mono font-bold text-emerald-400 mt-0.5">
             {alphaOverBenchmark >= 0 ? `+${alphaOverBenchmark.toFixed(1)}%` : `${alphaOverBenchmark.toFixed(1)}%`}
           </div>
@@ -182,13 +188,17 @@ export const ResearchDashboardView: React.FC = () => {
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800 rounded p-3">
-          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Custo de Oportunidade Brasil</div>
+          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
+            Custo de Oportunidade Brasil
+          </div>
           <div className="text-xl font-mono font-bold text-cyan-400 mt-0.5">{percentOfCdi}% do CDI</div>
           <div className="text-[10px] text-slate-500 mt-0.5">Equivalência de rentabilidade da Selic</div>
         </div>
 
         <div className="bg-slate-950/60 border border-slate-800 rounded p-3">
-          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Ganho Real Acima da Inflação</div>
+          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
+            Ganho Real Acima da Inflação
+          </div>
           <div className="text-xl font-mono font-bold text-amber-400 mt-0.5">+{realGainOverInflation}% IPCA+</div>
           <div className="text-[10px] text-slate-500 mt-0.5">Preservação líquida do poder de compra</div>
         </div>
@@ -238,7 +248,10 @@ export const ResearchDashboardView: React.FC = () => {
                 <BarChart3 className="w-4 h-4 text-indigo-400" />
                 Curva de Patrimônio vs {benchmark.name}
               </h3>
-              <p className="text-xs text-slate-400 mt-0.5">Linha sólida: Estratégia (+{metrics.netReturn}%) │ Linha tracejada: {benchmark.name} (+{benchmark.annualReturn}%)</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Linha sólida: Estratégia (+{metrics.netReturn}%) │ Linha tracejada: {benchmark.name} (+
+                {benchmark.annualReturn}%)
+              </p>
             </div>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
               {metrics.name}
@@ -248,6 +261,7 @@ export const ResearchDashboardView: React.FC = () => {
           {/* SVG Visualizer */}
           <div className="h-64 w-full bg-slate-950/70 rounded-lg border border-slate-800/80 p-4 flex flex-col justify-between">
             <svg className="w-full h-full overflow-visible" viewBox="0 0 500 160">
+              <title>Curva de Equity e Drawdown da Estratégia</title>
               <defs>
                 <linearGradient id="equityGrad" x1="0%" y1="0%" x2="0%" y2="100%">
                   <stop offset="0%" stopColor="#6366f1" stopOpacity="0.35" />

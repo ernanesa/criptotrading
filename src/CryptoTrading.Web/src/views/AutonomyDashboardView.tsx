@@ -1,5 +1,5 @@
-import React from 'react';
-import { Cpu, Activity, Flame, Scale, GitPullRequest } from 'lucide-react';
+import { Activity, Cpu, Flame, GitPullRequest, Scale } from 'lucide-react';
+import type React from 'react';
 
 interface StrategyAllocation {
   id: string;
@@ -45,7 +45,7 @@ export const AutonomyDashboardView: React.FC = () => {
     {
       id: 'breakout-momentum-btcusdt',
       name: 'Donchian Breakout Momentum',
-      weight: 0.30,
+      weight: 0.3,
       allocatedNotional: 3000.0,
       expectedUtility: 1.64,
     },
@@ -61,7 +61,7 @@ export const AutonomyDashboardView: React.FC = () => {
       name: 'Adaptive Geometric Grid',
       weight: 0.0,
       allocatedNotional: 0.0,
-      expectedUtility: 0.20,
+      expectedUtility: 0.2,
     },
   ];
 
@@ -130,9 +130,12 @@ export const AutonomyDashboardView: React.FC = () => {
             <Cpu className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-xl font-bold tracking-tight text-slate-100">Controle de Autonomia & Multi-Estratégia</h2>
+            <h2 className="text-xl font-bold tracking-tight text-slate-100">
+              Controle de Autonomia & Multi-Estratégia
+            </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Classificação contínua de regime de mercado, alocação dinâmica e ciclo lento de aprendizado (US-074, US-173, US-177)
+              Classificação contínua de regime de mercado, alocação dinâmica e ciclo lento de aprendizado (US-074,
+              US-173, US-177)
             </p>
           </div>
         </div>
@@ -142,7 +145,9 @@ export const AutonomyDashboardView: React.FC = () => {
           <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping" />
           <div>
             <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Regime Ativo</div>
-            <div className="text-sm font-bold text-emerald-400 font-mono">BULL TREND ({currentRegime.confidence * 100}%)</div>
+            <div className="text-sm font-bold text-emerald-400 font-mono">
+              BULL TREND ({currentRegime.confidence * 100}%)
+            </div>
           </div>
         </div>
       </div>
