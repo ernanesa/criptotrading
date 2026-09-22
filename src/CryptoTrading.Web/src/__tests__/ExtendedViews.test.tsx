@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Navigation, type NavTab } from '../components/Navigation';
 import { AutonomyDashboardView } from '../views/AutonomyDashboardView';
+import { BenchmarkDashboardView } from '../views/BenchmarkDashboardView';
 import { RealtimeTradingView } from '../views/RealtimeTradingView';
 import { ResearchDashboardView } from '../views/ResearchDashboardView';
 
@@ -33,6 +34,22 @@ describe('ResearchDashboardView (US-103)', () => {
   });
 });
 
+describe('BenchmarkDashboardView (Brazilian Benchmarks)', () => {
+  it('renders CDI, Selic, IPCA, Tesouro and switches time horizon', () => {
+    render(<BenchmarkDashboardView />);
+    expect(screen.getByTestId('benchmark-dashboard-view')).toBeInTheDocument();
+    expect(screen.getByText('Benchmarks Financeiros & Macroeconômicos Brasileiros')).toBeInTheDocument();
+    expect(screen.getByText('Alpha s/ CDI (em BRL)')).toBeInTheDocument();
+    expect(screen.getByText('Equivalente do CDI')).toBeInTheDocument();
+    expect(screen.getByText(/IN RFB nº 1.888\/2019/)).toBeInTheDocument();
+
+    // Switch horizon to 3 Meses
+    const threeMonthsBtn = screen.getByText('3 Meses');
+    fireEvent.click(threeMonthsBtn);
+    expect(screen.getByText('Horizonte: 63 dias úteis')).toBeInTheDocument();
+  });
+});
+
 describe('AutonomyDashboardView (US-104)', () => {
   it('renders regime classifier, dynamic weights, drift metrics and model registry', () => {
     render(<AutonomyDashboardView />);
@@ -46,7 +63,7 @@ describe('AutonomyDashboardView (US-104)', () => {
 });
 
 describe('Navigation tab bar', () => {
-  it('renders all 6 navigation tabs and invokes callback', () => {
+  it('renders all 7 navigation tabs and invokes callback', () => {
     let selected: NavTab = 'overview';
     const onSelect = (tab: NavTab) => {
       selected = tab;
@@ -57,6 +74,11 @@ describe('Navigation tab bar', () => {
     expect(realtimeTab).toBeInTheDocument();
     fireEvent.click(realtimeTab);
     expect(selected).toBe('realtime');
+
+    const benchmarkTab = screen.getByTestId('nav-tab-benchmarks');
+    expect(benchmarkTab).toBeInTheDocument();
+    fireEvent.click(benchmarkTab);
+    expect(selected).toBe('benchmarks');
 
     const autonomyTab = screen.getByTestId('nav-tab-autonomy');
     expect(autonomyTab).toBeInTheDocument();

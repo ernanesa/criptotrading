@@ -7,6 +7,7 @@ import { EnvironmentBanner } from './components/EnvironmentBanner';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Navigation, type NavTab } from './components/Navigation';
 import { AutonomyDashboardView } from './views/AutonomyDashboardView';
+import { BenchmarkDashboardView } from './views/BenchmarkDashboardView';
 import { DecisionTraceView } from './views/DecisionTraceView';
 import { OperationalOverviewView } from './views/OperationalOverviewView';
 import { RealtimeTradingView } from './views/RealtimeTradingView';
@@ -54,6 +55,7 @@ const AppContent: React.FC = () => {
           {currentTab === 'realtime' && <RealtimeTradingView />}
           {currentTab === 'decisions' && <DecisionTraceView />}
           {currentTab === 'research' && <ResearchDashboardView />}
+          {currentTab === 'benchmarks' && <BenchmarkDashboardView />}
           {currentTab === 'autonomy' && <AutonomyDashboardView />}
           {currentTab === 'risk' && <RiskControlView />}
         </ErrorBoundary>
