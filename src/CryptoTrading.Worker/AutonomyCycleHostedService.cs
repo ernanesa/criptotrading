@@ -10,6 +10,7 @@ using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
 using CryptoTrading.Domain.Execution;
+using CryptoTrading.Domain.Operations;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
@@ -34,7 +35,9 @@ internal sealed class AutonomyCycleHostedService(
     IAsyncOperationalControl operationalControl,
     CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
     BaselineDecisionCycle cycle,
-    ILogger<AutonomyCycleHostedService> logger) : BackgroundService
+    ILogger<AutonomyCycleHostedService> logger,
+    ILocalOpenOrderStore? openOrderStore = null,
+    IOrderCancellationStore? cancellationStore = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -53,16 +56,30 @@ internal sealed class AutonomyCycleHostedService(
             }
             catch (Exception exception)
             {
-                AutonomyCycleLog.Failed(logger, exception.GetType().Name, exception.Message);
+                var classification = FailureClassifier.Classify(exception);
+                AutonomyCycleLog.Failed(logger, exception.GetType().Name, $"{classification.ReasonCode}: {exception.Message}");
                 try
                 {
-                    _ = await operationalControl.EnterSafeModeAsync(
-                        new OperationalControlCommand(
-                            "autonomy-cycle",
-                            $"A2 cycle failed: {exception.GetType().Name}",
-                            IdempotencyKey.New(),
-                            DateTimeOffset.UtcNow),
-                        stoppingToken).ConfigureAwait(false);
+                    if (classification.TargetState == CryptoTrading.Domain.Runtime.RuntimeState.KillSwitch)
+                    {
+                        _ = await operationalControl.ActivateKillSwitchAsync(
+                            new OperationalControlCommand(
+                                "autonomy-cycle",
+                                $"A2 terminal failure: {classification.ReasonCode}",
+                                IdempotencyKey.New(),
+                                DateTimeOffset.UtcNow),
+                            stoppingToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        _ = await operationalControl.EnterSafeModeAsync(
+                            new OperationalControlCommand(
+                                "autonomy-cycle",
+                                $"A2 failure: {classification.ReasonCode}",
+                                IdempotencyKey.New(),
+                                DateTimeOffset.UtcNow),
+                            stoppingToken).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception controlException) when (controlException is not OperationCanceledException)
                 {
@@ -74,7 +91,7 @@ internal sealed class AutonomyCycleHostedService(
         }
     }
 
-    private async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
+    internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
         var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}:{cycle.StrategyVersion}";
@@ -108,6 +125,63 @@ internal sealed class AutonomyCycleHostedService(
         var featureSnapshot = BaselineFeatureSnapshot.Create(
             closed,
             cycle.Parameters);
+
+        if (openOrderStore is not null)
+        {
+            var openOrders = await openOrderStore.ReadOpenOrdersAsync(cancellationToken).ConfigureAwait(false);
+            var unknownOrder = openOrders.FirstOrDefault(o =>
+                string.Equals(o.Symbol, runtime.AutonomySymbol, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(o.Status, "UNKNOWN", StringComparison.OrdinalIgnoreCase));
+
+            if (unknownOrder is not null)
+            {
+                var blockReason = $"UNKNOWN_ORDER_EXISTS:{unknownOrder.ClientOrderId}";
+                AutonomyCycleLog.Blocked(logger, closed[^1].Bar.CloseTimeUtc, blockReason);
+                var blockedTrace = JsonSerializer.Serialize(new
+                {
+                    Reason = blockReason,
+                    BlockedClientOrderId = unknownOrder.ClientOrderId,
+                    Symbol = runtime.AutonomySymbol,
+                    CloseTimeUtc = closed[^1].Bar.CloseTimeUtc,
+                });
+                var environment = runtime.ExecutionMode.Trim().ToUpperInvariant();
+                var accountScope = runtime.ReconciliationAccount.Trim();
+                var canonicalIdentity = string.Join('|', environment, accountScope, runtime.AutonomySymbol,
+                    cycle.StrategyId, cycle.StrategyVersion, closed[^1].Bar.CloseTimeUtc.ToString("O", CultureInfo.InvariantCulture));
+                var decisionId = "ad-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalIdentity)));
+                await decisionCommitStore.CommitAsync(
+                    new AutonomyDecisionCommit(
+                        decisionId,
+                        environment,
+                        accountScope,
+                        checkpointScope,
+                        new Symbol(runtime.AutonomySymbol),
+                        cycle.StrategyId,
+                        cycle.StrategyVersion,
+                        closed[^1].Bar.CloseTimeUtc,
+                        featureSnapshot.AvailableAtUtc,
+                        featureSnapshot.SchemaVersion,
+                        featureSnapshot.ConfigurationFingerprint,
+                        featureSnapshot.FeatureFingerprint,
+                        TrendFollowingSignal.NoTrade.ToString(),
+                        "UNKNOWN_ORDER_BLOCKED",
+                        null,
+                        "BLOCKED",
+                        blockReason,
+                        blockedTrace,
+                        null),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
+
+        ExecutionReplanCandidate? replanCandidate = null;
+        if (cancellationStore is not null)
+        {
+            var candidates = await cancellationStore.ReadReplanCandidatesAsync(100, cancellationToken).ConfigureAwait(false);
+            replanCandidate = candidates.LastOrDefault(c =>
+                string.Equals(c.Symbol.Value, runtime.AutonomySymbol, StringComparison.OrdinalIgnoreCase));
+        }
 
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         if (!account.CanTrade)
@@ -215,7 +289,7 @@ internal sealed class AutonomyCycleHostedService(
         var outcome = result.IsNoTrade ? "NO_TRADE" : outbox is not null ? "DISPATCHABLE" : "BLOCKED";
         var reason = result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
         await decisionCommitStore.CommitAsync(
-            CreateDecisionCommit(runtime, checkpointScope, featureSnapshot, result, outcome, reason, outbox),
+            CreateDecisionCommit(runtime, checkpointScope, featureSnapshot, result, outcome, reason, outbox, replanCandidate),
             cancellationToken).ConfigureAwait(false);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (result.IsNoTrade)
@@ -243,7 +317,8 @@ internal sealed class AutonomyCycleHostedService(
         BaselineDecisionCycleResult result,
         string outcome,
         string reason,
-        OutboxRecord? outbox)
+        OutboxRecord? outbox,
+        ExecutionReplanCandidate? replanCandidate = null)
     {
         var decision = result.Decision;
         var environment = runtime.ExecutionMode.Trim().ToUpperInvariant();
@@ -264,6 +339,8 @@ internal sealed class AutonomyCycleHostedService(
             Reason = reason,
             IntentClientOrderId = result.Intent?.ClientOrderId.Value,
             OutboxMessageId = outbox?.MessageId,
+            ReplanCandidateId = replanCandidate?.CandidateId,
+            ReplanAttempt = replanCandidate?.NextAttempt,
         });
         return new(
             decisionId, environment, accountScope, checkpointScope, decision.Symbol, decision.StrategyId, decision.StrategyVersion,
@@ -311,7 +388,7 @@ internal sealed class AutonomyCycleHostedService(
             response.Discount.EnabledForSymbol,
             response.Discount.DiscountAsset,
             ParseOptionalRate(response.Discount.Discount),
-            !discountEnabled || discountValuation.Available,
+            discountEnabled && discountValuation.Available,
             snapshot.ObservedAtUtc <= observedAtUtc ? snapshot.ObservedAtUtc : observedAtUtc,
             discountAssetQuotePrice: discountValuation.Price,
             discountAssetValuationAtUtc: discountValuation.ObservedAtUtc,
