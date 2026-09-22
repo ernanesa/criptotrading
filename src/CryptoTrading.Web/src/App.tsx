@@ -9,6 +9,7 @@ import { Navigation, type NavTab } from './components/Navigation';
 import { AutonomyDashboardView } from './views/AutonomyDashboardView';
 import { BenchmarkDashboardView } from './views/BenchmarkDashboardView';
 import { DecisionTraceView } from './views/DecisionTraceView';
+import { FinancialPerformanceView } from './views/FinancialPerformanceView';
 import { OperationalOverviewView } from './views/OperationalOverviewView';
 import { RealtimeTradingView } from './views/RealtimeTradingView';
 import { ResearchDashboardView } from './views/ResearchDashboardView';
@@ -53,6 +54,7 @@ const AppContent: React.FC = () => {
         <ErrorBoundary>
           {currentTab === 'overview' && <OperationalOverviewView />}
           {currentTab === 'realtime' && <RealtimeTradingView />}
+          {currentTab === 'performance' && <FinancialPerformanceView />}
           {currentTab === 'decisions' && <DecisionTraceView />}
           {currentTab === 'research' && <ResearchDashboardView />}
           {currentTab === 'benchmarks' && <BenchmarkDashboardView />}

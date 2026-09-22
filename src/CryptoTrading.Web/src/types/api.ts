@@ -101,3 +101,38 @@ export interface ApiErrorResponse {
   correlationId?: string;
   status: number;
 }
+
+export interface PeriodPerformance {
+  periodName: string;
+  profitUsd: number;
+  profitBrl: number;
+  profitPercentage: number;
+  realizedProfitUsd: number;
+  unrealizedProfitUsd: number;
+  feesPaidUsd: number;
+  tradesCount: number;
+  winRatePercentage: number;
+}
+
+export interface PortfolioFinancialSnapshot {
+  totalDepositedUsd: number;
+  totalDepositedBrl: number;
+  totalWithdrawnUsd: number;
+  totalWithdrawnBrl: number;
+  netInvestedCapitalUsd: number;
+  netInvestedCapitalBrl: number;
+  currentNavUsd: number;
+  currentNavBrl: number;
+  cashBalanceUsd: number;
+  positionsMarketValueUsd: number;
+  totalProfitUsd: number;
+  totalProfitBrl: number;
+  totalProfitPercentage: number;
+  day: PeriodPerformance;
+  week: PeriodPerformance;
+  month: PeriodPerformance;
+  year: PeriodPerformance;
+  allTime: PeriodPerformance;
+  usdBrlRate: number;
+  calculatedAtUtc: string;
+}
