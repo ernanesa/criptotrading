@@ -3587,6 +3587,20 @@ public static class PostgresServiceCollectionExtensions
         services.AddSingleton(_ => new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)));
         services.AddSingleton<ILocalOpenOrderStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IAutonomyDecisionCommitStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IExpectedExecutionFeeStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IExecutionSubmissionContextStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IOrderLifecycleStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IRiskPolicyStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IRuntimeStateStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddHealthChecks().AddCheck<PostgresHealthCheck>(
             "postgres",
             HealthStatus.Unhealthy,

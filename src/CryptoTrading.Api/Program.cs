@@ -117,6 +117,82 @@ localDiagnostics.MapGet("/operational/status", (IOperationalControl operationalC
     }))
     .WithName("GetOperationalStatus");
 
+localDiagnostics.MapGet("/operational/decisions/{decisionId}", async (
+    string decisionId,
+    IServiceProvider services,
+    CancellationToken cancellationToken) =>
+{
+    var commitStore = services.GetService<IAutonomyDecisionCommitStore>();
+    if (commitStore is null)
+    {
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    if (string.IsNullOrWhiteSpace(decisionId))
+    {
+        return Results.BadRequest(new { error = "decisionId is required." });
+    }
+
+    var feeStore = services.GetService<IExpectedExecutionFeeStore>();
+    var submissionStore = services.GetService<IExecutionSubmissionContextStore>();
+    var lifecycleStore = services.GetService<IOrderLifecycleStore>();
+
+    var report = await AutonomyDecisionReconstructor.ReconstructAsync(
+        decisionId.Trim(),
+        commitStore,
+        feeStore,
+        submissionStore,
+        lifecycleStore,
+        cancellationToken).ConfigureAwait(false);
+
+    return report is not null
+        ? Results.Ok(report)
+        : Results.NotFound(new { error = $"Decision '{decisionId}' was not found." });
+})
+.WithName("GetOperationalDecision");
+
+localDiagnostics.MapGet("/operational/checkpoints/{scope}", async (
+    string scope,
+    IServiceProvider services,
+    CancellationToken cancellationToken) =>
+{
+    var commitStore = services.GetService<IAutonomyDecisionCommitStore>();
+    if (commitStore is null)
+    {
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    if (string.IsNullOrWhiteSpace(scope))
+    {
+        return Results.BadRequest(new { error = "scope is required." });
+    }
+
+    var lastProcessedClose = await commitStore.GetLastProcessedCloseAsync(scope.Trim(), cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new
+    {
+        scope = scope.Trim(),
+        lastProcessedCloseUtc = lastProcessedClose
+    });
+})
+.WithName("GetAutonomyCheckpoint");
+
+localDiagnostics.MapGet("/operational/risk-policy", async (
+    IServiceProvider services,
+    CancellationToken cancellationToken) =>
+{
+    var policyStore = services.GetService<IRiskPolicyStore>();
+    if (policyStore is null)
+    {
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var policy = await policyStore.GetActiveRiskPolicyAsync(DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+    return policy is not null
+        ? Results.Ok(policy)
+        : Results.NotFound(new { error = "No active RiskPolicy found." });
+})
+.WithName("GetActiveRiskPolicy");
+
 app.Run();
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The health check is created through dependency injection.")]
@@ -154,3 +230,6 @@ internal sealed class DenyApiOperationalControlResetAuthorizer : IOperationalCon
         OperationalControlCommand resetCommand,
         OperationalControlResetAuthorization authorization) => false;
 }
+
+internal partial class Program { }
+
