@@ -150,6 +150,74 @@ public sealed record TerminalCancellationResolution(
 
 public sealed record RuntimeStateCheckpoint(RuntimeState State, long Revision);
 
+/// <summary>
+/// Immutable decision evidence committed before an autonomous cycle can advance
+/// its watermark or make an outbox message visible to the dispatcher.
+/// </summary>
+public sealed record AutonomyDecisionCommit(
+    string DecisionId,
+    string Environment,
+    string AccountScope,
+    string CheckpointScope,
+    Symbol Symbol,
+    string StrategyId,
+    string StrategyVersion,
+    DateTimeOffset CloseTimeUtc,
+    DateTimeOffset AvailableAtUtc,
+    string FeatureSchemaVersion,
+    string FeatureConfigurationFingerprint,
+    string FeatureFingerprint,
+    string Signal,
+    string StrategyReason,
+    RiskDecision? RiskDecision,
+    string Outcome,
+    string? NoTradeReason,
+    string TraceJson,
+    OutboxRecord? OutboxRecord)
+{
+    public void Validate()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(DecisionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Environment);
+        ArgumentException.ThrowIfNullOrWhiteSpace(AccountScope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(CheckpointScope);
+        ArgumentException.ThrowIfNullOrWhiteSpace(StrategyId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(StrategyVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(FeatureSchemaVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(FeatureConfigurationFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(FeatureFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Signal);
+        ArgumentException.ThrowIfNullOrWhiteSpace(StrategyReason);
+        ArgumentException.ThrowIfNullOrWhiteSpace(Outcome);
+        ArgumentException.ThrowIfNullOrWhiteSpace(TraceJson);
+        if (CloseTimeUtc.Offset != TimeSpan.Zero || AvailableAtUtc.Offset != TimeSpan.Zero || AvailableAtUtc < CloseTimeUtc)
+        {
+            throw new ArgumentException("Decision close and availability times must be ordered UTC timestamps.");
+        }
+
+        if (string.Equals(Outcome, "DISPATCHABLE", StringComparison.Ordinal) != (OutboxRecord is not null))
+        {
+            throw new ArgumentException("Only a dispatchable decision can contain an outbox record.");
+        }
+
+        if (OutboxRecord is not null && RiskDecision is null)
+        {
+            throw new ArgumentException("A dispatchable decision requires durable risk evidence.");
+        }
+    }
+}
+
+/// <summary>
+/// Atomic persistence boundary for decision evidence, optional execution
+/// outbox, fee/submission context, and the autonomy checkpoint.
+/// </summary>
+public interface IAutonomyDecisionCommitStore
+{
+    Task<DateTimeOffset?> GetLastProcessedCloseAsync(string scope, CancellationToken cancellationToken = default);
+
+    Task CommitAsync(AutonomyDecisionCommit commit, CancellationToken cancellationToken = default);
+}
+
 public interface IExpectedExecutionFeeStore
 {
     Task RecordExpectedExecutionFeeAsync(
@@ -396,7 +464,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1854,9 +1922,21 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(record);
-        var payload = JsonSerializer.Serialize(record.Command, JsonOptions);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await PersistOutboxAsync(connection, transaction, record, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return record;
+    }
+
+    /// <summary>Writes one submit outbox record within an already-owned serializable transaction.</summary>
+    private static async Task PersistOutboxAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        OutboxRecord record,
+        CancellationToken cancellationToken)
+    {
+        var payload = JsonSerializer.Serialize(record.Command, JsonOptions);
         var inserted = await ExecuteScalarAsync(connection, transaction,
             """
             INSERT INTO trading.outbox_messages
@@ -1892,9 +1972,6 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
 
         await PersistExpectedExecutionFeeAsync(connection, transaction, record.Command, cancellationToken).ConfigureAwait(false);
         await PersistExecutionSubmissionContextAsync(connection, transaction, record, cancellationToken).ConfigureAwait(false);
-
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return record;
     }
 
     public async Task<ExecutionSubmissionContext?> ReadExecutionSubmissionContextAsync(
@@ -2397,6 +2474,93 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         Enum.TryParse<OrderStatus>(value, ignoreCase: false, out var status) && Enum.IsDefined(status)
             ? status
             : throw new InvalidOperationException($"Persisted lifecycle contains an unsupported order status '{value}'.");
+
+    /// <summary>
+    /// Atomically records immutable decision evidence, the optional submit
+    /// outbox plus its fee/context projections, and the processed-bar
+    /// checkpoint. Nothing is dispatchable until this transaction commits.
+    /// </summary>
+    public async Task CommitAsync(
+        AutonomyDecisionCommit commit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(commit);
+        commit.Validate();
+        var payload = JsonSerializer.Serialize(commit, JsonOptions);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        var inserted = await ExecuteScalarAsync(connection, transaction,
+            """
+            INSERT INTO trading.autonomy_decisions
+                (decision_id, environment, account_scope, checkpoint_scope, symbol, strategy_id, strategy_version,
+                 close_time, available_at, feature_schema_version, feature_configuration_fingerprint, feature_fingerprint,
+                 signal, strategy_reason, risk_status, risk_policy_version, risk_requested_notional, risk_authorized_notional,
+                 risk_reason_codes, outcome, no_trade_reason, trace, outbox_message_id, payload)
+            VALUES
+                (@decision_id, @environment, @account_scope, @checkpoint_scope, @symbol, @strategy_id, @strategy_version,
+                 @close_time, @available_at, @feature_schema_version, @feature_configuration_fingerprint, @feature_fingerprint,
+                 @signal, @strategy_reason, @risk_status, @risk_policy_version, @risk_requested_notional, @risk_authorized_notional,
+                 @risk_reason_codes, @outcome, @no_trade_reason, @trace, @outbox_message_id, @payload)
+            ON CONFLICT DO NOTHING
+            RETURNING decision_id;
+            """,
+            [
+                Parameter("decision_id", NpgsqlDbType.Varchar, commit.DecisionId.Trim()),
+                Parameter("environment", NpgsqlDbType.Varchar, commit.Environment.Trim()),
+                Parameter("account_scope", NpgsqlDbType.Varchar, commit.AccountScope.Trim()),
+                Parameter("checkpoint_scope", NpgsqlDbType.Varchar, commit.CheckpointScope.Trim()),
+                Parameter("symbol", NpgsqlDbType.Varchar, commit.Symbol.Value),
+                Parameter("strategy_id", NpgsqlDbType.Varchar, commit.StrategyId.Trim()),
+                Parameter("strategy_version", NpgsqlDbType.Varchar, commit.StrategyVersion.Trim()),
+                Parameter("close_time", NpgsqlDbType.TimestampTz, commit.CloseTimeUtc.UtcDateTime),
+                Parameter("available_at", NpgsqlDbType.TimestampTz, commit.AvailableAtUtc.UtcDateTime),
+                Parameter("feature_schema_version", NpgsqlDbType.Varchar, commit.FeatureSchemaVersion.Trim()),
+                Parameter("feature_configuration_fingerprint", NpgsqlDbType.Varchar, commit.FeatureConfigurationFingerprint.Trim()),
+                Parameter("feature_fingerprint", NpgsqlDbType.Varchar, commit.FeatureFingerprint.Trim()),
+                Parameter("signal", NpgsqlDbType.Varchar, commit.Signal.Trim()),
+                Parameter("strategy_reason", NpgsqlDbType.Varchar, commit.StrategyReason.Trim()),
+                Parameter("risk_status", NpgsqlDbType.Varchar, commit.RiskDecision?.Status.ToString()),
+                Parameter("risk_policy_version", NpgsqlDbType.Varchar, commit.RiskDecision?.PolicyVersion),
+                Parameter("risk_requested_notional", NpgsqlDbType.Numeric, commit.RiskDecision?.RequestedTargetNotional),
+                Parameter("risk_authorized_notional", NpgsqlDbType.Numeric, commit.RiskDecision?.AuthorizedTargetNotional),
+                Parameter("risk_reason_codes", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(commit.RiskDecision?.ReasonCodes ?? [], JsonOptions)),
+                Parameter("outcome", NpgsqlDbType.Varchar, commit.Outcome.Trim()),
+                Parameter("no_trade_reason", NpgsqlDbType.Varchar, commit.NoTradeReason),
+                Parameter("trace", NpgsqlDbType.Jsonb, commit.TraceJson),
+                Parameter("outbox_message_id", NpgsqlDbType.Uuid, commit.OutboxRecord?.MessageId),
+                Parameter("payload", NpgsqlDbType.Jsonb, payload),
+            ], cancellationToken).ConfigureAwait(false);
+
+        if (inserted is null or DBNull)
+        {
+            var existingPayload = await ExecuteScalarAsync(connection, transaction,
+                "SELECT payload FROM trading.autonomy_decisions WHERE decision_id = @decision_id;",
+                [Parameter("decision_id", NpgsqlDbType.Varchar, commit.DecisionId.Trim())], cancellationToken).ConfigureAwait(false);
+            if (existingPayload is null or DBNull || !EquivalentJson((string)existingPayload, payload))
+            {
+                throw new InvalidOperationException("The autonomy decision identity is already associated with different evidence.");
+            }
+        }
+
+        if (commit.OutboxRecord is not null)
+        {
+            await PersistOutboxAsync(connection, transaction, commit.OutboxRecord, cancellationToken).ConfigureAwait(false);
+        }
+
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.autonomy_checkpoints (scope, last_processed_close)
+            VALUES (@scope, @close_time)
+            ON CONFLICT (scope) DO UPDATE
+            SET last_processed_close = GREATEST(trading.autonomy_checkpoints.last_processed_close, EXCLUDED.last_processed_close),
+                updated_at = transaction_timestamp();
+            """,
+            [
+                Parameter("scope", NpgsqlDbType.Varchar, commit.CheckpointScope.Trim()),
+                Parameter("close_time", NpgsqlDbType.TimestampTz, commit.CloseTimeUtc.UtcDateTime),
+            ], cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task<DateTimeOffset?> GetLastProcessedCloseAsync(
         string scope,
