@@ -24,6 +24,51 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  cryptotrading-api:
+    build:
+      context: .
+      dockerfile: src/CryptoTrading.Api/Dockerfile
+    profiles: ["app", "api", "all"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${APP_ENVIRONMENT:-Development}
+      POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-cryptotrading};Username=${POSTGRES_USER:-cryptotrading};Password=${POSTGRES_PASSWORD:-}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  cryptotrading-worker:
+    build:
+      context: .
+      dockerfile: src/CryptoTrading.Worker/Dockerfile
+    profiles: ["app", "worker", "all"]
+    restart: unless-stopped
+    environment:
+      DOTNET_ENVIRONMENT: ${APP_ENVIRONMENT:-Development}
+      POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-cryptotrading};Username=${POSTGRES_USER:-cryptotrading};Password=${POSTGRES_PASSWORD:-}"
+      WORKER_AUTONOMY_ENABLED: "false"
+      WORKER_NO_TRADE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+  cryptotrading-web:
+    build:
+      context: src/CryptoTrading.Web
+      dockerfile: Dockerfile
+    profiles: ["app", "web", "all"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   cryptotrading-postgres-data:
     name: ${POSTGRES_VOLUME_NAME:-cryptotrading-postgres-data}
