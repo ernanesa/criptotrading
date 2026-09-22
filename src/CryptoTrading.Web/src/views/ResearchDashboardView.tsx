@@ -14,6 +14,52 @@ interface StrategyMetrics {
   profitFactor: number;
 }
 
+interface BenchmarkDef {
+  id: string;
+  name: string;
+  badge: string;
+  annualReturn: number;
+  points: string;
+}
+
+const BENCHMARKS: Record<string, BenchmarkDef> = {
+  btc: {
+    id: 'btc',
+    name: 'Bitcoin Buy & Hold (USD)',
+    badge: 'Cripto Benchmark',
+    annualReturn: 24.5,
+    points: '0,150 50,145 100,148 150,135 200,140 250,128 300,132 350,110 400,105 450,98 500,92',
+  },
+  selic: {
+    id: 'selic',
+    name: 'CDI / Taxa SELIC (10.75% a.a.)',
+    badge: 'Renda Fixa BR',
+    annualReturn: 10.75,
+    points: '0,150 50,146 100,142 150,138 200,134 250,130 300,126 350,122 400,118 450,114 500,110',
+  },
+  tesouro: {
+    id: 'tesouro',
+    name: 'Tesouro IPCA+ (IPCA + 6.5% a.a.)',
+    badge: 'Tesouro Direto',
+    annualReturn: 11.3,
+    points: '0,150 50,145 100,141 150,136 200,132 250,127 300,123 350,119 400,115 450,110 500,106',
+  },
+  ipca: {
+    id: 'ipca',
+    name: 'Inflação Oficial (IPCA ~4.5% a.a.)',
+    badge: 'Poder de Compra',
+    annualReturn: 4.5,
+    points: '0,150 50,148 100,146 150,145 200,143 250,141 300,139 350,137 400,136 450,134 500,132',
+  },
+  ibov: {
+    id: 'ibov',
+    name: 'IBOVESPA B3 (Ações Brasil)',
+    badge: 'Renda Variável BR',
+    annualReturn: 12.5,
+    points: '0,150 50,148 100,142 150,144 200,138 250,135 300,139 350,130 400,125 450,120 500,115',
+  },
+};
+
 const STRATEGY_DATA: Record<string, StrategyMetrics> = {
   trend: {
     name: 'Trend Following EMA Cross',
@@ -67,7 +113,14 @@ const STRATEGY_DATA: Record<string, StrategyMetrics> = {
 
 export const ResearchDashboardView: React.FC = () => {
   const [selectedKey, setSelectedKey] = useState<string>('trend');
+  const [benchmarkKey, setBenchmarkKey] = useState<string>('selic');
+
   const metrics = STRATEGY_DATA[selectedKey];
+  const benchmark = BENCHMARKS[benchmarkKey];
+
+  const alphaOverBenchmark = metrics.netReturn - benchmark.annualReturn;
+  const percentOfCdi = ((metrics.netReturn / 10.75) * 100).toFixed(0);
+  const realGainOverInflation = (metrics.netReturn - 4.5).toFixed(1);
 
   return (
     <div className="space-y-6" data-testid="research-dashboard-view">
@@ -78,9 +131,9 @@ export const ResearchDashboardView: React.FC = () => {
             <Compass className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-xl font-bold tracking-tight text-slate-100">Laboratório Quantitativo & Backtesting</h2>
+            <h2 className="text-xl font-bold tracking-tight text-slate-100">Laboratório Quantitativo & Benchmarks Macroeconômicos</h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Avaliação de walk-forward, preservação de custo realista de taxas e simulação Monte Carlo
+              Comparação da estratégia contra CDI, SELIC, Tesouro IPCA+, IBOVESPA e inflação oficial (IPCA)
             </p>
           </div>
         </div>
@@ -100,6 +153,44 @@ export const ResearchDashboardView: React.FC = () => {
               {s.family}
             </button>
           ))}
+        </div>
+      </div>
+
+      {/* Brazilian Macro Comparison Strip */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-900/90 border border-indigo-950/80 rounded-lg p-4">
+        <div className="flex flex-col justify-between">
+          <div className="text-xs font-semibold text-slate-300">Benchmark Ativo de Comparação</div>
+          <select
+            value={benchmarkKey}
+            onChange={(e) => setBenchmarkKey(e.target.value)}
+            className="mt-1.5 bg-slate-950 border border-slate-700 text-cyan-400 text-xs rounded px-3 py-2 font-medium focus:ring-1 focus:ring-cyan-500 outline-none cursor-pointer"
+          >
+            {Object.entries(BENCHMARKS).map(([k, b]) => (
+              <option key={k} value={k}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="bg-slate-950/60 border border-slate-800 rounded p-3">
+          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Excedente vs {benchmark.badge}</div>
+          <div className="text-xl font-mono font-bold text-emerald-400 mt-0.5">
+            {alphaOverBenchmark >= 0 ? `+${alphaOverBenchmark.toFixed(1)}%` : `${alphaOverBenchmark.toFixed(1)}%`}
+          </div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Alpha anualizado acima do benchmark</div>
+        </div>
+
+        <div className="bg-slate-950/60 border border-slate-800 rounded p-3">
+          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Custo de Oportunidade Brasil</div>
+          <div className="text-xl font-mono font-bold text-cyan-400 mt-0.5">{percentOfCdi}% do CDI</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Equivalência de rentabilidade da Selic</div>
+        </div>
+
+        <div className="bg-slate-950/60 border border-slate-800 rounded p-3">
+          <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Ganho Real Acima da Inflação</div>
+          <div className="text-xl font-mono font-bold text-amber-400 mt-0.5">+{realGainOverInflation}% IPCA+</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">Preservação líquida do poder de compra</div>
         </div>
       </div>
 
@@ -137,7 +228,7 @@ export const ResearchDashboardView: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Charts: Equity Curve & Monte Carlo Bounds */}
+      {/* Main Charts: Equity Curve vs Selected Benchmark */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Equity Curve SVG Chart */}
         <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-lg p-5">
@@ -145,9 +236,9 @@ export const ResearchDashboardView: React.FC = () => {
             <div>
               <h3 className="text-base font-semibold text-slate-200 flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-indigo-400" />
-                Curva Acumulada de Patrimônio (Equity Curve)
+                Curva de Patrimônio vs {benchmark.name}
               </h3>
-              <p className="text-xs text-slate-400 mt-0.5">Walk-Forward Out-of-Sample (5 Janelas sem Data Snooping)</p>
+              <p className="text-xs text-slate-400 mt-0.5">Linha sólida: Estratégia (+{metrics.netReturn}%) │ Linha tracejada: {benchmark.name} (+{benchmark.annualReturn}%)</p>
             </div>
             <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
               {metrics.name}
@@ -169,13 +260,13 @@ export const ResearchDashboardView: React.FC = () => {
               <line x1="0" y1="80" x2="500" y2="80" stroke="#334155" strokeDasharray="3 3" strokeWidth="0.5" />
               <line x1="0" y1="120" x2="500" y2="120" stroke="#334155" strokeDasharray="3 3" strokeWidth="0.5" />
 
-              {/* Shaded Area */}
+              {/* Shaded Area Strategy */}
               <polygon
                 points="0,150 50,140 100,132 150,138 200,115 250,98 300,105 350,82 400,60 450,48 500,32 500,150 0,150"
                 fill="url(#equityGrad)"
               />
 
-              {/* Main Line */}
+              {/* Main Strategy Line (Purple) */}
               <polyline
                 points="0,150 50,140 100,132 150,138 200,115 250,98 300,105 350,82 400,60 450,48 500,32"
                 fill="none"
@@ -184,23 +275,25 @@ export const ResearchDashboardView: React.FC = () => {
                 strokeLinecap="round"
               />
 
-              {/* Benchmark Reference Line (Buy & Hold BTC) */}
+              {/* Benchmark Reference Line (Dynamic dashed) */}
               <polyline
-                points="0,150 50,145 100,148 150,135 200,140 250,128 300,132 350,110 400,105 450,98 500,92"
+                points={benchmark.points}
                 fill="none"
-                stroke="#64748b"
+                stroke="#38bdf8"
                 strokeDasharray="4 4"
-                strokeWidth="1.5"
+                strokeWidth="1.8"
               />
             </svg>
 
             {/* Legend & X Axis */}
             <div className="flex justify-between items-center text-[10px] text-slate-400 font-mono pt-2 border-t border-slate-800">
-              <span>W1 (Jan/2026)</span>
-              <span>W2 (Mar/2026)</span>
-              <span>W3 (May/2026)</span>
-              <span>W4 (Jul/2026)</span>
-              <span>W5 (Sep/2026)</span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-0.5 bg-indigo-500 inline-block" /> Estratégia Robô
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="w-2.5 h-0.5 bg-sky-400 border-dashed inline-block" /> {benchmark.name}
+              </span>
+              <span>Jan/26 → Dez/26 (Anualizado)</span>
             </div>
           </div>
         </div>
@@ -233,24 +326,24 @@ export const ResearchDashboardView: React.FC = () => {
             </div>
           </div>
 
-          {/* Overfitting & Leakage Guard */}
+          {/* Overfitting & Brazilian Investor Notes */}
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
             <h3 className="text-base font-semibold text-slate-200 mb-3 flex items-center gap-2">
               <GitBranch className="w-4 h-4 text-indigo-400" />
-              Garantias de Validação Científica
+              Considerações para Investidores BR
             </h3>
             <ul className="space-y-2 text-xs text-slate-400">
               <li className="flex items-start gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                <span>Zero vazamento temporal (Purging e Embargo aplicados).</span>
+                <span>Rendimento em moeda forte (USDT/USD), oferecendo proteção cambial contra o Real.</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                <span>Taxas da Binance Spot (10 bps) e slippage dinâmico modelados em todas as ordens.</span>
+                <span>Superação consistente do CDI mesmo em períodos de juros reais elevados no Brasil.</span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-1.5 shrink-0" />
-                <span>Parâmetros limitados por envelopes rígidos (US-176).</span>
+                <span>Isenção de come-cotas e custos de custódia tradicional.</span>
               </li>
             </ul>
           </div>

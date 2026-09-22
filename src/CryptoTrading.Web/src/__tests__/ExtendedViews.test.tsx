@@ -18,12 +18,13 @@ describe('RealtimeTradingView (US-101)', () => {
 });
 
 describe('ResearchDashboardView (US-103)', () => {
-  it('renders quantitative KPIs and switches strategy families', () => {
+  it('renders quantitative KPIs and switches strategy families and benchmarks', () => {
     render(<ResearchDashboardView />);
     expect(screen.getByTestId('research-dashboard-view')).toBeInTheDocument();
-    expect(screen.getByText('Laboratório Quantitativo & Backtesting')).toBeInTheDocument();
-    expect(screen.getByText('Curva Acumulada de Patrimônio (Equity Curve)')).toBeInTheDocument();
-    expect(screen.getByText('Intervalos de Confiança Monte Carlo (95%)')).toBeInTheDocument();
+    expect(screen.getByText(/Laboratório Quantitativo/)).toBeInTheDocument();
+    expect(screen.getByText(/Benchmark Ativo de Comparação/)).toBeInTheDocument();
+    expect(screen.getByText(/Custo de Oportunidade Brasil/)).toBeInTheDocument();
+    expect(screen.getByText(/Intervalos de Confiança Monte Carlo \(95%\)/)).toBeInTheDocument();
 
     // Switch to Breakout
     const breakoutBtn = screen.getByText('Breakout / Momentum');
