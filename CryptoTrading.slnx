@@ -21,6 +21,7 @@
     <Project Path="tools/CryptoTrading.AutonomyDecisionReconstructor/CryptoTrading.AutonomyDecisionReconstructor.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CryptoTrading.Api.Tests/CryptoTrading.Api.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Configuration.Tests/CryptoTrading.Configuration.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Backtesting.Tests/CryptoTrading.Backtesting.Tests.csproj" />
     <Project Path="tests/CryptoTrading.Domain.Tests/CryptoTrading.Domain.Tests.csproj" />
