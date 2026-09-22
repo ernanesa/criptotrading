@@ -77,4 +77,13 @@ grep -q '"mutatingEndpointsEnabled":false' "$status_body" || { echo 'API status 
 grep -q '"mode":"Normal"' "$status_body" || { echo 'API did not expose its initial operational mode.' >&2; exit 1; }
 grep -q '"blocksNewEntries":false' "$status_body" || { echo 'API exposed an unexpected initial block state.' >&2; exit 1; }
 
+decision_code="$(curl --silent --write-out '%{http_code}' --output /dev/null "http://127.0.0.1:$port/operational/decisions/dummy")"
+[[ "$decision_code" == "503" ]] || { echo "Expected 503 for unconfigured decision endpoint, got $decision_code" >&2; exit 1; }
+
+checkpoint_code="$(curl --silent --write-out '%{http_code}' --output /dev/null "http://127.0.0.1:$port/operational/checkpoints/BTCUSDT")"
+[[ "$checkpoint_code" == "503" ]] || { echo "Expected 503 for unconfigured checkpoint endpoint, got $checkpoint_code" >&2; exit 1; }
+
+risk_code="$(curl --silent --write-out '%{http_code}' --output /dev/null "http://127.0.0.1:$port/operational/risk-policy")"
+[[ "$risk_code" == "503" ]] || { echo "Expected 503 for unconfigured risk policy endpoint, got $risk_code" >&2; exit 1; }
+
 echo 'API smoke passed: liveness, readiness, correlation header and read-only operational status verified.'
