@@ -1,7 +1,7 @@
-import { Activity, Compass, Cpu, FileSearch, LayoutDashboard, ShieldCheck } from 'lucide-react';
+import { Activity, Compass, Cpu, FileSearch, Landmark, LayoutDashboard, ShieldCheck } from 'lucide-react';
 import type React from 'react';
 
-export type NavTab = 'overview' | 'realtime' | 'decisions' | 'research' | 'autonomy' | 'risk';
+export type NavTab = 'overview' | 'realtime' | 'decisions' | 'research' | 'benchmarks' | 'autonomy' | 'risk';
 
 interface NavigationProps {
   currentTab: NavTab;
@@ -14,6 +14,7 @@ export const Navigation: React.FC<NavigationProps> = ({ currentTab, onSelectTab 
     { id: 'realtime' as NavTab, label: 'Trading em Tempo Real', icon: Activity },
     { id: 'decisions' as NavTab, label: 'Decisões & Auditoria', icon: FileSearch },
     { id: 'research' as NavTab, label: 'Laboratório Quantitativo', icon: Compass },
+    { id: 'benchmarks' as NavTab, label: 'Benchmarks Brasileiros', icon: Landmark },
     { id: 'autonomy' as NavTab, label: 'Autonomia & Aprendizado', icon: Cpu },
     { id: 'risk' as NavTab, label: 'Controle de Risco & Kill Switch', icon: ShieldCheck },
   ];
