@@ -26,6 +26,26 @@ internal sealed class RiskPolicyStartupHostedService(
                 "WORKER_RISK_POLICY_REQUIRED=true but no valid active RiskPolicy was found; startup is blocked.");
         }
 
+        if (policy.Policy.WithdrawalsEnabled)
+        {
+            throw new InvalidOperationException(
+                "Active RiskPolicy has withdrawals enabled; startup is blocked fail-closed.");
+        }
+
+        var autonomySymbol = options.Value.AutonomySymbol;
+        if (string.IsNullOrWhiteSpace(autonomySymbol) || autonomySymbol.Trim().Length < 2)
+        {
+            throw new InvalidOperationException(
+                "Autonomy symbol is invalid; startup is blocked fail-closed.");
+        }
+
+        if (string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase) &&
+            policy.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            throw new InvalidOperationException(
+                "Active RiskPolicy has expired; startup is blocked fail-closed.");
+        }
+
         RiskPolicyStartupLog.Validated(logger, policy.Policy.Version, policy.DocumentHash);
     }
 

@@ -92,6 +92,9 @@ public sealed class BaselineDecisionCycle
         strategy = new TrendFollowingStrategy(parameters ?? throw new ArgumentNullException(nameof(parameters)));
     }
 
+    /// <summary>Strategy identifier participates in the durable checkpoint scope and decision identity.</summary>
+    public string StrategyId => strategy.Parameters.StrategyId;
+
     /// <summary>Version participates in the durable checkpoint scope and decision identity.</summary>
     public string StrategyVersion => strategy.Parameters.Version;
 
