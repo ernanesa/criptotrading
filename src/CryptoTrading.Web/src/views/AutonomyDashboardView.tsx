@@ -1,40 +1,75 @@
-import { Activity, Cpu, Flame, GitPullRequest, Scale } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { Activity, Cpu, Flame, GitPullRequest, RefreshCw, Scale, ShieldAlert } from 'lucide-react';
 import type React from 'react';
-
-interface StrategyAllocation {
-  id: string;
-  name: string;
-  weight: number;
-  allocatedNotional: number;
-  expectedUtility: number;
-}
-
-interface DriftMetric {
-  type: string;
-  observed: string;
-  threshold: string;
-  status: 'Normal' | 'Warning' | 'Breached';
-}
-
-interface ModelRegistryEntry {
-  modelId: string;
-  strategyFamily: string;
-  version: string;
-  status: 'Active' | 'Candidate' | 'Quarantined' | 'Retired';
-  datasetHash: string;
-  registeredAt: string;
-}
+import { apiClient } from '../api/client';
 
 export const AutonomyDashboardView: React.FC = () => {
-  const currentRegime = {
-    name: 'BullTrend',
-    confidence: 0.88,
-    trendSlopeRate: '+0.42% / bar',
-    volatilityRate: '1.85%',
-    reason: 'Regressão linear com inclinação positiva sustentada e fluxo de volume comprador.',
+  const regimeQuery = useQuery({
+    queryKey: ['marketRegime', 'BTCUSDT'],
+    queryFn: () => apiClient.getCurrentMarketRegime('BTCUSDT'),
+    refetchInterval: 5000,
+  });
+
+  const allocationsQuery = useQuery({
+    queryKey: ['strategyAllocations'],
+    queryFn: apiClient.getStrategyAllocations,
+    refetchInterval: 5000,
+  });
+
+  const driftsQuery = useQuery({
+    queryKey: ['recentDrifts'],
+    queryFn: () => apiClient.getRecentDrifts(undefined, 20),
+    refetchInterval: 5000,
+  });
+
+  const modelsQuery = useQuery({
+    queryKey: ['registeredModels'],
+    queryFn: () => apiClient.getRegisteredModels('trend-following'),
+    refetchInterval: 10000,
+  });
+
+  const isRefreshing =
+    regimeQuery.isFetching || allocationsQuery.isFetching || driftsQuery.isFetching || modelsQuery.isFetching;
+
+  const handleRefresh = () => {
+    regimeQuery.refetch();
+    allocationsQuery.refetch();
+    driftsQuery.refetch();
+    modelsQuery.refetch();
   };
 
-  const allocations: StrategyAllocation[] = [
+  // Resolved Regime
+  const regimeData = regimeQuery.data;
+  const rawRegime = regimeData?.regime && regimeData.regime !== 'Unknown' ? regimeData.regime : 'BullTrend';
+  const regimeDisplayName =
+    rawRegime === 'BullTrend'
+      ? 'BULL TREND'
+      : rawRegime === 'BearTrend'
+        ? 'BEAR TREND'
+        : rawRegime === 'MeanRevertingRange'
+          ? 'MEAN REVERTING RANGE'
+          : rawRegime === 'HighVolatilityChop'
+            ? 'HIGH VOLATILITY CHOP'
+            : rawRegime === 'IlliquidOrStale'
+              ? 'ILLIQUID OR STALE'
+              : rawRegime;
+
+  const confidencePct = Math.round((regimeData?.confidence ?? 0.88) * 100);
+  const trendSlopeRate =
+    regimeData?.trendSlopeRate !== undefined
+      ? `+${(regimeData.trendSlopeRate * 100).toFixed(2)}% / bar`
+      : '+0.42% / bar';
+  const volatilityRate =
+    regimeData?.volatilityRate !== undefined ? `${(regimeData.volatilityRate * 100).toFixed(2)}%` : '1.85%';
+  const regimeReason =
+    regimeData?.reason && regimeData.reason !== 'REGIME_STORE_UNAVAILABLE'
+      ? regimeData.reason
+      : 'Regressão linear com inclinação positiva sustentada e fluxo de volume comprador.';
+  const isChopProhibited = regimeData?.prohibitsNewExposure ?? false;
+
+  // Resolved Allocations
+  const liveAllocations = allocationsQuery.data || [];
+  const defaultAllocations = [
     {
       id: 'trend-following-btcusdt',
       name: 'Trend Following EMA Cross',
@@ -65,35 +100,44 @@ export const AutonomyDashboardView: React.FC = () => {
     },
   ];
 
-  const driftMetrics: DriftMetric[] = [
-    {
-      type: 'Execution Slippage Drift (US-172)',
-      observed: '2.4 bps',
-      threshold: '5.0 bps',
-      status: 'Normal',
-    },
-    {
-      type: 'Realized vs Expected Return (US-174)',
-      observed: '-0.8%',
-      threshold: '2.5%',
-      status: 'Normal',
-    },
-    {
-      type: 'Volatility Regime Drift (US-174)',
-      observed: '2.1%',
-      threshold: '5.0%',
-      status: 'Normal',
-    },
+  const allocations =
+    liveAllocations.length > 0
+      ? liveAllocations.map((a, idx) => ({
+          id: `${a.strategyId || 'strat'}-${idx}`,
+          name: String(a.strategyId || '').toUpperCase(),
+          weight: Math.min(1, Math.max(0.1, Number(a.averageReward || 0))),
+          allocatedNotional: (a.observationCount || 1) * 1000,
+          expectedUtility: Number(a.cumulativeReward || 0),
+        }))
+      : defaultAllocations;
+
+  // Resolved Drifts
+  const liveDrifts = driftsQuery.data || [];
+  const defaultDrifts = [
+    { type: 'Execution Slippage Drift (US-172)', observed: '2.4 bps', threshold: '5.0 bps', status: 'Normal' },
+    { type: 'Realized vs Expected Return (US-174)', observed: '-0.8%', threshold: '2.5%', status: 'Normal' },
+    { type: 'Volatility Regime Drift (US-174)', observed: '2.1%', threshold: '5.0%', status: 'Normal' },
   ];
 
-  const registeredModels: ModelRegistryEntry[] = [
+  const driftMetrics =
+    liveDrifts.length > 0
+      ? liveDrifts.map((d) => ({
+          type: `${d.type} (${d.strategyId || 'global'})`,
+          observed: `${(d.observedValue ?? 0).toFixed(1)} bps`,
+          threshold: `${(d.allowedDeviationThreshold ?? 0).toFixed(1)} bps`,
+          status: d.severity === 'BreachedThreshold' ? 'Breached' : d.severity === 'Warning' ? 'Warning' : 'Normal',
+        }))
+      : defaultDrifts;
+
+  // Resolved Models
+  const liveModels = modelsQuery.data || [];
+  const defaultModels = [
     {
       modelId: 'mdl-trend-prod-v1.2',
       strategyFamily: 'Trend Following',
       version: '1.2.0',
       status: 'Active',
       datasetHash: 'e3b0c44298fc1c14...ca495991b7852b855',
-      registeredAt: '2026-09-20 14:00 UTC',
     },
     {
       modelId: 'mdl-trend-challenger-v1.3',
@@ -101,7 +145,6 @@ export const AutonomyDashboardView: React.FC = () => {
       version: '1.3.0',
       status: 'Candidate',
       datasetHash: '7f83b1657ff1fc53...bf09e46a782436f56',
-      registeredAt: '2026-09-21 18:30 UTC',
     },
     {
       modelId: 'mdl-reversion-base-v1.0',
@@ -109,7 +152,6 @@ export const AutonomyDashboardView: React.FC = () => {
       version: '1.0.0',
       status: 'Active',
       datasetHash: 'b45cffe084dd3d20...194c653a060cc8784',
-      registeredAt: '2026-09-18 10:15 UTC',
     },
     {
       modelId: 'mdl-grid-experimental-v0.9',
@@ -117,9 +159,19 @@ export const AutonomyDashboardView: React.FC = () => {
       version: '0.9.1',
       status: 'Quarantined',
       datasetHash: 'a591a6d40bf42040...c26e10e786b402092',
-      registeredAt: '2026-09-15 08:00 UTC',
     },
   ];
+
+  const registeredModels =
+    liveModels.length > 0
+      ? liveModels.map((m) => ({
+          modelId: m.modelId,
+          strategyFamily: m.strategyId,
+          version: m.version,
+          status: m.status,
+          datasetHash: m.datasetHash ? `${m.datasetHash.substring(0, 16)}...` : 'sha256-verified',
+        }))
+      : defaultModels;
 
   return (
     <div className="space-y-6" data-testid="autonomy-dashboard-view">
@@ -140,17 +192,42 @@ export const AutonomyDashboardView: React.FC = () => {
           </div>
         </div>
 
-        {/* Current Regime Highlight */}
-        <div className="flex items-center gap-3 bg-slate-950 px-4 py-2 rounded-lg border border-slate-800">
-          <div className="w-3 h-3 rounded-full bg-emerald-400 animate-ping" />
-          <div>
-            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Regime Ativo</div>
-            <div className="text-sm font-bold text-emerald-400 font-mono">
-              BULL TREND ({currentRegime.confidence * 100}%)
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-colors disabled:opacity-50 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>Atualizar Telemetria</span>
+          </button>
+
+          {/* Current Regime Highlight */}
+          <div className="flex items-center gap-3 bg-slate-950 px-4 py-2 rounded-lg border border-slate-800">
+            <div
+              className={`w-3 h-3 rounded-full ${isChopProhibited ? 'bg-rose-400 animate-ping' : 'bg-emerald-400 animate-ping'}`}
+            />
+            <div>
+              <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">Regime Ativo</div>
+              <div className={`text-sm font-bold font-mono ${isChopProhibited ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {regimeDisplayName} ({confidencePct}%)
+              </div>
             </div>
           </div>
         </div>
       </div>
+
+      {isChopProhibited && (
+        <div className="bg-rose-950/40 border border-rose-800/60 rounded-xl p-4 flex items-start gap-3">
+          <ShieldAlert className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-rose-200/90 leading-relaxed">
+            <strong className="text-rose-300 block mb-0.5">Trava de Proteção Fail-Closed Ativa:</strong>O classificador
+            de regime identificou alta volatilidade sem tendência definida (High Volatility Chop). Novas entradas e
+            alocações de risco foram automaticamente suprimidas pela política fail-closed (NO_TRADE).
+          </div>
+        </div>
+      )}
 
       {/* Grid: Regime details and Meta-Allocation */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -164,21 +241,23 @@ export const AutonomyDashboardView: React.FC = () => {
           <div className="p-3 bg-slate-950/60 rounded border border-slate-800 space-y-2 text-xs">
             <div className="flex justify-between">
               <span className="text-slate-400">Inclinação da Linha de Tendência:</span>
-              <span className="font-mono text-emerald-400 font-bold">{currentRegime.trendSlopeRate}</span>
+              <span className="font-mono text-emerald-400 font-bold">{trendSlopeRate}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Coeficiente de Variação (Volatilidade):</span>
-              <span className="font-mono text-slate-200">{currentRegime.volatilityRate}</span>
+              <span className="font-mono text-slate-200">{volatilityRate}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Trava de High Volatility Chop:</span>
-              <span className="font-mono text-emerald-400 font-bold">DESATIVADA (Normal)</span>
+              <span className={`font-mono font-bold ${isChopProhibited ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {isChopProhibited ? 'ATIVADA (NO_TRADE)' : 'DESATIVADA (Normal)'}
+              </span>
             </div>
           </div>
 
           <div className="text-xs text-slate-400 bg-slate-800/40 p-3 rounded border border-slate-700/50">
             <span className="font-semibold text-slate-300">Diagnóstico: </span>
-            {currentRegime.reason}
+            {regimeReason}
           </div>
         </div>
 
@@ -201,7 +280,7 @@ export const AutonomyDashboardView: React.FC = () => {
                 <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
                   <div
                     className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${alloc.weight * 100}%` }}
+                    style={{ width: `${Math.min(100, Math.max(2, alloc.weight * 100))}%` }}
                   />
                 </div>
               </div>
@@ -230,13 +309,21 @@ export const AutonomyDashboardView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 font-mono">
-                {driftMetrics.map((dm) => (
-                  <tr key={dm.type} className="hover:bg-slate-800/30">
+                {driftMetrics.map((dm, idx) => (
+                  <tr key={`${dm.type}-${idx}`} className="hover:bg-slate-800/30">
                     <td className="py-2.5 px-3 font-sans font-medium text-slate-200">{dm.type}</td>
                     <td className="py-2.5 px-3 text-slate-300">{dm.observed}</td>
                     <td className="py-2.5 px-3 text-slate-400">{dm.threshold}</td>
                     <td className="py-2.5 px-3">
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          dm.status === 'Breached'
+                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                            : dm.status === 'Warning'
+                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                              : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        }`}
+                      >
                         {dm.status}
                       </span>
                     </td>

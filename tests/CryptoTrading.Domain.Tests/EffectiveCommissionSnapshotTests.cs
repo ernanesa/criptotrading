@@ -63,6 +63,20 @@ public sealed class EffectiveCommissionSnapshotTests
         Assert.NotEqual(Snapshot(Now).CanonicalPayloadHash, snapshot.CanonicalPayloadHash);
     }
 
+    [Fact]
+    public void ZeroDiscountRateWithNullAssetDoesNotRequireValuation()
+    {
+        var snapshot = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(.001m, .002m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            true, true, null, 0m, false, Now);
+
+        Assert.True(snapshot.TryGetEffectiveRate(OrderSide.Buy, true, Now, TimeSpan.FromMinutes(5), out var rate, out _));
+        Assert.Equal(.001m, rate);
+    }
+
     private static EffectiveCommissionSnapshot Snapshot(DateTimeOffset observedAt) => new(
         new Symbol("BTCUSDT"), "testnet", "account",
         new CommissionRateSet(.001m, .002m, .0001m, .0002m),

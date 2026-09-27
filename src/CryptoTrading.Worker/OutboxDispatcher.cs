@@ -345,23 +345,24 @@ public sealed class OutboxDispatcher(
             activity?.SetStatus(ActivityStatusCode.Error);
             activity?.SetTag("error.type", exception.GetType().Name);
             var delaySeconds = Math.Min(300d, Math.Pow(2d, Math.Min(message.Attempts - 1, 8)));
+            var errorText = $"{exception.GetType().Name}: {exception.Message}";
             if (message.Attempts >= options.Value.MaxOutboxAttempts)
             {
                 _ = await store.DeadLetterOutboxAsync(
                     message.MessageId,
                     leaseOwner,
-                    exception.GetType().Name,
+                    errorText,
                     DateTimeOffset.UtcNow,
                     cancellationToken).ConfigureAwait(false);
                 TradingTelemetry.RecordOutboxDispatch(succeeded: false, deadLettered: true);
-                DispatcherLog.DeadLettered(logger, message.MessageId, message.MessageType, exception.GetType().Name);
+                DispatcherLog.DeadLettered(logger, message.MessageId, message.MessageType, errorText);
             }
             else
             {
                 var retryAt = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
-                _ = await store.FailOutboxAsync(message.MessageId, leaseOwner, exception.GetType().Name, retryAt, cancellationToken).ConfigureAwait(false);
+                _ = await store.FailOutboxAsync(message.MessageId, leaseOwner, errorText, retryAt, cancellationToken).ConfigureAwait(false);
                 TradingTelemetry.RecordOutboxDispatch(succeeded: false);
-                DispatcherLog.Failed(logger, message.MessageId, message.MessageType, exception.GetType().Name, delaySeconds);
+                DispatcherLog.Failed(logger, message.MessageId, message.MessageType, errorText, delaySeconds);
             }
         }
     }

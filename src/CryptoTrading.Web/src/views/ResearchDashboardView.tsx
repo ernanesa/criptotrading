@@ -125,6 +125,18 @@ export const ResearchDashboardView: React.FC = () => {
 
   return (
     <div className="space-y-6" data-testid="research-dashboard-view">
+      {/* Simulation / Research Notice Banner */}
+      <div className="bg-purple-950/40 border border-purple-800/60 rounded-xl p-4 flex items-center justify-between text-xs gap-3">
+        <div className="flex items-center gap-2.5 text-purple-200">
+          <Compass className="w-5 h-5 text-purple-400 shrink-0" />
+          <span>
+            <strong className="text-purple-300">Ambiente de Pesquisa Quantitativa (Simulação Histórica):</strong> Os
+            números exibidos nesta tela são parâmetros estatísticos de modelagem teórica e backtesting. Não representam
+            operações financeiras ou lucros realizados na sua conta real ou Testnet.
+          </span>
+        </div>
+      </div>
+
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between bg-slate-900 border border-slate-800 rounded-lg p-5 gap-4">
         <div className="flex items-center gap-4">

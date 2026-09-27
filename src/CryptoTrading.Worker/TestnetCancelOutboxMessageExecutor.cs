@@ -67,7 +67,7 @@ public sealed class TestnetCancelOutboxMessageExecutor(
             order,
             OrderStatus.CancelPending,
             new IdempotencyKey($"cancel-pending:{message.MessageId:N}"),
-            DateTimeOffset.UtcNow,
+            command.RequestedAtUtc,
             existing.OrderId?.ToString(System.Globalization.CultureInfo.InvariantCulture),
             cancellationToken: cancellationToken).ConfigureAwait(false);
 

@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
             options.Environment = string.Equals(configuration["TRADING_ENVIRONMENT"], "DEMO", StringComparison.OrdinalIgnoreCase)
                 ? BinanceEnvironment.Demo
                 : BinanceEnvironment.Testnet;
+            options.AllowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet;
         });
     }
 

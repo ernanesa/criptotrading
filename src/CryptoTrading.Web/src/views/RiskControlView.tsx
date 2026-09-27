@@ -2,11 +2,12 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, FileText, ShieldAlert, ShieldCheck } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
-import { ApiError, apiClient } from '../api/client';
+import { ApiError, apiClient, formatIsoDate } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const RiskControlView: React.FC = () => {
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
+  const [interventionNotice, setInterventionNotice] = useState<string | null>(null);
 
   const riskPolicyQuery = useQuery({
     queryKey: ['activeRiskPolicy'],
@@ -29,6 +30,29 @@ export const RiskControlView: React.FC = () => {
           (US-040..US-044).
         </p>
       </div>
+
+      {/* Intervention confirmation notice */}
+      {interventionNotice && (
+        <div className="bg-rose-950/40 border border-rose-800/80 rounded-xl p-5 flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
+            <div className="text-xs space-y-1">
+              <strong className="block text-rose-300 font-bold">Protocolo de Intervenção Solicitado</strong>
+              <p className="text-slate-300 leading-relaxed">{interventionNotice}</p>
+              <div className="p-2 bg-slate-950 rounded border border-rose-900/40 font-mono text-[11px] text-cyan-300 mt-2">
+                $ ./scripts/ops-control.sh kill-switch --scope global
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setInterventionNotice(null)}
+            className="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 bg-slate-900 rounded border border-slate-700"
+          >
+            Fechar
+          </button>
+        </div>
+      )}
 
       {/* Persistence / Load alerts */}
       {isUnavailable && (
@@ -55,9 +79,11 @@ export const RiskControlView: React.FC = () => {
               <div className="flex items-center gap-3">
                 <ShieldCheck className="w-6 h-6 text-emerald-400" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">RiskPolicy Document v{doc.policy.version}</h2>
+                  <h2 className="text-sm font-bold text-slate-100">
+                    RiskPolicy Document v{doc.policy?.version || '1.0'}
+                  </h2>
                   <span className="text-[11px] font-mono text-slate-400">
-                    Hash: {doc.documentHash.substring(0, 16)}...
+                    Hash: {(doc.documentHash || '').substring(0, 16)}...
                   </span>
                 </div>
               </div>
@@ -71,38 +97,38 @@ export const RiskControlView: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Order Notional:</span>
-                <span className="text-lg font-bold text-slate-100">${doc.policy.maxOrderNotional} USDT</span>
+                <span className="text-lg font-bold text-slate-100">${doc.policy?.maxOrderNotional ?? 0} USDT</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Limite máximo por ordem individual</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Exposure Notional:</span>
-                <span className="text-lg font-bold text-slate-100">${doc.policy.maxExposureNotional} USDT</span>
+                <span className="text-lg font-bold text-slate-100">${doc.policy?.maxExposureNotional ?? 0} USDT</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Exposição total simultânea em carteira</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Daily Loss:</span>
-                <span className="text-lg font-bold text-amber-400">${doc.policy.maxDailyLoss} USDT</span>
+                <span className="text-lg font-bold text-amber-400">${doc.policy?.maxDailyLoss ?? 0} USDT</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Perda máxima permitida em 24h</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Drawdown:</span>
-                <span className="text-lg font-bold text-rose-400">${doc.policy.maxDrawdown} USDT</span>
+                <span className="text-lg font-bold text-rose-400">${doc.policy?.maxDrawdown ?? 0} USDT</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Rebaixamento máximo acumulado</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Market Data Age:</span>
-                <span className="text-lg font-bold text-slate-200">{doc.policy.maxMarketDataAge}</span>
+                <span className="text-lg font-bold text-slate-200">{doc.policy?.maxMarketDataAge || '00:01:00'}</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Frescor máximo de candles / klines</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Retiradas na API (Withdrawals):</span>
                 <span className="text-lg font-bold text-emerald-400">
-                  {doc.policy.withdrawalsEnabled ? 'HABILITADAS (INSEGURO)' : 'BLOQUEADAS (0/1)'}
+                  {doc.policy?.withdrawalsEnabled ? 'HABILITADAS (INSEGURO)' : 'BLOQUEADAS (0/1)'}
                 </span>
                 <span className="text-[11px] text-emerald-500/80 block mt-1">Invariante de segurança obrigatória</span>
               </div>
@@ -125,12 +151,11 @@ export const RiskControlView: React.FC = () => {
                   <span className="text-slate-500">Approval ID:</span> {doc.approvalId || 'N/A'}
                 </div>
                 <div className="md:col-span-2">
-                  <span className="text-slate-500">Janela de Validade:</span>{' '}
-                  {new Date(doc.effectiveFromUtc).toISOString()} até {new Date(doc.expiresAtUtc).toISOString()}
+                  <span className="text-slate-500">Janela de Validade:</span> {formatIsoDate(doc.effectiveFromUtc)} até{' '}
+                  {formatIsoDate(doc.expiresAtUtc)}
                 </div>
                 <div>
-                  <span className="text-slate-500">Aprovado em:</span>{' '}
-                  {doc.approvedAtUtc ? new Date(doc.approvedAtUtc).toISOString() : 'N/A'}
+                  <span className="text-slate-500">Aprovado em:</span> {formatIsoDate(doc.approvedAtUtc)}
                 </div>
               </div>
             </div>
@@ -200,8 +225,8 @@ export const RiskControlView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  alert(
-                    'Comando registrado no buffer de segurança. Como a API Web é configurada em modo somente leitura (DenyApiOperationalControlResetAuthorizer), utilize o CLI ou script administrativo para mutação de controle de emergência.',
+                  setInterventionNotice(
+                    'Como a API Web opera em modo estritamente somente leitura (DenyApiOperationalControlResetAuthorizer), a parada de emergência do runtime deve ser emitida pelo operador via console autenticado local:',
                   );
                   setShowKillSwitchModal(false);
                 }}

@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="../CryptoTrading.Configuration/CryptoTrading.Configuration.csproj" />
     <ProjectReference Include="../CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <ProjectReference Include="../CryptoTrading.Exchange.Binance/CryptoTrading.Exchange.Binance.csproj" />
     <ProjectReference Include="../CryptoTrading.Observability/CryptoTrading.Observability.csproj" />
     <ProjectReference Include="../CryptoTrading.Persistence/CryptoTrading.Persistence.csproj" />
   </ItemGroup>

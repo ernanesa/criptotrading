@@ -64,7 +64,8 @@ public sealed record EffectiveCommissionSnapshot
             throw new ArgumentOutOfRangeException(nameof(discountRate));
         }
 
-        if (discountEnabledForAccount && discountEnabledForSymbol &&
+        var hasActiveDiscount = discountEnabledForAccount && discountEnabledForSymbol && discountRate is > 0m;
+        if (hasActiveDiscount &&
             (string.IsNullOrWhiteSpace(discountAsset) || discountRate is null))
         {
             throw new ArgumentException("An enabled discount must include an asset and rate.");
@@ -126,9 +127,9 @@ public sealed record EffectiveCommissionSnapshot
         }
 
         var standardRate = Standard.For(side, makerEligible);
-        if (DiscountEnabledForAccount && DiscountEnabledForSymbol)
+        if (DiscountEnabledForAccount && DiscountEnabledForSymbol && DiscountRate is > 0m)
         {
-            if (!DiscountAssetValuationAvailable || DiscountRate is null || DiscountAssetQuotePrice is not > 0m ||
+            if (!DiscountAssetValuationAvailable || DiscountAssetQuotePrice is not > 0m ||
                 DiscountAssetValuationAtUtc is null || string.IsNullOrWhiteSpace(DiscountAssetValuationSource))
             {
                 reason = "COMMISSION_BNB_VALUATION_UNAVAILABLE";

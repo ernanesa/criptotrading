@@ -34,6 +34,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         this.retryPolicy = retryPolicy ?? new BinanceRequestRetryPolicy();
     }
 
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public BinanceSpotAccountClient(
         HttpClient httpClient,
         IOptions<BinanceAuthenticatedClientOptions> options,

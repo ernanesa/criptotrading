@@ -207,7 +207,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         string? symbol = null,
         CancellationToken cancellationToken = default)
     {
-        var endpoint = "exchangeInfo";
+        var endpoint = "v3/exchangeInfo";
         if (symbol is not null)
         {
             var normalizedSymbol = NormalizeSymbol(symbol);

@@ -468,7 +468,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1337,6 +1337,15 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
                 currentQuantity = reader.GetDecimal(2);
                 currentCost = reader.GetDecimal(3);
             }
+        }
+
+        var commissionInBase = command.Commission.Asset == command.BaseAsset ? command.Commission.Amount : 0m;
+        var requiredQuantity = command.Quantity.Value + commissionInBase;
+        if (command.Side == OrderSide.Sell && currentQuantity < requiredQuantity)
+        {
+            var excess = requiredQuantity - currentQuantity;
+            currentQuantity = requiredQuantity;
+            currentCost += excess * command.Price.Value;
         }
 
         var update = ExecutionAccounting.ApplyAverageCost(command, currentQuantity, currentCost);
@@ -2620,13 +2629,24 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
         ArgumentException.ThrowIfNullOrWhiteSpace(decisionId);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "SELECT payload FROM trading.autonomy_decisions WHERE decision_id = @decision_id;",
+            "SELECT payload, symbol FROM trading.autonomy_decisions WHERE decision_id = @decision_id;",
             connection);
         command.Parameters.Add(Parameter("decision_id", NpgsqlDbType.Varchar, decisionId.Trim()));
-        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return value is string payload
-            ? JsonSerializer.Deserialize<AutonomyDecisionCommit>(payload, JsonOptions)
-            : null;
+        await using var reader = await command.ExecuteReaderAsync(System.Data.CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var payload = reader.GetString(0);
+        var symbolColumn = reader.GetString(1);
+        var commit = JsonSerializer.Deserialize<AutonomyDecisionCommit>(payload, JsonOptions);
+        if (commit is not null && string.IsNullOrWhiteSpace(commit.Symbol.Value) && !string.IsNullOrWhiteSpace(symbolColumn))
+        {
+            commit = commit with { Symbol = new Symbol(symbolColumn) };
+        }
+
+        return commit;
     }
 
     public async Task SetLastProcessedCloseAsync(
@@ -3483,7 +3503,7 @@ public sealed class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeSt
 
     private static async Task ExecuteAsync(
         NpgsqlConnection connection,
-        NpgsqlTransaction transaction,
+        NpgsqlTransaction? transaction,
         string sql,
         IReadOnlyList<NpgsqlParameter> parameters,
         CancellationToken cancellationToken)
@@ -3600,6 +3620,18 @@ public static class PostgresServiceCollectionExtensions
         services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddSingleton<IRuntimeStateStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IMarketRegimeStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IModelStrategyRegistryStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IModelStrategyRegistry>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IDriftObservationStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IStrategyRegimePerformanceStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IPortfolioPerformanceStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddHealthChecks().AddCheck<PostgresHealthCheck>(
             "postgres",

@@ -1,6 +1,8 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
+using CryptoTrading.Domain.Regimes;
+using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Exchange.Paper;
@@ -59,6 +61,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AutonomyEntryTargetNotional = builder.Configuration.GetValue("WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL", 100m);
         options.AutonomyFeeReserveBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_RESERVE_BPS", FeeReservePolicy.DefaultReserveBps);
         options.AutonomyFeeDriftToleranceBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_DRIFT_TOLERANCE_BPS", ExecutionFeeDriftEvaluator.DefaultToleranceBps);
+        options.AutonomyEngineMode = builder.Configuration["WORKER_AUTONOMY_ENGINE_MODE"] ?? "RegimeAdaptive";
         options.FeeAssetValuationMaxAgeSeconds = builder.Configuration.GetValue("WORKER_FEE_ASSET_VALUATION_MAX_AGE_SECONDS", 30);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
@@ -124,6 +127,8 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) ||
     builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle>(_ =>
         new CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle(
             CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline));
+    builder.Services.AddSingleton<CryptoTrading.Domain.Research.ContextualMetaAllocator>();
+    builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.AdaptiveDecisionCycle>();
 }
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
@@ -153,6 +158,16 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
     _ = builder.Services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<ILocalOpenOrderStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IMarketRegimeStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IModelStrategyRegistryStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IModelStrategyRegistry>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IDriftObservationStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IStrategyRegimePerformanceStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<OrderProjectionService>();
 }

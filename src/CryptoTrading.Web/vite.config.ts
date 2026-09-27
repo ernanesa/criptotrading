@@ -9,18 +9,31 @@ export default defineConfig({
     react(),
   ],
   server: {
+    host: '127.0.0.1',
     port: 5173,
     proxy: {
       '/health': {
-        target: 'http://127.0.0.1:58081',
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:5000',
         changeOrigin: true,
       },
       '/operational': {
-        target: 'http://127.0.0.1:58081',
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:5000',
         changeOrigin: true,
       },
       '/metrics': {
-        target: 'http://127.0.0.1:58081',
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
+      '/market': {
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
+      '/portfolio': {
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:5000',
+        changeOrigin: true,
+      },
+      '/trading': {
+        target: process.env.VITE_API_URL || 'http://127.0.0.1:5000',
         changeOrigin: true,
       },
     },

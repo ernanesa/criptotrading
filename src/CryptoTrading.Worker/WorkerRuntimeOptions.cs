@@ -54,6 +54,9 @@ public sealed class WorkerRuntimeOptions
     /// <summary>Enables the closed-bar baseline decision loop; disabled by default.</summary>
     public bool AutonomyEnabled { get; set; }
 
+    /// <summary>Autonomy decision mode: "Baseline" (A2), "RegimeAdaptive" (A3), "ContextualAllocation" (A4), "ContinuousLearning" (A5).</summary>
+    public string AutonomyEngineMode { get; set; } = "RegimeAdaptive";
+
     public string AutonomySymbol { get; set; } = "BTCUSDT";
 
     public string AutonomyInterval { get; set; } = "1m";
@@ -268,6 +271,15 @@ public sealed class WorkerRuntimeOptions
             {
                 throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                     [$"WORKER_AUTONOMY_FEE_RESERVE_BPS must be between 0 and {FeeReservePolicy.MaximumReserveBps}."]);
+            }
+
+            if (!string.Equals(AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(AutonomyEngineMode, "RegimeAdaptive", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(AutonomyEngineMode, "ContextualAllocation", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(AutonomyEngineMode, "ContinuousLearning", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                    ["WORKER_AUTONOMY_ENGINE_MODE must be one of Baseline, RegimeAdaptive, ContextualAllocation or ContinuousLearning."]);
             }
         }
 

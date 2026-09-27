@@ -12,6 +12,8 @@ using CryptoTrading.Domain.Architecture;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Operations;
 using CryptoTrading.Domain.Primitives;
+using CryptoTrading.Domain.Regimes;
+using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Persistence;
@@ -37,9 +39,16 @@ internal sealed class AutonomyCycleHostedService(
     BaselineDecisionCycle cycle,
     ILogger<AutonomyCycleHostedService> logger,
     ILocalOpenOrderStore? openOrderStore = null,
-    IOrderCancellationStore? cancellationStore = null) : BackgroundService
+    IOrderCancellationStore? cancellationStore = null,
+    AdaptiveDecisionCycle? adaptiveCycle = null,
+    IMarketRegimeStore? regimeStore = null,
+    IDriftObservationStore? driftStore = null,
+    IBinanceSymbolTradingRulesProvider? rulesProvider = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
+    private int consecutiveTransientFailures;
+    private const int MaxConsecutiveTransientFailures = 3;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var runtime = options.Value;
@@ -49,6 +58,7 @@ internal sealed class AutonomyCycleHostedService(
             try
             {
                 await RunOnceAsync(runtime, stoppingToken).ConfigureAwait(false);
+                consecutiveTransientFailures = 0;
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -70,12 +80,18 @@ internal sealed class AutonomyCycleHostedService(
                                 DateTimeOffset.UtcNow),
                             stoppingToken).ConfigureAwait(false);
                     }
+                    else if (classification.Severity == FailureSeverity.Transient && ++consecutiveTransientFailures < MaxConsecutiveTransientFailures)
+                    {
+                        var backoff = classification.SuggestedBackoff ?? TimeSpan.FromSeconds(2);
+                        await Task.Delay(backoff, stoppingToken).ConfigureAwait(false);
+                        continue;
+                    }
                     else
                     {
                         _ = await operationalControl.EnterSafeModeAsync(
                             new OperationalControlCommand(
                                 "autonomy-cycle",
-                                $"A2 failure: {classification.ReasonCode}",
+                                $"A2 failure: {classification.ReasonCode} (consecutive={consecutiveTransientFailures})",
                                 IdempotencyKey.New(),
                                 DateTimeOffset.UtcNow),
                             stoppingToken).ConfigureAwait(false);
@@ -94,7 +110,9 @@ internal sealed class AutonomyCycleHostedService(
     internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
-        var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}:{cycle.StrategyVersion}";
+        var isAdaptive = adaptiveCycle is not null && !string.Equals(runtime.AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase);
+        var activeStrategyVersion = isAdaptive ? AdaptiveDecisionCycle.StrategyVersion : cycle.StrategyVersion;
+        var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}:{activeStrategyVersion}";
         var lastProcessedCloseUtc = await decisionCommitStore
             .GetLastProcessedCloseAsync(checkpointScope, cancellationToken)
             .ConfigureAwait(false);
@@ -234,7 +252,19 @@ internal sealed class AutonomyCycleHostedService(
         var bookTicker = await marketClient.GetBookTickerAsync(
             runtime.AutonomySymbol,
             cancellationToken).ConfigureAwait(false);
-        var executionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker);
+        BinanceSymbolTradingRules? rules = null;
+        if (rulesProvider is not null)
+        {
+            try
+            {
+                rules = await rulesProvider.GetAsync(runtime.AutonomySymbol, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Fallback gracefully if rules provider is temporarily unavailable
+            }
+        }
+        var executionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker, rules);
         var positionBasisConsistent = btcQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
             : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m;
@@ -268,8 +298,79 @@ internal sealed class AutonomyCycleHostedService(
                 now,
                 "runtime-supervisor",
                 $"RUNTIME_NOT_READY:{runtimeSnapshot.State}");
+        var bars = closed.Select(static envelope => envelope.Bar).ToArray();
+
+        // When adaptive engine mode is enabled (A3 - A5), evaluate candidate strategies and regimes
+        if (isAdaptive && adaptiveCycle is not null)
+        {
+            var adaptiveCheckpointScope = checkpointScope;
+            var adaptiveRequest = new AdaptiveDecisionCycleRequest(
+                bars,
+                portfolio,
+                policyDocument.Policy,
+                effectiveControl,
+                runtime.AutonomyEntryTargetNotional,
+                DateTimeOffset.UtcNow,
+                marketRisk,
+                executionMarket,
+                policyDocument.Policy.MaxMarketDataAge,
+                TimeSpan.FromMinutes(1),
+                availableQuoteLiquidity,
+                new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
+                commissionSnapshot,
+                policyDocument.Policy.MaxMarketDataAge,
+                featureSnapshot);
+
+            var adaptiveResult = adaptiveCycle.Evaluate(adaptiveRequest);
+
+            if (regimeStore is not null)
+            {
+                await regimeStore.RecordMarketRegimeAsync(adaptiveResult.Regime, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (driftStore is not null && adaptiveResult.Regime.VolatilityRate > MarketRegimeClassifier.DefaultMaxVolatilityThreshold)
+            {
+                var driftObs = new DriftObservation(
+                    adaptiveResult.SelectedStrategyId ?? AdaptiveDecisionCycle.StrategyId,
+                    DriftType.VolatilityRegimeDrift,
+                    ExpectedValue: 0.02m,
+                    ObservedValue: adaptiveResult.Regime.VolatilityRate,
+                    AllowedDeviationThreshold: MarketRegimeClassifier.DefaultMaxVolatilityThreshold,
+                    adaptiveResult.Regime.ObservedAtUtc);
+                var driftEval = DriftMonitoringEngine.Evaluate(driftObs);
+                await driftStore.RecordDriftObservationAsync(driftObs, driftEval, cancellationToken).ConfigureAwait(false);
+            }
+
+            var adaptiveOutbox = adaptiveResult.Execution is { IsDispatchable: true } exec ? exec.OutboxRecord : null;
+            var adaptiveOutcome = adaptiveResult.IsNoTrade ? "NO_TRADE" : adaptiveOutbox is not null ? "DISPATCHABLE" : "BLOCKED";
+            var adaptiveReason = adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
+
+            await decisionCommitStore.CommitAsync(
+                CreateAdaptiveDecisionCommit(runtime, adaptiveCheckpointScope, featureSnapshot, adaptiveResult, adaptiveOutcome, adaptiveReason, adaptiveOutbox, replanCandidate),
+                cancellationToken).ConfigureAwait(false);
+
+            lastProcessedCloseUtc = latest.CloseTimeUtc;
+            if (adaptiveResult.IsNoTrade)
+            {
+                AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, adaptiveResult.NoTradeReason ?? "UNSPECIFIED");
+                return;
+            }
+
+            if (adaptiveOutbox is null)
+            {
+                AutonomyCycleLog.Blocked(
+                    logger,
+                    latest.CloseTimeUtc,
+                    adaptiveReason);
+                return;
+            }
+
+            AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, adaptiveOutbox.Command.ClientOrderId.Value, adaptiveOutbox.Command.Side.ToString());
+            return;
+        }
+
         var request = new BaselineDecisionCycleRequest(
-            closed.Select(static envelope => envelope.Bar).ToArray(),
+            bars,
             portfolio,
             policyDocument.Policy,
             effectiveControl,
@@ -308,6 +409,34 @@ internal sealed class AutonomyCycleHostedService(
         }
 
         AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
+    }
+
+    private static AutonomyDecisionCommit CreateAdaptiveDecisionCommit(
+        WorkerRuntimeOptions runtime,
+        string checkpointScope,
+        BaselineFeatureSnapshot featureSnapshot,
+        AdaptiveDecisionCycleResult result,
+        string outcome,
+        string reason,
+        OutboxRecord? outbox,
+        ExecutionReplanCandidate? replanCandidate = null)
+    {
+        var environment = runtime.ExecutionMode.Trim().ToUpperInvariant();
+        var accountScope = runtime.ReconciliationAccount.Trim();
+        var strategyId = result.SelectedStrategyId ?? AdaptiveDecisionCycle.StrategyId;
+        var strategyVersion = result.SelectedStrategyVersion;
+        var symbol = new Symbol(runtime.AutonomySymbol);
+        var canonicalIdentity = string.Join('|', environment, accountScope, symbol.Value,
+            strategyId, strategyVersion, featureSnapshot.Decision.CloseTimeUtc.ToString("O", CultureInfo.InvariantCulture));
+        var decisionId = "ad-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalIdentity)));
+        var risk = result.Execution?.Decision;
+
+        return new(
+            decisionId, environment, accountScope, checkpointScope, symbol, strategyId, strategyVersion,
+            featureSnapshot.Decision.CloseTimeUtc, featureSnapshot.AvailableAtUtc, featureSnapshot.SchemaVersion,
+            featureSnapshot.ConfigurationFingerprint, featureSnapshot.FeatureFingerprint, result.RecommendedSide?.ToString() ?? "NoTrade",
+            result.Regime.Regime.ToString(),
+            risk, outcome, string.IsNullOrWhiteSpace(reason) ? null : reason, result.DecisionTraceJson, outbox);
     }
 
     private static AutonomyDecisionCommit CreateDecisionCommit(
@@ -376,7 +505,9 @@ internal sealed class AutonomyCycleHostedService(
         (bool Available, decimal? Price, DateTimeOffset? ObservedAtUtc, string? Source) discountValuation)
     {
         var response = snapshot.Response;
-        var discountEnabled = response.Discount.EnabledForAccount && response.Discount.EnabledForSymbol;
+        var discountActive = response.Discount.EnabledForAccount &&
+                             response.Discount.EnabledForSymbol &&
+                             ParseOptionalRate(response.Discount.Discount) is > 0m;
         return new EffectiveCommissionSnapshot(
             new Symbol(symbol),
             "testnet",
@@ -388,7 +519,7 @@ internal sealed class AutonomyCycleHostedService(
             response.Discount.EnabledForSymbol,
             response.Discount.DiscountAsset,
             ParseOptionalRate(response.Discount.Discount),
-            discountEnabled && discountValuation.Available,
+            discountActive && discountValuation.Available,
             snapshot.ObservedAtUtc <= observedAtUtc ? snapshot.ObservedAtUtc : observedAtUtc,
             discountAssetQuotePrice: discountValuation.Price,
             discountAssetValuationAtUtc: discountValuation.ObservedAtUtc,
@@ -403,7 +534,7 @@ internal sealed class AutonomyCycleHostedService(
         CancellationToken cancellationToken)
     {
         var discount = commission.Response.Discount;
-        if (!discount.EnabledForAccount || !discount.EnabledForSymbol)
+        if (!discount.EnabledForAccount || !discount.EnabledForSymbol || ParseOptionalRate(discount.Discount) is not > 0m)
         {
             return (false, null, null, null);
         }
@@ -455,16 +586,21 @@ internal sealed class AutonomyCycleHostedService(
         ArgumentNullException.ThrowIfNull(klines);
         var guard = new BinanceClosedKlineGuard(symbol, interval, maximumStaleness);
         var accepted = new List<ClosedBarEnvelope>(klines.Count);
-        foreach (var kline in klines.OrderBy(static item => item.OpenTimeUtc))
-        {
-            // REST returns the currently open candle as the last row. It is not
-            // an error; it is simply not eligible for a closed-bar decision.
-            if (kline.CloseTimeUtc.AddMilliseconds(1) > nowUtc)
-            {
-                continue;
-            }
+        var eligibleKlines = klines
+            .OrderBy(static item => item.OpenTimeUtc)
+            .Where(kline => kline.CloseTimeUtc.AddMilliseconds(1) <= nowUtc)
+            .ToList();
 
-            var decision = guard.Evaluate(kline, nowUtc);
+        for (var i = 0; i < eligibleKlines.Count; i++)
+        {
+            var kline = eligibleKlines[i];
+            var isLatest = i == eligibleKlines.Count - 1;
+            // The staleness quality gate should only evaluate whether the snapshot itself (the latest closed bar)
+            // is fresh relative to nowUtc. Historical bars in the backfill window closed in the past, so evaluating
+            // them against nowUtc would falsely reject them as Stale.
+            var evaluationTime = isLatest ? nowUtc : kline.CloseTimeUtc.AddMilliseconds(1);
+
+            var decision = guard.Evaluate(kline, evaluationTime);
             if (!decision.IsAccepted || decision.Kline is null)
             {
                 throw new InvalidOperationException(
@@ -477,7 +613,7 @@ internal sealed class AutonomyCycleHostedService(
                     new Symbol(decision.Kline.Symbol),
                     decision.Kline.CloseTimeUtc,
                     decision.Kline.Close),
-                decision.Kline.AvailableAtUtc));
+                nowUtc));
         }
 
         if (previousCloseUtc is { } previous && accepted.Count > 0)
