@@ -73,6 +73,21 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [Fact]
+    public async Task CommissionResponseWithZeroDiscountAndNullAssetIsAccepted()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account/commission", "{\"symbol\":\"BTCUSDT\",\"standardCommission\":{\"maker\":\"0.00000000\",\"taker\":\"0.00000000\",\"buyer\":\"0.00000000\",\"seller\":\"0.00000000\"},\"specialCommission\":{\"maker\":\"0.00000000\",\"taker\":\"0.00000000\",\"buyer\":\"0.00000000\",\"seller\":\"0.00000000\"},\"taxCommission\":{\"maker\":\"0.00000000\",\"taker\":\"0.00000000\",\"buyer\":\"0.00000000\",\"seller\":\"0.00000000\"},\"discount\":{\"enabledForAccount\":true,\"enabledForSymbol\":true,\"discountAsset\":null,\"discount\":\"0.00000000\"}}"));
+        var client = CreateClient(handler);
+
+        var snapshot = await client.GetCommissionAsync("BTCUSDT");
+
+        Assert.Equal("BTCUSDT", snapshot.Response.Symbol);
+        Assert.Null(snapshot.Response.Discount.DiscountAsset);
+        Assert.Equal("0.00000000", snapshot.Response.Discount.Discount);
+    }
+
+    [Fact]
     public async Task OpenOrdersAndTradesUseReadOnlyGetEndpointsAndNormalizeFilters()
     {
         using var handler = new RecordingHandler(

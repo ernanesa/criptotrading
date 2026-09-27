@@ -177,6 +177,52 @@ public sealed class ExecutionPlannerTests
         Assert.Equal(1_000m, ExecutionPlanner.Plan(conservative).Plan!.AuthorizedNotional);
     }
 
+    [Fact]
+    public void ExecutionPlanAlignsQuantityAndPriceToStepAndTickSize()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(84184.053m),
+            new Price(84185.123m),
+            50_000m,
+            Now,
+            isComplete: true,
+            quantityStepSize: 0.00001m,
+            priceTickSize: 0.01m);
+
+        var quantity = new Quantity(0.0004m);
+        var referencePrice = new Price(80000m);
+        var notional = quantity.Value * referencePrice.Value;
+        var intent = new OrderIntent(
+            new OrderId(Guid.NewGuid()),
+            new ClientOrderId("ct-intent"),
+            new Symbol("BTCUSDT"),
+            OrderSide.Buy,
+            OrderType.Limit,
+            quantity,
+            referencePrice,
+            new CorrelationId(Guid.NewGuid()),
+            new IdempotencyKey("decision:step-test"),
+            new RiskEvaluationRequest(notional, 0m, 0m, 0m, Now, Now),
+            Now);
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 33.33m, 33.33m, "risk-1", [RiskReasonCodes.TargetWithinLimits]);
+        var request = new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            attempt: 0);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+
+        Assert.NotNull(plan);
+        Assert.Equal(84184.05m, plan.LimitPrice.Value);
+        Assert.Equal(0.00039m, plan.Quantity.Value);
+        Assert.Equal(0.00039m * 84184.05m, plan.AuthorizedNotional);
+        Assert.Equal(0m, plan.Quantity.Value % 0.00001m);
+    }
+
     private static ExecutionPlanRequest Request(
         OrderSide side,
         ExecutionMarketSnapshot? market = null,

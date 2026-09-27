@@ -210,6 +210,106 @@ public sealed class OperationalApiEndpointsTests
         Assert.Equal("v1.0", json["policy"]?["version"]?.GetValue<string>());
     }
 
+    [Fact]
+    public async Task GetOperationalRegimesCurrentReturnsOk()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/regimes/current?symbol=BTCUSDT", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.NotNull(json);
+        Assert.Equal("BTCUSDT", json["symbol"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task GetOperationalRegimesHistoryReturnsOk()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/regimes/history?symbol=BTCUSDT", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetOperationalModelsReturnsOk()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/models?strategyId=trend-following", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetOperationalDriftReturnsOk()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/drift", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetOperationalAllocationsReturnsOk()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/allocations", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetPortfolioPerformanceReturnsCalculatedMetrics()
+    {
+        var fakeMetrics = new AggregatedPortfolioPerformanceMetrics(
+            TotalTradesCount: 10,
+            TotalWinningCount: 9,
+            TotalLosingCount: 1,
+            TotalRealizedPnlQuote: 45.50m,
+            TotalFeesPaidQuote: 1.20m,
+            TotalGrossProfitQuote: 50.00m,
+            TotalGrossLossQuote: 4.50m,
+            Periods: new[]
+            {
+                new PerformancePeriodMetrics("Hoje (Dia / 24 Horas)", 5, 5, 0, 25.00m, 0.60m),
+                new PerformancePeriodMetrics("Semana (Últimos 7 Dias)", 10, 9, 1, 45.50m, 1.20m),
+                new PerformancePeriodMetrics("Mês (Últimos 30 Dias)", 10, 9, 1, 45.50m, 1.20m),
+                new PerformancePeriodMetrics("Ano (Acumulado / YTD)", 10, 9, 1, 45.50m, 1.20m)
+            },
+            BtcPositionBasis: new PositionCostBasisRecord("BTCUSDT", "BTC", "USDT", 0.5m, 40000m, DateTimeOffset.UtcNow));
+
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IPortfolioPerformanceStore>(new FakePortfolioPerformanceStore(fakeMetrics));
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        Assert.NotNull(json);
+        Assert.Equal(10, json["totalTradesCount"]?.GetValue<int>());
+        Assert.Equal(90.00m, json["winRatePercentage"]?.GetValue<decimal>());
+        Assert.Equal(45.50m, json["totalRealizedPnlUsd"]?.GetValue<decimal>());
+        Assert.Equal(11.11m, json["profitFactor"]?.GetValue<decimal>());
+        var periods = json["periods"]?.AsArray();
+        Assert.NotNull(periods);
+        Assert.Equal(4, periods.Count);
+        Assert.Equal(5, periods[0]?["tradesCount"]?.GetValue<int>());
+        Assert.Equal(100.00m, periods[0]?["winRatePercentage"]?.GetValue<decimal>());
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The caller disposes the created WebApplicationFactory.")]
     private static WebApplicationFactory<Program> CreateFactory(
         IPAddress remoteIp,
@@ -235,6 +335,35 @@ public sealed class OperationalApiEndpointsTests
 
             builder.ConfigureTestServices(services =>
             {
+                var storesToRemove = services.Where(d =>
+                    d.ServiceType == typeof(PostgresTradingStore) ||
+                    d.ServiceType == typeof(IAutonomyCheckpointStore) ||
+                    d.ServiceType == typeof(IAutonomyDecisionCommitStore) ||
+                    d.ServiceType == typeof(IRiskPolicyStore) ||
+                    d.ServiceType == typeof(ILocalOpenOrderStore) ||
+                    d.ServiceType == typeof(IExpectedExecutionFeeStore) ||
+                    d.ServiceType == typeof(IExecutionSubmissionContextStore) ||
+                    d.ServiceType == typeof(IOrderLifecycleStore) ||
+                    d.ServiceType == typeof(IRuntimeStateStore) ||
+                    d.ServiceType == typeof(IMarketRegimeStore) ||
+                    d.ServiceType == typeof(IModelStrategyRegistryStore) ||
+                    d.ServiceType == typeof(IDriftObservationStore) ||
+                    d.ServiceType == typeof(IStrategyRegimePerformanceStore) ||
+                    d.ServiceType == typeof(IPortfolioPerformanceStore)).ToList();
+                foreach (var d in storesToRemove)
+                {
+                    services.Remove(d);
+                }
+
+                services.PostConfigure<Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckServiceOptions>(hcOptions =>
+                {
+                    var postgresCheck = hcOptions.Registrations.FirstOrDefault(r => r.Name == "postgres");
+                    if (postgresCheck is not null)
+                    {
+                        hcOptions.Registrations.Remove(postgresCheck);
+                    }
+                });
+
                 services.AddSingleton<IStartupFilter>(new TestRemoteIpStartupFilter(remoteIp));
                 configureServices?.Invoke(services);
             });
@@ -292,5 +421,11 @@ public sealed class OperationalApiEndpointsTests
             DateTimeOffset atUtc,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(activePolicy);
+    }
+
+    private sealed class FakePortfolioPerformanceStore(AggregatedPortfolioPerformanceMetrics metrics) : IPortfolioPerformanceStore
+    {
+        public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(metrics);
     }
 }

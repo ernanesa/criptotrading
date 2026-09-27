@@ -181,6 +181,21 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public async Task TestnetExecutorProjectsPreTradeValidationRejectionWithoutRetry()
+    {
+        var command = NewCommand();
+        var exchange = new PreTradeRejectedClient();
+        var store = new RecordingOpenOrderStore();
+        var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), store);
+
+        await executor.ExecuteAsync(MessageFor(command));
+
+        Assert.Equal(1, exchange.SubmitCalls);
+        Assert.Equal(0, exchange.QueryCalls);
+        Assert.Empty(store.Records);
+    }
+
+    [Fact]
     public async Task TestnetCancelExecutorPersistsPendingThenProjectsVenueCancellation()
     {
         var command = NewCancelCommand();
@@ -999,6 +1014,30 @@ public sealed class WorkerRuntimeTests
         public Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(string symbol, BinanceTradeQuery? query = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BinanceCommissionSnapshot> GetCommissionAsync(string symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class PreTradeRejectedClient : IBinanceSpotOrderClient
+    {
+        public int SubmitCalls { get; private set; }
+
+        public int QueryCalls { get; private set; }
+
+        public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default)
+        {
+            SubmitCalls++;
+            throw new BinancePreTradeValidationException(
+                request.Symbol,
+                [new("QUANTITY_STEP_MISMATCH", "Quantity does not align with step size.")]);
+        }
+
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            QueryCalls++;
+            throw new NotSupportedException();
+        }
+
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingOpenOrderStore : ILocalOpenOrderStore

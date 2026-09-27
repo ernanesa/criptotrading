@@ -96,7 +96,7 @@ public sealed class BinanceSpotMarketClientTests
 
         Assert.Single(result.Symbols);
         Assert.Equal("BTCUSDT", result.Symbols[0].Symbol);
-        Assert.Equal("/api/exchangeInfo?symbol=BTCUSDT", handler.Request!.RequestUri!.PathAndQuery);
+        Assert.Equal("/api/v3/exchangeInfo?symbol=BTCUSDT", handler.Request!.RequestUri!.PathAndQuery);
     }
 
     [Fact]

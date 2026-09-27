@@ -15,7 +15,9 @@ public sealed record ExecutionMarketSnapshot
         Price bestAsk,
         decimal availableLiquidityNotional,
         DateTimeOffset observedAtUtc,
-        bool isComplete = true)
+        bool isComplete = true,
+        decimal? quantityStepSize = null,
+        decimal? priceTickSize = null)
     {
         if (bestAsk.Value < bestBid.Value)
         {
@@ -34,6 +36,8 @@ public sealed record ExecutionMarketSnapshot
         AvailableLiquidityNotional = availableLiquidityNotional;
         ObservedAtUtc = observedAtUtc;
         IsComplete = isComplete;
+        QuantityStepSize = quantityStepSize;
+        PriceTickSize = priceTickSize;
     }
 
     public Price BestBid { get; }
@@ -41,6 +45,8 @@ public sealed record ExecutionMarketSnapshot
     public decimal AvailableLiquidityNotional { get; }
     public DateTimeOffset ObservedAtUtc { get; }
     public bool IsComplete { get; }
+    public decimal? QuantityStepSize { get; }
+    public decimal? PriceTickSize { get; }
 }
 
 /// <summary>Inputs for one deterministic execution attempt.</summary>
@@ -231,11 +237,30 @@ public static class ExecutionPlanner
         }
 
         var limitPrice = intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk;
-        var quantity = new Quantity(decision.AuthorizedTargetNotional / limitPrice.Value);
+        if (market.PriceTickSize is { } tickSize && tickSize > 0m)
+        {
+            var ticks = intent.Side is OrderSide.Buy
+                ? Math.Floor(limitPrice.Value / tickSize)
+                : Math.Ceiling(limitPrice.Value / tickSize);
+            limitPrice = new Price(ticks * tickSize);
+        }
+
+        var rawQuantity = decision.AuthorizedTargetNotional / limitPrice.Value;
+        if (market.QuantityStepSize is { } stepSize && stepSize > 0m)
+        {
+            var steps = Math.Floor(rawQuantity / stepSize);
+            rawQuantity = steps * stepSize;
+        }
+
+        var quantity = new Quantity(rawQuantity);
         if (quantity.Value <= 0m)
         {
             return new(null, TargetNotAuthorized);
         }
+
+        var authorizedNotional = (market.QuantityStepSize is not null || market.PriceTickSize is not null)
+            ? quantity.Value * limitPrice.Value
+            : decision.AuthorizedTargetNotional;
 
         var identity = BuildIdentity(intent, request.Attempt, limitPrice, quantity);
         return new(
@@ -247,7 +272,7 @@ public static class ExecutionPlanner
                 intent.Side,
                 quantity,
                 limitPrice,
-                decision.AuthorizedTargetNotional,
+                authorizedNotional,
                 request.EvaluatedAtUtc + request.TimeToLive,
                 request.Attempt,
                 estimatedCommissionRate,

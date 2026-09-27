@@ -36,13 +36,36 @@ internal static class BinanceAuthenticatedResponseValidator
         }
 
         var assets = new HashSet<string>(StringComparer.Ordinal);
+        var validBalances = new List<BinanceBalance>(account.Balances.Count);
         foreach (var balance in account.Balances)
         {
-            Validate(balance);
-            if (!assets.Add(NormalizeAsset(balance.Asset, "asset")))
+            if (balance is null)
+            {
+                throw Invalid("balance cannot be null");
+            }
+
+            ParseNonNegativeDecimal(balance.Free, "free");
+            ParseNonNegativeDecimal(balance.Locked, "locked");
+
+            if (allowWithdrawCapability)
+            {
+                // In Binance Testnet, skip test tokens with non-ASCII or single-letter names (e.g. Chinese test tokens)
+                if (string.IsNullOrWhiteSpace(balance.Asset) ||
+                    balance.Asset.Length < 2 ||
+                    balance.Asset.Length > 20 ||
+                    balance.Asset.Any(static character => !char.IsAsciiLetterOrDigit(character)))
+                {
+                    continue;
+                }
+            }
+
+            var normalizedAsset = NormalizeAsset(balance.Asset, "asset");
+            if (!assets.Add(normalizedAsset))
             {
                 throw Invalid("balances cannot contain duplicate assets");
             }
+
+            validBalances.Add(balance);
         }
 
         if (account.Permissions is not null)
@@ -63,7 +86,9 @@ internal static class BinanceAuthenticatedResponseValidator
             }
         }
 
-        return account;
+        return validBalances.Count == account.Balances.Count
+            ? account
+            : account with { Balances = validBalances };
     }
 
     public static BinanceBalance Validate(BinanceBalance? balance)
@@ -194,10 +219,23 @@ internal static class BinanceAuthenticatedResponseValidator
 
         if (discount.EnabledForAccount && discount.EnabledForSymbol)
         {
-            NormalizeAsset(discount.DiscountAsset, "discountAsset");
-            if (ParseNonNegativeDecimal(discount.Discount, "discount") > 1m)
+            if (!string.IsNullOrWhiteSpace(discount.DiscountAsset))
             {
-                throw Invalid("discount must be between zero and one");
+                NormalizeAsset(discount.DiscountAsset, "discountAsset");
+            }
+
+            if (!string.IsNullOrWhiteSpace(discount.Discount))
+            {
+                var rate = ParseNonNegativeDecimal(discount.Discount, "discount");
+                if (rate > 1m)
+                {
+                    throw Invalid("discount must be between zero and one");
+                }
+
+                if (rate > 0m && string.IsNullOrWhiteSpace(discount.DiscountAsset))
+                {
+                    throw Invalid("discountAsset is required when discount is positive");
+                }
             }
         }
     }

@@ -11,13 +11,17 @@ namespace CryptoTrading.Worker;
 /// </summary>
 internal static class BinanceExecutionMarketSnapshotMapper
 {
-    public static ExecutionMarketSnapshot Map(BinanceBookTicker ticker)
+    public static ExecutionMarketSnapshot Map(
+        BinanceBookTicker ticker,
+        BinanceSymbolTradingRules? rules = null)
     {
         ArgumentNullException.ThrowIfNull(ticker);
         return new ExecutionMarketSnapshot(
             new Price(ticker.BidPrice),
             new Price(ticker.AskPrice),
             Math.Min(ticker.BidLiquidityNotional, ticker.AskLiquidityNotional),
-            ticker.ObservedAtUtc);
+            ticker.ObservedAtUtc,
+            quantityStepSize: rules?.QuantityStepSize,
+            priceTickSize: rules?.PriceTickSize);
     }
 }

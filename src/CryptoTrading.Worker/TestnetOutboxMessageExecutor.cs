@@ -21,7 +21,8 @@ public sealed class TestnetOutboxMessageExecutor(
     IOptions<WorkerRuntimeOptions> options,
     IOptions<TradingOptions> tradingOptions,
     OrderProjectionService projection,
-    ILogger<TestnetOutboxMessageExecutor> logger) : IOutboxMessageExecutor
+    ILogger<TestnetOutboxMessageExecutor> logger,
+    IOptions<BinanceAuthenticatedClientOptions>? authenticatedOptions = null) : IOutboxMessageExecutor
 {
     public string MessageType => OrderExecutionPipeline.SubmitOrderMessageType;
 
@@ -73,7 +74,7 @@ public sealed class TestnetOutboxMessageExecutor(
             command.Type == OrderType.Limit ? command.ReferencePrice : null,
             command.IdempotencyKey,
             command.CreatedAtUtc);
-        var transitionTime = DateTimeOffset.UtcNow;
+        var transitionTime = command.CreatedAtUtc;
         await projection.TransitionAndProjectAsync(
             order,
             OrderStatus.Validated,
@@ -105,9 +106,19 @@ public sealed class TestnetOutboxMessageExecutor(
                 order,
                 OrderStatus.Rejected,
                 new IdempotencyKey($"rejected:{message.MessageId:N}"),
-                DateTimeOffset.UtcNow,
+                command.CreatedAtUtc,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             TestnetExecutorLog.Rejected(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, rejected.StatusCode);
+        }
+        catch (BinancePreTradeValidationException)
+        {
+            await projection.TransitionAndProjectAsync(
+                order,
+                OrderStatus.Rejected,
+                new IdempotencyKey($"rejected:{message.MessageId:N}"),
+                command.CreatedAtUtc,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            TestnetExecutorLog.Rejected(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, System.Net.HttpStatusCode.BadRequest);
         }
         catch (BinanceOrderSubmissionAmbiguousException ambiguous)
         {
@@ -147,7 +158,8 @@ public sealed class TestnetOutboxMessageExecutor(
         CancellationToken cancellationToken)
     {
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-        if (!account.CanTrade || account.CanWithdraw)
+        var allowTestnetWithdraw = authenticatedOptions?.Value.AllowTestnetWithdrawCapability ?? false;
+        if (!account.CanTrade || (account.CanWithdraw && !allowTestnetWithdraw))
         {
             throw new InvalidOperationException("Testnet account capabilities are unsafe for order submission.");
         }

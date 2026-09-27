@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Navigation, type NavTab } from '../components/Navigation';
@@ -7,21 +8,38 @@ import { FinancialPerformanceView } from '../views/FinancialPerformanceView';
 import { RealtimeTradingView } from '../views/RealtimeTradingView';
 import { ResearchDashboardView } from '../views/ResearchDashboardView';
 
+const createTestQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
 describe('RealtimeTradingView (US-101)', () => {
   it('renders ticker and open positions table', () => {
-    render(<RealtimeTradingView />);
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <RealtimeTradingView />
+      </QueryClientProvider>,
+    );
     expect(screen.getByTestId('realtime-trading-view')).toBeInTheDocument();
     expect(screen.getByText('BTC / USDT')).toBeInTheDocument();
     expect(screen.getByText('SPOT TESTNET')).toBeInTheDocument();
-    expect(screen.getByText('Posições Abertas')).toBeInTheDocument();
+    expect(screen.getByText(/Posições Abertas/)).toBeInTheDocument();
     expect(screen.getByText('Ordens Abertas no Livro (OMS)')).toBeInTheDocument();
-    expect(screen.getByText('ct-ord-20260921-001')).toBeInTheDocument();
+    expect(screen.getByText(/Nenhuma ordem pendente no livro no momento/)).toBeInTheDocument();
   });
 });
 
 describe('FinancialPerformanceView (Capital & PnL)', () => {
   it('renders capital invested, current NAV and PnL for day, week, month and year', () => {
-    render(<FinancialPerformanceView />);
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <FinancialPerformanceView />
+      </QueryClientProvider>,
+    );
     expect(screen.getByTestId('financial-performance-view')).toBeInTheDocument();
     expect(screen.getByText('Patrimônio, Capital Investido & Lucro (P&L)')).toBeInTheDocument();
     expect(screen.getByText('Capital Investido (Aporte)')).toBeInTheDocument();
@@ -51,7 +69,11 @@ describe('ResearchDashboardView (US-103)', () => {
 
 describe('BenchmarkDashboardView (Brazilian Benchmarks)', () => {
   it('renders CDI, Selic, IPCA, Tesouro and switches time horizon', () => {
-    render(<BenchmarkDashboardView />);
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <BenchmarkDashboardView />
+      </QueryClientProvider>,
+    );
     expect(screen.getByTestId('benchmark-dashboard-view')).toBeInTheDocument();
     expect(screen.getByText('Benchmarks Financeiros & Macroeconômicos Brasileiros')).toBeInTheDocument();
     expect(screen.getByText('Alpha s/ CDI (em BRL)')).toBeInTheDocument();
@@ -67,7 +89,11 @@ describe('BenchmarkDashboardView (Brazilian Benchmarks)', () => {
 
 describe('AutonomyDashboardView (US-104)', () => {
   it('renders regime classifier, dynamic weights, drift metrics and model registry', () => {
-    render(<AutonomyDashboardView />);
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <AutonomyDashboardView />
+      </QueryClientProvider>,
+    );
     expect(screen.getByTestId('autonomy-dashboard-view')).toBeInTheDocument();
     expect(screen.getByText('Controle de Autonomia & Multi-Estratégia')).toBeInTheDocument();
     expect(screen.getByText(/BULL TREND/)).toBeInTheDocument();

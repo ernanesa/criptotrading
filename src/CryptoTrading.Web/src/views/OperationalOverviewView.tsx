@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { Activity, AlertCircle, CheckCircle2, Clock, Database, RefreshCw, ShieldAlert, Wallet } from 'lucide-react';
+import { Activity, AlertCircle, CheckCircle2, Clock, Database, RefreshCw, ShieldAlert } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
-import { apiClient } from '../api/client';
+import { apiClient, formatIsoDate, formatUtcTimestamp } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const OperationalOverviewView: React.FC = () => {
@@ -33,13 +33,28 @@ export const OperationalOverviewView: React.FC = () => {
     retry: false,
   });
 
-  const isRefreshing = statusQuery.isFetching || livenessQuery.isFetching || readinessQuery.isFetching;
+  const telemetryQuery = useQuery({
+    queryKey: ['telemetryMetrics'],
+    queryFn: apiClient.getTelemetryMetrics,
+    refetchInterval: 5000,
+  });
+
+  const balancesQuery = useQuery({
+    queryKey: ['portfolioBalances'],
+    queryFn: apiClient.getPortfolioBalances,
+    refetchInterval: 5000,
+  });
+
+  const isRefreshing =
+    statusQuery.isFetching || livenessQuery.isFetching || readinessQuery.isFetching || telemetryQuery.isFetching;
 
   const handleManualRefresh = () => {
     statusQuery.refetch();
     livenessQuery.refetch();
     readinessQuery.refetch();
     checkpointQuery.refetch();
+    telemetryQuery.refetch();
+    balancesQuery.refetch();
   };
 
   return (
@@ -94,14 +109,17 @@ export const OperationalOverviewView: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">API Liveness</span>
-            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            {livenessQuery.data?.status === 'Healthy' || livenessQuery.isSuccess ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-400" />
+            )}
           </div>
           <div className="text-2xl font-bold text-slate-100 mb-2">
-            {livenessQuery.isSuccess ? (
-              <StatusBadge status="Healthy" size="lg" />
-            ) : (
-              <StatusBadge status="Unhealthy" size="lg" />
-            )}
+            <StatusBadge
+              status={livenessQuery.data?.status || (livenessQuery.isSuccess ? 'Healthy' : 'Unhealthy')}
+              size="lg"
+            />
           </div>
           <p className="text-xs text-slate-400">Processo web respondendo a checagens locais de liveness.</p>
         </div>
@@ -110,21 +128,20 @@ export const OperationalOverviewView: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Trading Readiness</span>
-            {readinessQuery.isSuccess ? (
+            {readinessQuery.data?.status === 'Healthy' || readinessQuery.isSuccess ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             ) : (
               <AlertCircle className="w-4 h-4 text-amber-400" />
             )}
           </div>
           <div className="text-2xl font-bold text-slate-100 mb-2">
-            {readinessQuery.isSuccess ? (
-              <StatusBadge status="Healthy" size="lg" />
-            ) : (
-              <StatusBadge status="Degraded" size="lg" />
-            )}
+            <StatusBadge
+              status={readinessQuery.data?.status || (readinessQuery.isSuccess ? 'Healthy' : 'Degraded')}
+              size="lg"
+            />
           </div>
           <p className="text-xs text-slate-400">
-            {readinessQuery.isSuccess
+            {readinessQuery.data?.status === 'Healthy' || readinessQuery.isSuccess
               ? 'Configuração segura de Testnet carregada e validada.'
               : 'Verificação de configuração pendente ou incompleta.'}
           </p>
@@ -138,8 +155,7 @@ export const OperationalOverviewView: React.FC = () => {
           </div>
           <div className="text-sm font-mono font-bold text-slate-200 mb-2 break-all">
             {checkpointQuery.data?.lastProcessedCloseUtc ? (
-              new Date(checkpointQuery.data.lastProcessedCloseUtc).toISOString().replace('T', ' ').substring(0, 19) +
-              ' UTC'
+              formatUtcTimestamp(checkpointQuery.data.lastProcessedCloseUtc)
             ) : checkpointQuery.isLoading ? (
               <span className="text-slate-500">consultando...</span>
             ) : (
@@ -158,52 +174,73 @@ export const OperationalOverviewView: React.FC = () => {
         </div>
       </div>
 
-      {/* Resumo Financeiro & P&L em Tempo Real */}
+      {/* Telemetria e Conectividade do Runtime em Tempo Real */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-sm">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
           <div className="flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-emerald-400" />
+            <Activity className="w-4 h-4 text-cyan-400" />
             <h2 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
-              Resumo Financeiro & Lucro Acumulado (P&L)
+              Telemetria & Métricas do Runtime (OpenTelemetry / Prometheus)
             </h2>
           </div>
-          <span className="text-xs text-slate-400 font-mono">Base Aportada: $10.000,00 USD (R$ 56.500,00)</span>
+          <span className="text-xs text-slate-400 font-mono">
+            NAV Real: ${balancesQuery.data?.totalNavUsd?.toLocaleString('en-US', { minimumFractionDigits: 2 }) ?? '...'}{' '}
+            USD
+          </span>
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs font-mono">
-          {/* Capital Investido */}
+          {/* Total HTTP Requests */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
-            <span className="text-slate-400 font-sans block mb-1">Capital Investido</span>
-            <span className="text-slate-100 font-bold text-sm block">R$ 56.500,00</span>
-            <span className="text-cyan-400 text-[11px]">$10.000,00 USD</span>
+            <span className="text-slate-400 font-sans block mb-1">Requisições HTTP</span>
+            <span className="text-slate-100 font-bold text-sm block">{telemetryQuery.data?.apiRequests ?? 0}</span>
+            <span className="text-cyan-400 text-[11px]">
+              Duração: {telemetryQuery.data?.apiDurationMilliseconds ?? 0} ms
+            </span>
           </div>
 
-          {/* Lucro Hoje */}
+          {/* Erros 5xx / Falhas */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
-            <span className="text-slate-400 font-sans block mb-1">Lucro Hoje (24h)</span>
-            <span className="text-emerald-400 font-bold text-sm block">+R$ 1.104,01</span>
-            <span className="text-emerald-400 text-[11px]">+$195,40 (+1,42%)</span>
+            <span className="text-slate-400 font-sans block mb-1">Erros de API</span>
+            <span
+              className={`font-bold text-sm block ${
+                (telemetryQuery.data?.apiErrors ?? 0) === 0 ? 'text-emerald-400' : 'text-rose-400'
+              }`}
+            >
+              {telemetryQuery.data?.apiErrors ?? 0}
+            </span>
+            <span className="text-slate-400 text-[11px]">Taxa de erro: 0.0%</span>
           </div>
 
-          {/* Lucro Semana */}
+          {/* Reconciliações */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
-            <span className="text-slate-400 font-sans block mb-1">Lucro Semana (7d)</span>
-            <span className="text-emerald-400 font-bold text-sm block">+R$ 3.247,96</span>
-            <span className="text-emerald-400 text-[11px]">+$574,86 (+4,31%)</span>
+            <span className="text-slate-400 font-sans block mb-1">Reconciliações</span>
+            <span className="text-cyan-400 font-bold text-sm block">
+              {telemetryQuery.data?.reconciliationRuns ?? 0}
+            </span>
+            <span className="text-slate-400 text-[11px]">
+              Divergências: {telemetryQuery.data?.reconciliationMismatches ?? 0}
+            </span>
           </div>
 
-          {/* Lucro Mês */}
+          {/* Heartbeats do Worker */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
-            <span className="text-slate-400 font-sans block mb-1">Lucro Mês (30d)</span>
-            <span className="text-emerald-400 font-bold text-sm block">+R$ 8.940,00</span>
-            <span className="text-emerald-400 text-[11px]">+$1.582,30 (+12,88%)</span>
+            <span className="text-slate-400 font-sans block mb-1">Heartbeats</span>
+            <span className="text-emerald-400 font-bold text-sm block">
+              {telemetryQuery.data?.workerHeartbeats ?? 0}
+            </span>
+            <span className="text-slate-400 text-[11px]">Supervisor ativo</span>
           </div>
 
-          {/* Lucro Ano */}
+          {/* Outbox / Eventos */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 col-span-2 lg:col-span-1">
-            <span className="text-slate-400 font-sans block mb-1">Lucro Ano (YTD)</span>
-            <span className="text-emerald-400 font-bold text-sm block">+R$ 21.935,00</span>
-            <span className="text-emerald-400 text-[11px]">+$3.882,30 (+38,82%)</span>
+            <span className="text-slate-400 font-sans block mb-1">Outbox Dispatches</span>
+            <span className="text-purple-400 font-bold text-sm block">
+              {telemetryQuery.data?.outboxDispatches ?? 0}
+            </span>
+            <span className="text-slate-400 text-[11px]">
+              Dead-letters: {telemetryQuery.data?.outboxDeadLetters ?? 0}
+            </span>
           </div>
         </div>
       </div>
@@ -237,7 +274,7 @@ export const OperationalOverviewView: React.FC = () => {
             <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 md:col-span-2">
               <span className="text-slate-500 block mb-1">Última Transição UTC:</span>
               <span className="text-slate-300">
-                {new Date(statusQuery.data.changedAtUtc).toISOString()}
+                {formatIsoDate(statusQuery.data.changedAtUtc)}
                 {statusQuery.data.reason ? ` (${statusQuery.data.reason})` : ''}
               </span>
             </div>

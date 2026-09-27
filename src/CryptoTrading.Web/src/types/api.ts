@@ -96,6 +96,104 @@ export interface HealthStatusResponse {
   status: 'Healthy' | 'Degraded' | 'Unhealthy';
 }
 
+export interface MarketTickerResponse {
+  symbol: string;
+  bidPrice: number;
+  bidQuantity: number;
+  askPrice: number;
+  askQuantity: number;
+  markPrice: number;
+  spread: number;
+  spreadBps: number;
+  observedAtUtc: string;
+}
+
+export interface AssetBalance {
+  asset: string;
+  free: number;
+  locked: number;
+  total: number;
+  valueUsd: number;
+}
+
+export interface PortfolioBalancesResponse {
+  environment: string;
+  canTrade: boolean;
+  totalNavUsd: number;
+  cashUsdt: number;
+  positionsUsd: number;
+  balances: AssetBalance[];
+  observedAtUtc: string;
+}
+
+export interface OpenOrderResponse {
+  symbol: string;
+  orderId: number;
+  clientOrderId: string;
+  price: number;
+  origQty: number;
+  executedQty: number;
+  status: string;
+  type: string;
+  side: 'BUY' | 'SELL';
+  timeUtc: string;
+}
+
+export interface TradeHistoryResponse {
+  symbol: string;
+  id: number;
+  orderId: number;
+  price: number;
+  qty: number;
+  quoteQty: number;
+  commission: number;
+  commissionAsset: string;
+  timeUtc: string;
+  isBuyer: boolean;
+  isMaker: boolean;
+}
+
+export interface PortfolioPerformanceResponse {
+  totalNavUsd: number;
+  initialCapitalUsd: number;
+  cashBalanceUsd: number;
+  positionsValueUsd: number;
+  totalProfitUsd: number;
+  totalProfitPct: number;
+  totalRealizedPnlUsd: number;
+  totalUnrealizedPnlUsd: number;
+  totalFeesPaidUsd: number;
+  totalTradesCount: number;
+  winRatePercentage: number;
+  profitFactor: number;
+  periods: Array<{
+    periodName: string;
+    profitUsd: number;
+    profitPercentage: number;
+    realizedProfitUsd: number;
+    unrealizedProfitUsd: number;
+    feesPaidUsd: number;
+    tradesCount: number;
+    winRatePercentage: number;
+  }>;
+}
+
+export interface TelemetryMetricsResponse {
+  apiRequests: number;
+  apiErrors: number;
+  workerHeartbeats: number;
+  apiDurationMilliseconds: number;
+  alertDeliveries: number;
+  alertDeliveryFailures: number;
+  alertDeduplicated: number;
+  reconciliationRuns: number;
+  reconciliationMismatches: number;
+  outboxDispatches: number;
+  outboxDispatchFailures: number;
+  outboxDeadLetters: number;
+  invalidMarketDataPayloads: number;
+}
+
 export interface ApiErrorResponse {
   error: string;
   correlationId?: string;
@@ -135,4 +233,53 @@ export interface PortfolioFinancialSnapshot {
   allTime: PeriodPerformance;
   usdBrlRate: number;
   calculatedAtUtc: string;
+}
+
+export interface MarketRegimeSnapshot {
+  symbol: string;
+  regime: string;
+  confidence: number;
+  trendSlopeRate: number;
+  volatilityRate: number;
+  reason: string;
+  observedAtUtc: string;
+  favorsTrendFollowing?: boolean;
+  favorsMeanReversion?: boolean;
+  prohibitsNewExposure?: boolean;
+}
+
+export interface StrategyModelRecord {
+  modelId: string;
+  strategyId: string;
+  version: string;
+  codeCommitSha: string;
+  datasetHash: string;
+  status: string;
+  registeredAtUtc: string;
+  registeredBy: string;
+  promotionJustification: string | null;
+  canonicalHash: string;
+}
+
+export interface DriftObservationRecord {
+  observationId: string;
+  strategyId: string;
+  type: string;
+  expectedValue: number;
+  observedValue: number;
+  allowedDeviationThreshold: number;
+  absoluteDeviation: number;
+  relativeRate: number;
+  severity: string;
+  requiresQuarantine: boolean;
+  message: string;
+  observedAtUtc: string;
+}
+
+export interface StrategyRegimePerformanceRecord {
+  strategyId: string;
+  regime: string;
+  observationCount: number;
+  cumulativeReward: number;
+  averageReward: number;
 }

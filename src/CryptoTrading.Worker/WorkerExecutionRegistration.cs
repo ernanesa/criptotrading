@@ -26,7 +26,8 @@ internal static class WorkerExecutionRegistration
                     runtimeOptions,
                     serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
                     serviceProvider.GetRequiredService<OrderProjectionService>(),
-                    serviceProvider.GetRequiredService<ILogger<TestnetOutboxMessageExecutor>>());
+                    serviceProvider.GetRequiredService<ILogger<TestnetOutboxMessageExecutor>>(),
+                    serviceProvider.GetService<IOptions<BinanceAuthenticatedClientOptions>>());
             }
 
             return new PaperOutboxMessageExecutor(

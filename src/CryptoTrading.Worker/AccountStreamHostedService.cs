@@ -68,11 +68,19 @@ internal sealed class AccountStreamHostedService(
                         feeAssetValuation);
                     if (accounting is not null)
                     {
-                        var accountingResult = await executionAccountingStore.RecordExecutionAsync(accounting, stoppingToken).ConfigureAwait(false);
-                        if (feeEstimate is not null && accountingResult.FeeComparison is { } comparison &&
-                            (comparison.IsDrift || comparison.Status == ExecutionFeeComparisonStatus.NotComparable))
+                        try
                         {
-                            await HandleFeeComparisonFailureAsync(execution, comparison, stoppingToken).ConfigureAwait(false);
+                            var accountingResult = await executionAccountingStore.RecordExecutionAsync(accounting, stoppingToken).ConfigureAwait(false);
+                            if (feeEstimate is not null && accountingResult.FeeComparison is { } comparison &&
+                                (comparison.IsDrift || comparison.Status == ExecutionFeeComparisonStatus.NotComparable))
+                            {
+                                await HandleFeeComparisonFailureAsync(execution, comparison, stoppingToken).ConfigureAwait(false);
+                            }
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            AccountStreamLog.Failed(logger, ex.GetType().Name);
+                            await EnterSafeModeAsync("ACCOUNTING_EXECUTION_FAILURE", stoppingToken).ConfigureAwait(false);
                         }
                     }
                 }

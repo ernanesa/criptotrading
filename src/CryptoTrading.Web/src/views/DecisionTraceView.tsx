@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, ArrowRight, CheckCircle2, FileCode, Search, XCircle } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
-import { ApiError, apiClient } from '../api/client';
+import { ApiError, apiClient, formatIsoDate } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const DecisionTraceView: React.FC = () => {
@@ -130,45 +130,77 @@ export const DecisionTraceView: React.FC = () => {
                 >
                   {report.commit.outcome}
                 </span>
-                {report.commit.outcomeReason && (
-                  <span className="text-slate-400 block mt-0.5 text-[11px]">({report.commit.outcomeReason})</span>
+                {(report.commit.outcomeReason ||
+                  (report.commit as unknown as { noTradeReason?: string }).noTradeReason) && (
+                  <span className="text-slate-400 block mt-0.5 text-[11px]">
+                    (
+                    {report.commit.outcomeReason ||
+                      (report.commit as unknown as { noTradeReason?: string }).noTradeReason}
+                    )
+                  </span>
                 )}
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Sinal & Estratégia:</span>
                 <span className="text-slate-200 font-bold">
-                  {report.commit.strategy} v{report.commit.strategyVersion}
+                  {report.commit.strategy || (report.commit as unknown as { strategyId?: string }).strategyId} v
+                  {report.commit.strategyVersion}
                 </span>
                 <span className="text-cyan-400 block mt-0.5 text-[11px]">Sinal: {report.commit.signal}</span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Símbolo & Escopo:</span>
-                <span className="text-slate-200 font-bold">{report.commit.symbol}</span>
-                <span className="text-slate-400 block mt-0.5 text-[11px]">{report.commit.scope}</span>
+                <span className="text-slate-200 font-bold">
+                  {typeof report.commit.symbol === 'object'
+                    ? (report.commit.symbol as { value?: string })?.value || 'BTCUSDT'
+                    : String(report.commit.symbol || 'BTCUSDT')}
+                </span>
+                <span className="text-slate-400 block mt-0.5 text-[11px]">
+                  {report.commit.scope || (report.commit as unknown as { checkpointScope?: string }).checkpointScope}
+                </span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Fechamento Avaliado:</span>
-                <span className="text-slate-300">{new Date(report.commit.evaluatedCloseUtc).toISOString()}</span>
+                <span className="text-slate-300">
+                  {formatIsoDate(
+                    report.commit.evaluatedCloseUtc ||
+                      (report.commit as unknown as { closeTimeUtc?: string }).closeTimeUtc,
+                  )}
+                </span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Instante da Decisão UTC:</span>
-                <span className="text-slate-300">{new Date(report.commit.decisionUtc).toISOString()}</span>
+                <span className="text-slate-300">
+                  {formatIsoDate(
+                    report.commit.decisionUtc ||
+                      (report.commit as unknown as { availableAtUtc?: string }).availableAtUtc,
+                  )}
+                </span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Política de Risco:</span>
-                <span className="text-slate-300">v{report.commit.riskPolicyVersion}</span>
+                <span className="text-slate-300">
+                  v
+                  {report.commit.riskPolicyVersion ||
+                    (report.commit as unknown as { featureSchemaVersion?: string }).featureSchemaVersion ||
+                    '1.0'}
+                </span>
               </div>
             </div>
 
             {/* Feature Snapshot SHA-256 */}
             <div className="mt-4 p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs font-mono">
               <span className="text-slate-500 block mb-1">Digest de Features (SHA-256):</span>
-              <span className="text-cyan-400 break-all">{report.commit.featureSnapshotSha256}</span>
+              <span className="text-cyan-400 break-all">
+                {report.commit.featureSnapshotSha256 ||
+                  (report.commit as unknown as { featureFingerprint?: string }).featureFingerprint ||
+                  'N/A'}
+              </span>
             </div>
           </div>
 
@@ -179,7 +211,17 @@ export const DecisionTraceView: React.FC = () => {
               <span>Trace Estruturado da Decisão (JSON)</span>
             </h3>
             <pre className="p-4 bg-slate-950 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto max-h-64">
-              {JSON.stringify(JSON.parse(report.commit.decisionTraceJson || '{}'), null, 2)}
+              {(() => {
+                const rawTrace =
+                  report.commit.decisionTraceJson || (report.commit as unknown as { traceJson?: string }).traceJson;
+                if (!rawTrace) return '{}';
+                try {
+                  const parsed = typeof rawTrace === 'string' ? JSON.parse(rawTrace) : rawTrace;
+                  return JSON.stringify(parsed, null, 2);
+                } catch {
+                  return String(rawTrace);
+                }
+              })()}
             </pre>
           </div>
         </div>

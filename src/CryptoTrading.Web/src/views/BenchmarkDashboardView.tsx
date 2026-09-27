@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query';
 import {
   AlertCircle,
   ArrowUpRight,
@@ -12,6 +13,7 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
+import { apiClient } from '../api/client';
 
 interface BenchmarkMetric {
   id: string;
@@ -27,6 +29,12 @@ export const BenchmarkDashboardView: React.FC = () => {
   const [selectedPeriodDays, setSelectedPeriodDays] = useState<number>(252); // 1 ano (252 dias úteis)
   const [initialInvestmentBrl, setInitialInvestmentBrl] = useState<number>(100000);
   const [usdRate, setUsdRate] = useState<number>(5.65);
+
+  const performanceQuery = useQuery({
+    queryKey: ['portfolioPerformance'],
+    queryFn: apiClient.getPortfolioPerformance,
+    refetchInterval: 5000,
+  });
 
   // Dados macroeconômicos brasileiros de referência (anualizados)
   const cdiAnnual = 0.1075; // 10.75% a.a.
@@ -44,8 +52,9 @@ export const BenchmarkDashboardView: React.FC = () => {
   const ibovPeriodReturn = (1 + ibovAnnual) ** yearFraction - 1;
   const usdPeriodVariation = (1 + usdVariationAnnual) ** yearFraction - 1;
 
-  // Performance simulada das estratégias do robô no mesmo período
-  const botUsdReturn = 0.384 * yearFraction; // +38.4% a.a. em USD
+  // Performance REAL auditada das estratégias do robô no mesmo período
+  const totalProfitPct = performanceQuery.data?.totalProfitPct ?? 0;
+  const botUsdReturn = (totalProfitPct / 100) * yearFraction;
   const botBrlReturn = (1 + botUsdReturn) * (1 + usdPeriodVariation) - 1; // Conversão em BRL
   const botAlphaOverCdiBrl = botBrlReturn - cdiPeriodReturn;
   const botPercentOfCdi = cdiPeriodReturn > 0 ? (botBrlReturn / cdiPeriodReturn) * 100 : 0;

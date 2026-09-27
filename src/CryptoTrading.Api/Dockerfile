@@ -4,7 +4,6 @@ WORKDIR /app
 
 # Copy solution and project files for layer caching
 COPY Directory.Build.props ./
-COPY src/CryptoTrading.Primitives/*.csproj ./src/CryptoTrading.Primitives/
 COPY src/CryptoTrading.Domain/*.csproj ./src/CryptoTrading.Domain/
 COPY src/CryptoTrading.Configuration/*.csproj ./src/CryptoTrading.Configuration/
 COPY src/CryptoTrading.Observability/*.csproj ./src/CryptoTrading.Observability/

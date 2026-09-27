@@ -1,7 +1,10 @@
+using System.Text.Json.Serialization;
+
 namespace CryptoTrading.Domain.Primitives;
 
 public readonly record struct Asset
 {
+    [JsonConstructor]
     public Asset(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
@@ -29,6 +32,7 @@ public readonly record struct Asset
 
 public readonly record struct Symbol
 {
+    [JsonConstructor]
     public Symbol(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
