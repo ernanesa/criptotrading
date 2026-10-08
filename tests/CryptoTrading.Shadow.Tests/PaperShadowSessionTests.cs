@@ -76,9 +76,9 @@ public sealed class PaperShadowSessionTests
             4,
             0,
             1,
-            1));
+            1), cancellationToken: TestContext.Current.CancellationToken);
 
-        var lines = await File.ReadAllLinesAsync(path);
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(lines);
         Assert.Contains("PAPER_SHADOW", lines[0], StringComparison.Ordinal);
         Assert.DoesNotContain("secret", lines[0], StringComparison.OrdinalIgnoreCase);

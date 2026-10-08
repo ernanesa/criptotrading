@@ -37,7 +37,8 @@ for index in "${!names[@]}"; do
     status=0
     if (( index == 1 )); then
         if (cd "$repo_root" && "$dotnet_command" test tests/CryptoTrading.Persistence.Tests/CryptoTrading.Persistence.Tests.csproj \
-            --no-restore --configuration Release --filter FullyQualifiedName~FullStateReconstructionTests --verbosity minimal >"$output_file" 2>&1); then
+            --no-restore --configuration Release --minimum-expected-tests 1 \
+            -- --filter-class CryptoTrading.Persistence.Tests.FullStateReconstructionTests >"$output_file" 2>&1); then
             status=0
         else
             status=$?

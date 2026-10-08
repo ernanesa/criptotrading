@@ -13,7 +13,7 @@ public sealed class HttpWebhookTradingAlertSinkTests
         using var sink = new HttpWebhookTradingAlertSink(client, new TradingAlertWebhookOptions());
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await sink.DeliverAsync(CreateAlert()).ConfigureAwait(true)).ConfigureAwait(true);
+            await sink.DeliverAsync(CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true)).ConfigureAwait(true);
 
         Assert.Empty(handler.Requests);
     }
@@ -25,7 +25,7 @@ public sealed class HttpWebhookTradingAlertSinkTests
         using var client = new HttpClient(handler);
         using var sink = new HttpWebhookTradingAlertSink(client, EnabledOptions());
 
-        await sink.DeliverAsync(CreateAlert()).ConfigureAwait(true);
+        await sink.DeliverAsync(CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true);
 
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, request.Method);
@@ -66,7 +66,7 @@ public sealed class HttpWebhookTradingAlertSinkTests
         using var sink = new HttpWebhookTradingAlertSink(client, EnabledOptions());
 
         var exception = await Assert.ThrowsAsync<HttpRequestException>(async () =>
-            await sink.DeliverAsync(CreateAlert()).ConfigureAwait(true)).ConfigureAwait(true);
+            await sink.DeliverAsync(CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true)).ConfigureAwait(true);
 
         Assert.Contains("503", exception.Message, StringComparison.Ordinal);
     }

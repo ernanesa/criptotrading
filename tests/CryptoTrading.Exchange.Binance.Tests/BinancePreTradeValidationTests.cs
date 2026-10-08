@@ -12,8 +12,8 @@ public sealed class BinancePreTradeValidationTests
         var market = new FakeMarketClient(TradingRules());
         using var cache = new BinanceSymbolTradingRulesCache(market, TimeSpan.FromMinutes(5), new FixedTimeProvider(Start));
 
-        var first = await cache.GetAsync("btcusdt");
-        var second = await cache.GetAsync("BTCUSDT");
+        var first = await cache.GetAsync("btcusdt", cancellationToken: TestContext.Current.CancellationToken);
+        var second = await cache.GetAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Same(first, second);
         Assert.Equal(1, market.GetTradingRulesCalls);
@@ -25,8 +25,8 @@ public sealed class BinancePreTradeValidationTests
         var market = new FakeMarketClient(TradingRules());
         using var cache = new BinanceSymbolTradingRulesCache(market, TimeSpan.FromMinutes(5), new FixedTimeProvider(Start));
 
-        _ = await cache.GetAsync("BTCUSDT");
-        _ = await cache.RefreshAsync("BTCUSDT");
+        _ = await cache.GetAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
+        _ = await cache.RefreshAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, market.GetTradingRulesCalls);
     }
@@ -38,11 +38,11 @@ public sealed class BinancePreTradeValidationTests
         var market = new FakeMarketClient(TradingRules());
         using var cache = new BinanceSymbolTradingRulesCache(market, TimeSpan.FromMinutes(5), clock);
 
-        _ = await cache.GetAsync("BTCUSDT");
+        _ = await cache.GetAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
         clock.Advance(TimeSpan.FromMinutes(6));
         market.ThrowOnCall = true;
 
-        var exception = await Assert.ThrowsAsync<BinanceTradingRulesUnavailableException>(() => cache.GetAsync("BTCUSDT"));
+        var exception = await Assert.ThrowsAsync<BinanceTradingRulesUnavailableException>(() => cache.GetAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("BTCUSDT", exception.Symbol);
         Assert.Equal(2, market.GetTradingRulesCalls);
@@ -55,7 +55,7 @@ public sealed class BinancePreTradeValidationTests
         var client = new BinancePreTradeValidatedOrderClient(inner, new FixedRulesProvider(TradingRules()));
 
         var exception = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
-            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01005m, "ct-invalid", 100.005m)));
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01005m, "ct-invalid", 100.005m), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(exception.Violations, violation => violation.Code == "PRICE_TICK_MISMATCH");
         Assert.Contains(exception.Violations, violation => violation.Code == "QUANTITY_STEP_MISMATCH");
@@ -69,7 +69,7 @@ public sealed class BinancePreTradeValidationTests
         var client = new BinancePreTradeValidatedOrderClient(inner, new FixedRulesProvider(TradingRules()));
 
         _ = await client.SubmitAsync(
-            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-valid", 1_000.00m));
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-valid", 1_000.00m), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, inner.SubmitCalls);
     }
@@ -82,7 +82,7 @@ public sealed class BinancePreTradeValidationTests
         var client = new BinancePreTradeValidatedOrderClient(inner, rules);
 
         _ = await client.SubmitAsync(
-            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-refresh", 1_000m));
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-refresh", 1_000m), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(0, rules.GetCalls);
         Assert.Equal(1, rules.RefreshCalls);
@@ -96,7 +96,7 @@ public sealed class BinancePreTradeValidationTests
         var client = new BinancePreTradeValidatedOrderClient(inner, new FixedRulesProvider(TradingRules()));
 
         var exception = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
-            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Market, 0.01m, "ct-market")));
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Market, 0.01m, "ct-market"), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(exception.Violations, violation => violation.Code == "MARKET_NOTIONAL_UNVERIFIABLE");
         Assert.Equal(0, inner.SubmitCalls);

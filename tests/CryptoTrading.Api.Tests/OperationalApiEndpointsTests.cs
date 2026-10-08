@@ -21,7 +21,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/health/live", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/health/live", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -32,7 +32,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/health/ready", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/health/ready", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -69,10 +69,10 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(json);
         Assert.Equal("worker-durable-audit", json["source"]?.GetValue<string>());
         Assert.Equal("KillSwitch", json["mode"]?.GetValue<string>());
@@ -87,8 +87,8 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
-        var body = await response.Content.ReadAsStringAsync();
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Contains("urn:cryptotrading:error:OPERATIONAL_STATE_UNAVAILABLE", body, StringComparison.Ordinal);
@@ -102,8 +102,8 @@ public sealed class OperationalApiEndpointsTests
             services.AddSingleton<IOperationalControlCurrentStateStore>(store));
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
-        var body = await response.Content.ReadAsStringAsync();
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Contains("urn:cryptotrading:error:OPERATIONAL_STATE_UNAVAILABLE", body, StringComparison.Ordinal);
@@ -116,8 +116,8 @@ public sealed class OperationalApiEndpointsTests
             services.AddSingleton<IOperationalControlCurrentStateStore>(new ThrowingOperationalControlCurrentStateStore()));
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
-        var body = await response.Content.ReadAsStringAsync();
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Contains("urn:cryptotrading:error:OPERATIONAL_STATE_UNAVAILABLE", body, StringComparison.Ordinal);
@@ -129,7 +129,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Parse("192.168.1.100"));
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
@@ -144,8 +144,8 @@ public sealed class OperationalApiEndpointsTests
         request.Headers.TryAddWithoutValidation("X-Forwarded-For", "127.0.0.1");
         request.Headers.TryAddWithoutValidation("X-Internal-Access-Token", invalidToken);
 
-        var response = await client.SendAsync(request);
-        var body = await response.Content.ReadAsStringAsync();
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.DoesNotContain(invalidToken, body, StringComparison.Ordinal);
@@ -157,7 +157,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/decisions/some-id", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/decisions/some-id", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -171,7 +171,7 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/decisions/ad-missing", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/decisions/ad-missing", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -208,10 +208,10 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri($"/operational/decisions/{decisionId}", UriKind.Relative));
+        var response = await client.GetAsync(new Uri($"/operational/decisions/{decisionId}", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var report = await response.Content.ReadFromJsonAsync<AutonomyDecisionReconstructionReport>();
+        var report = await response.Content.ReadFromJsonAsync<AutonomyDecisionReconstructionReport>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(report);
         Assert.Equal(decisionId, report.Commit.DecisionId);
         Assert.True(report.CanonicalIdentityHashMatches);
@@ -224,7 +224,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/checkpoints/BTCUSDT", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/checkpoints/BTCUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -239,10 +239,10 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/checkpoints/BTCUSDT", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/checkpoints/BTCUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(json);
         Assert.Equal("BTCUSDT", json["scope"]?.GetValue<string>());
         Assert.Equal(close, json["lastProcessedCloseUtc"]?.GetValue<DateTimeOffset>());
@@ -254,7 +254,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/risk-policy", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/risk-policy", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -268,7 +268,7 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/risk-policy", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/risk-policy", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -288,10 +288,10 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/risk-policy", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/risk-policy", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(json);
         Assert.Equal("v1.0", json["policy"]?["version"]?.GetValue<string>());
     }
@@ -302,7 +302,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/regimes/current?symbol=BTCUSDT", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/regimes/current?symbol=BTCUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -313,7 +313,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/regimes/history?symbol=BTCUSDT", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/regimes/history?symbol=BTCUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -324,7 +324,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/models?strategyId=trend-following", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/models?strategyId=trend-following", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -335,7 +335,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/drift", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/drift", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -346,7 +346,7 @@ public sealed class OperationalApiEndpointsTests
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/operational/allocations", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/operational/allocations", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -382,10 +382,10 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(json);
         Assert.Equal(10, json["totalTradesCount"]?.GetValue<int>());
         Assert.Null(json["initialCapitalUsd"]);
@@ -416,7 +416,7 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative));
+        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
@@ -437,8 +437,8 @@ public sealed class OperationalApiEndpointsTests
         });
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative));
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative), TestContext.Current.CancellationToken);
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(json);

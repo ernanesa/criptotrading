@@ -24,10 +24,10 @@ public sealed class ShadowDrillHostedServiceTests
             dispatcher,
             NullLogger<ShadowDrillHostedService>.Instance);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.StartAsync(TestContext.Current.CancellationToken);
 
         var report = Assert.Single(Directory.GetFiles(directory, "*.jsonl"));
-        Assert.Single(await File.ReadAllLinesAsync(report));
+        Assert.Single(await File.ReadAllLinesAsync(report, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Empty(sink.Alerts);
     }
 
@@ -45,7 +45,7 @@ public sealed class ShadowDrillHostedServiceTests
             dispatcher,
             NullLogger<ShadowDrillHostedService>.Instance);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.False(Directory.Exists(directory));
         Assert.Empty(sink.Alerts);
@@ -61,7 +61,7 @@ public sealed class ShadowDrillHostedServiceTests
         var published = await ShadowAlertPublisher.PublishAsync(
             result,
             dispatcher,
-            new DateTimeOffset(2026, 9, 19, 15, 0, 0, TimeSpan.Zero));
+            new DateTimeOffset(2026, 9, 19, 15, 0, 0, TimeSpan.Zero), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(3, published);
         Assert.Equal(3, sink.Alerts.Count);

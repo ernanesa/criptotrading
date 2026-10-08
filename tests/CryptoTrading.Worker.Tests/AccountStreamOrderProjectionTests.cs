@@ -10,7 +10,7 @@ public sealed class AccountStreamOrderProjectionTests
     public async Task ActiveExecutionReportUpsertsOpenOrder()
     {
         var store = new RecordingStore();
-        await AccountStreamOrderProjection.ApplyAsync(store, Event("NEW"));
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("NEW"), cancellationToken: TestContext.Current.CancellationToken);
 
         var record = Assert.Single(store.Records);
         Assert.Equal("BTCUSDT", record.Symbol);
@@ -25,8 +25,8 @@ public sealed class AccountStreamOrderProjectionTests
     public async Task TerminalExecutionReportRemovesOpenOrder()
     {
         var store = new RecordingStore();
-        await AccountStreamOrderProjection.ApplyAsync(store, Event("NEW"));
-        await AccountStreamOrderProjection.ApplyAsync(store, Event("FILLED"));
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("NEW"), cancellationToken: TestContext.Current.CancellationToken);
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("FILLED"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(store.Records);
     }
@@ -35,7 +35,7 @@ public sealed class AccountStreamOrderProjectionTests
     public async Task PendingCancelExecutionReportRemainsOpenUntilTerminalOutcome()
     {
         var store = new RecordingStore();
-        await AccountStreamOrderProjection.ApplyAsync(store, Event("PENDING_CANCEL"));
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("PENDING_CANCEL"), cancellationToken: TestContext.Current.CancellationToken);
 
         var record = Assert.Single(store.Records);
         Assert.Equal("PENDING_CANCEL", record.Status);
@@ -45,17 +45,17 @@ public sealed class AccountStreamOrderProjectionTests
     public async Task UnknownStatusFailsClosed()
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            AccountStreamOrderProjection.ApplyAsync(new RecordingStore(), Event("UNKNOWN")));
+            AccountStreamOrderProjection.ApplyAsync(new RecordingStore(), Event("UNKNOWN"), cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task CumulativeExecutionAboveOriginalQuantityFailsClosedWithoutChangingProjection()
     {
         var store = new RecordingStore();
-        await AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.006m));
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.006m), cancellationToken: TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.011m)));
+            AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.011m), cancellationToken: TestContext.Current.CancellationToken));
 
         var record = Assert.Single(store.Records);
         Assert.Equal(0.006m, record.CumulativeExecutedQuantity);
@@ -65,10 +65,10 @@ public sealed class AccountStreamOrderProjectionTests
     public async Task CumulativeExecutionRegressionFailsClosedWithoutChangingProjection()
     {
         var store = new RecordingStore();
-        await AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.006m));
+        await AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.006m), cancellationToken: TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.005m)));
+            AccountStreamOrderProjection.ApplyAsync(store, Event("PARTIALLY_FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.005m), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(0.006m, Assert.Single(store.Records).CumulativeExecutedQuantity);
     }
@@ -79,7 +79,7 @@ public sealed class AccountStreamOrderProjectionTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             AccountStreamOrderProjection.ApplyAsync(
                 new RecordingStore(),
-                Event("FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.009m)));
+                Event("FILLED", originalQuantity: 0.01m, cumulativeQuantity: 0.009m), cancellationToken: TestContext.Current.CancellationToken));
     }
 
     private static BinanceExecutionReportEvent Event(

@@ -11,7 +11,7 @@ public sealed class BinanceSpotMarketClientTests
     {
         using var httpClient = CreateHttpClient("{\"serverTime\":1720000000123}");
         var client = new BinanceSpotMarketClient(httpClient);
-        var result = await client.GetServerTimeAsync();
+        var result = await client.GetServerTimeAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1720000000123, result.ServerTime);
     }
@@ -28,7 +28,7 @@ public sealed class BinanceSpotMarketClientTests
             "1d",
             DateTimeOffset.UnixEpoch,
             DateTimeOffset.UnixEpoch.AddDays(2),
-            100);
+            100, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(result);
         Assert.Equal(60500m, result[0].Close);
@@ -44,7 +44,7 @@ public sealed class BinanceSpotMarketClientTests
         var before = DateTimeOffset.UtcNow;
         var client = new BinanceSpotMarketClient(httpClient);
 
-        var result = await client.GetBookTickerAsync(" btcusdt ");
+        var result = await client.GetBookTickerAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("BTCUSDT", result.Symbol);
         Assert.Equal(60000m, result.BidPrice);
@@ -64,7 +64,7 @@ public sealed class BinanceSpotMarketClientTests
         var client = new BinanceSpotMarketClient(httpClient);
         var end = DateTimeOffset.FromUnixTimeMilliseconds(1_720_000_000_001);
 
-        var result = await client.GetAggregateTradesAsync("bnbusdt", end, 1000);
+        var result = await client.GetAggregateTradesAsync("bnbusdt", end, 1000, cancellationToken: TestContext.Current.CancellationToken);
 
         var trade = Assert.Single(result);
         Assert.Equal(17, trade.AggregateTradeId);
@@ -81,8 +81,8 @@ public sealed class BinanceSpotMarketClientTests
         using var httpClient = CreateHttpClient("[]");
         var client = new BinanceSpotMarketClient(httpClient);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GetKlinesAsync("BTCUSDT", interval));
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.GetKlinesAsync("BTCUSDT", "1d", limit: 1001));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetKlinesAsync("BTCUSDT", interval, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.GetKlinesAsync("BTCUSDT", "1d", limit: 1001, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public sealed class BinanceSpotMarketClientTests
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
         var client = new BinanceSpotMarketClient(httpClient);
 
-        var result = await client.GetExchangeInfoAsync(" btcusdt ");
+        var result = await client.GetExchangeInfoAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Symbols);
         Assert.Equal("BTCUSDT", result.Symbols[0].Symbol);
@@ -106,7 +106,7 @@ public sealed class BinanceSpotMarketClientTests
             "{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8,\"filters\":[{\"filterType\":\"PRICE_FILTER\",\"minPrice\":\"0.01\",\"maxPrice\":\"100000\",\"tickSize\":\"0.01\"},{\"filterType\":\"LOT_SIZE\",\"minQty\":\"0.0001\",\"maxQty\":\"9000\",\"stepSize\":\"0.0001\"},{\"filterType\":\"MIN_NOTIONAL\",\"minNotional\":\"10\"}]}]}");
         var client = new BinanceSpotMarketClient(httpClient);
 
-        var rules = await client.GetTradingRulesAsync("btcusdt");
+        var rules = await client.GetTradingRulesAsync("btcusdt", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(0.01m, rules.PriceTickSize);
         Assert.Equal(0.0001m, rules.QuantityStepSize);
@@ -119,7 +119,7 @@ public sealed class BinanceSpotMarketClientTests
         using var httpClient = CreateHttpClient("{\"code\":-1003,\"msg\":\"secret-like response\"}", HttpStatusCode.TooManyRequests);
         var client = new BinanceSpotMarketClient(httpClient);
 
-        var exception = await Assert.ThrowsAsync<BinanceApiException>(() => client.PingAsync());
+        var exception = await Assert.ThrowsAsync<BinanceApiException>(() => client.PingAsync(cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.TooManyRequests, exception.StatusCode);
         Assert.DoesNotContain("secret-like", exception.Message, StringComparison.Ordinal);
@@ -135,7 +135,7 @@ public sealed class BinanceSpotMarketClientTests
         using var httpClient = CreateHttpClient("{}");
         var client = new BinanceSpotMarketClient(httpClient);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GetExchangeInfoAsync(symbol));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetExchangeInfoAsync(symbol, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "HttpClient owns and disposes its message handler in the test fixture.")]

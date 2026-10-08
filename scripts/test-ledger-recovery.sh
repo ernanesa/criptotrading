@@ -31,8 +31,8 @@ started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if "$dotnet_command" test "$test_project" \
     --no-restore \
     --configuration Release \
-    --filter 'Category=RecoveryDrill' \
-    --logger 'console;verbosity=minimal' >"$test_log" 2>&1; then
+    --minimum-expected-tests 1 \
+    -- --filter-trait 'Category=RecoveryDrill' >"$test_log" 2>&1; then
     test_status=0
 else
     test_status=$?
@@ -40,16 +40,13 @@ fi
 tee /dev/stderr <"$test_log" >/dev/null
 finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-summary="$(rg -o 'Passed!.*' "$test_log" | tail -n 1 || true)"
+summary="$(rg -A5 '^Test run summary:' "$test_log" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g' || true)"
 if [[ -z "$summary" ]]; then
-    summary="No test summary was emitted."
+    summary="MTP exit code: $test_status; minimum expected tests: 1."
 fi
 
 result="FAIL"
-if (( test_status == 0 )) \
-    && [[ "$summary" =~ Passed! ]] \
-    && [[ "$summary" =~ Failed:[[:space:]]+0 ]] \
-    && [[ "$summary" =~ Total:[[:space:]]+[1-9][0-9]* ]]; then
+if (( test_status == 0 )); then
     result="PASS"
 fi
 

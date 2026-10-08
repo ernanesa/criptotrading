@@ -37,7 +37,7 @@ public sealed class BinanceUserDataStreamTests
             },
             () => transport);
 
-        await using var enumerator = client.ReadAsync("listen-key-1").GetAsyncEnumerator();
+        await using var enumerator = client.ReadAsync("listen-key-1", cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
         Assert.True(await enumerator.MoveNextAsync());
         var execution = Assert.IsType<BinanceExecutionReportEvent>(enumerator.Current);
         Assert.Equal(7, execution.TradeId);
@@ -71,9 +71,9 @@ public sealed class BinanceUserDataStreamTests
                 ApiKey = "testnet-key"
             });
 
-        var listenKey = await client.CreateListenKeyAsync();
-        await client.KeepAliveListenKeyAsync(listenKey);
-        await client.CloseListenKeyAsync(listenKey);
+        var listenKey = await client.CreateListenKeyAsync(cancellationToken: TestContext.Current.CancellationToken);
+        await client.KeepAliveListenKeyAsync(listenKey, cancellationToken: TestContext.Current.CancellationToken);
+        await client.CloseListenKeyAsync(listenKey, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal([HttpMethod.Post, HttpMethod.Put, HttpMethod.Delete], handler.Methods);
         Assert.All(handler.Requests, request =>

@@ -53,7 +53,7 @@ public sealed class AccountReconciliationServiceTests
             CreateControl(),
             new InMemoryReconciliationEventSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         var activity = Assert.Single(activities);
         Assert.Equal("reconciliation", activity.GetTagItem("crypto.operation"));
@@ -104,7 +104,7 @@ public sealed class AccountReconciliationServiceTests
             control,
             sink);
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsHealthy);
         Assert.IsType<BalanceReconciled>(Assert.Single(result.Events));
@@ -122,7 +122,7 @@ public sealed class AccountReconciliationServiceTests
             control,
             new InMemoryReconciliationEventSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         var mismatch = Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
@@ -141,7 +141,7 @@ public sealed class AccountReconciliationServiceTests
             control,
             new InMemoryReconciliationEventSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         Assert.Equal([42L], result.UnknownTradeIds);
@@ -165,7 +165,7 @@ public sealed class AccountReconciliationServiceTests
             sink,
             [new ReconciliationOpenOrder("BTCUSDT", 0, "other-order", "NEW")]);
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
@@ -192,7 +192,7 @@ public sealed class AccountReconciliationServiceTests
             [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "UNKNOWN")],
             resolver);
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsHealthy);
         var resolved = Assert.Single(result.Events.OfType<OpenOrderReconciled>());
@@ -215,7 +215,7 @@ public sealed class AccountReconciliationServiceTests
             [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "UNKNOWN")],
             new RecordingOpenOrderResolutionSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
@@ -240,7 +240,7 @@ public sealed class AccountReconciliationServiceTests
             [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "PENDING_CANCEL")],
             new RecordingOpenOrderResolutionSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
@@ -257,7 +257,7 @@ public sealed class AccountReconciliationServiceTests
             control,
             new InMemoryReconciliationEventSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         var usdtMismatch = Assert.IsType<ReconciliationMismatch>(result.Events.Single(item => item is ReconciliationMismatch mismatch && mismatch.Asset == "USDT"));
@@ -273,9 +273,9 @@ public sealed class AccountReconciliationServiceTests
         var first = CreateService(snapshot, new Dictionary<string, decimal> { ["USDT"] = 99m }, control, new InMemoryReconciliationEventSink());
         var second = CreateService(snapshot, new Dictionary<string, decimal> { ["USDT"] = 99m }, control, new InMemoryReconciliationEventSink());
 
-        await first.ReconcileAsync();
+        await first.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
         var revision = control.Snapshot.Revision;
-        await second.ReconcileAsync();
+        await second.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(revision, control.Snapshot.Revision);
         Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
@@ -291,7 +291,7 @@ public sealed class AccountReconciliationServiceTests
             control,
             new InMemoryReconciliationEventSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         var mismatch = Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
@@ -309,7 +309,7 @@ public sealed class AccountReconciliationServiceTests
             control,
             new InMemoryReconciliationEventSink());
 
-        var result = await service.ReconcileAsync();
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsHealthy);
         Assert.Equal("STALE_SNAPSHOT", Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events)).ReasonCode);
@@ -327,7 +327,7 @@ public sealed class AccountReconciliationServiceTests
             new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
             new FixedTimeProvider(Now));
 
-        var snapshot = await provider.GetSnapshotAsync();
+        var snapshot = await provider.GetSnapshotAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1_001, snapshot.Fills.Count);
         Assert.Equal([null, 1_001L], client.FromIds);

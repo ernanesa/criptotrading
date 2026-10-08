@@ -18,27 +18,27 @@ public sealed class PortfolioPerformanceIntegrationTests
         await using var store = await CreateStoreAsync();
         var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
         var occurredAtUtc = new DateTimeOffset(2026, 10, 7, 11, 0, 0, TimeSpan.Zero);
-        var before = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        var before = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero), cancellationToken: TestContext.Current.CancellationToken);
         var beforeBnb = before.UnvaluedFeeAmounts.SingleOrDefault(static amount => amount.Asset == "BNB")?.Amount ?? 0m;
         var rejected = NewExecution("rejected-unvalued-" + suffix, 500_000 + Convert.ToInt64(suffix, 16), new Money(.01m, new Asset("BNB")), occurredAtUtc);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordExecutionAsync(rejected));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordExecutionAsync(rejected, cancellationToken: TestContext.Current.CancellationToken));
         await using (var verification = new NpgsqlConnection(Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING")))
         {
-            await verification.OpenAsync();
+            await verification.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
             await using var query = new NpgsqlCommand("SELECT (SELECT count(*) FROM trading.execution_fills WHERE execution_id = @execution) + (SELECT count(*) FROM trading.journal_entries WHERE entry_id = @entry);", verification);
             query.Parameters.AddWithValue("execution", rejected.ExecutionId);
             query.Parameters.AddWithValue("entry", rejected.LedgerEntryId.Value);
-            Assert.Equal(0L, (long)(await query.ExecuteScalarAsync())!);
+            Assert.Equal(0L, (long)(await query.ExecuteScalarAsync(cancellationToken: TestContext.Current.CancellationToken))!);
         }
         // A trusted conversion allows accounting; a missing expectation still makes the fee-comparison report partial.
-        await store.RecordExecutionAsync(NewExecution("valued-" + suffix, 100_000 + Convert.ToInt64(suffix, 16), new Money(.10m, new Asset("USDT")), occurredAtUtc));
-        await store.RecordExecutionAsync(NewExecution("valued-btc-" + suffix, 200_000 + Convert.ToInt64(suffix, 16), new Money(.001m, new Asset("BTC")), occurredAtUtc));
+        await store.RecordExecutionAsync(NewExecution("valued-" + suffix, 100_000 + Convert.ToInt64(suffix, 16), new Money(.10m, new Asset("USDT")), occurredAtUtc), cancellationToken: TestContext.Current.CancellationToken);
+        await store.RecordExecutionAsync(NewExecution("valued-btc-" + suffix, 200_000 + Convert.ToInt64(suffix, 16), new Money(.001m, new Asset("BTC")), occurredAtUtc), cancellationToken: TestContext.Current.CancellationToken);
         await store.RecordExecutionAsync(NewExecution("valued-bnb-" + suffix, 300_000 + Convert.ToInt64(suffix, 16), new Money(.01m, new Asset("BNB")), occurredAtUtc,
-            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 20m, occurredAtUtc.AddMinutes(-1), "integration-bnb-mark")));
+            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 20m, occurredAtUtc.AddMinutes(-1), "integration-bnb-mark")), cancellationToken: TestContext.Current.CancellationToken);
         await store.RecordExecutionAsync(NewExecution("unvalued-" + suffix, 400_000 + Convert.ToInt64(suffix, 16), new Money(.01m, new Asset("BNB")), occurredAtUtc,
-            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 20m, occurredAtUtc.AddMinutes(-1), "integration-bnb-mark"), hasFeeEstimate: false));
+            new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 20m, occurredAtUtc.AddMinutes(-1), "integration-bnb-mark"), hasFeeEstimate: false), cancellationToken: TestContext.Current.CancellationToken);
 
-        var metrics = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero));
+        var metrics = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("BTCUSDT", metrics.ScopeSymbol);
         Assert.Equal("USDT", metrics.QuoteAsset);
@@ -55,10 +55,10 @@ public sealed class PortfolioPerformanceIntegrationTests
         await using var store = await CreateStoreAsync();
         var asOfUtc = new DateTimeOffset(2090, 1, 1, 12, 0, 0, TimeSpan.Zero).AddSeconds(Guid.NewGuid().GetHashCode() & 0x7FFF);
         var startUtc = new DateTimeOffset(asOfUtc.UtcDateTime.Date, TimeSpan.Zero);
-        await store.RecordNavSnapshotAsync(new("BTCUSDT", "USDT", startUtc, 100m, 10m, 0m, "integration"));
-        await store.RecordNavSnapshotAsync(new("BTCUSDT", "USDT", asOfUtc, 115m, 14m, 5m, "integration"));
+        await store.RecordNavSnapshotAsync(new("BTCUSDT", "USDT", startUtc, 100m, 10m, 0m, "integration"), cancellationToken: TestContext.Current.CancellationToken);
+        await store.RecordNavSnapshotAsync(new("BTCUSDT", "USDT", asOfUtc, 115m, 14m, 5m, "integration"), cancellationToken: TestContext.Current.CancellationToken);
 
-        var metrics = await store.GetPerformanceMetricsAsync(asOfUtc);
+        var metrics = await store.GetPerformanceMetricsAsync(asOfUtc, cancellationToken: TestContext.Current.CancellationToken);
         var day = metrics.Periods[0];
 
         Assert.Equal(115m, metrics.CurrentNetAssetValueQuote);
@@ -68,19 +68,19 @@ public sealed class PortfolioPerformanceIntegrationTests
         Assert.Equal(PerformanceSnapshotAvailability.Available, day.SnapshotAvailability);
 
         var unknownFlowAsOfUtc = asOfUtc.AddMinutes(1);
-        await store.RecordNavSnapshotAsync(new("BTCUSDT", "USDT", unknownFlowAsOfUtc, 120m, 15m, null, "integration"));
-        var unknownFlow = (await store.GetPerformanceMetricsAsync(unknownFlowAsOfUtc)).Periods[0];
+        await store.RecordNavSnapshotAsync(new("BTCUSDT", "USDT", unknownFlowAsOfUtc, 120m, 15m, null, "integration"), cancellationToken: TestContext.Current.CancellationToken);
+        var unknownFlow = (await store.GetPerformanceMetricsAsync(unknownFlowAsOfUtc, cancellationToken: TestContext.Current.CancellationToken)).Periods[0];
         Assert.Null(unknownFlow.NetAssetValueDeltaQuote);
         Assert.Equal(PerformanceSnapshotAvailability.UnknownExternalCashFlow, unknownFlow.SnapshotAvailability);
 
-        var withoutHistory = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var withoutHistory = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero), cancellationToken: TestContext.Current.CancellationToken);
         Assert.All(withoutHistory.Periods, period =>
         {
             Assert.Null(period.NetAssetValueDeltaQuote);
             Assert.NotEqual(PerformanceSnapshotAvailability.Available, period.SnapshotAvailability);
         });
 
-        await Assert.ThrowsAsync<ArgumentException>(() => store.GetPerformanceMetricsAsync(asOfUtc.ToOffset(TimeSpan.FromHours(-3))));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.GetPerformanceMetricsAsync(asOfUtc.ToOffset(TimeSpan.FromHours(-3)), cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -91,11 +91,11 @@ public sealed class PortfolioPerformanceIntegrationTests
         var now = new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero);
         var model = NewModel("model-" + suffix, "strategy-" + suffix, "{\"lookback\":20}", now);
 
-        await store.RegisterModelAsync(model);
-        await store.RegisterModelAsync(model);
+        await store.RegisterModelAsync(model, cancellationToken: TestContext.Current.CancellationToken);
+        await store.RegisterModelAsync(model, cancellationToken: TestContext.Current.CancellationToken);
 
         var collision = NewModel(model.ModelId, model.StrategyId, "{\"lookback\":21}", now);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RegisterModelAsync(collision));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RegisterModelAsync(collision, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     private static async Task<PostgresTradingStore> CreateStoreAsync()
@@ -103,7 +103,7 @@ public sealed class PortfolioPerformanceIntegrationTests
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         return store;
     }
 

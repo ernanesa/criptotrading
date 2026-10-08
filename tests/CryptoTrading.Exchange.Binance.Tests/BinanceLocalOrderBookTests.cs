@@ -116,7 +116,7 @@ public sealed class BinanceLocalOrderBookTests
             },
             () => transport);
 
-        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)]).GetAsyncEnumerator();
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
         Assert.True(await enumerator.MoveNextAsync());
         var update = Assert.IsType<BinanceDepthUpdateEvent>(enumerator.Current);
         Assert.Equal(7, update.FirstUpdateId);

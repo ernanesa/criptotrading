@@ -63,7 +63,7 @@ connection_string="Host=127.0.0.1;Port=$postgres_port;Database=$postgres_db;User
 export POSTGRES_CONNECTION_STRING="$connection_string"
 
 "$dotnet_command" test "$repo_root/tests/CryptoTrading.Persistence.IntegrationTests/CryptoTrading.Persistence.IntegrationTests.csproj" \
-    --logger 'console;verbosity=minimal'
+    --minimum-expected-tests 1
 
 "${compose[@]}" down --remove-orphans >/dev/null
 trap - EXIT

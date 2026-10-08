@@ -27,24 +27,24 @@ public sealed class PostgresTradingStoreIntegrationTests
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var now = new DateTimeOffset(2026, 9, 21, 12, 0, 0, TimeSpan.Zero);
         var commit = NewAutonomyCommit("dispatch-" + Guid.NewGuid().ToString("N")[..8], now, dispatchable: true);
 
-        await store.CommitAsync(commit);
-        await store.CommitAsync(commit);
+        await store.CommitAsync(commit, cancellationToken: TestContext.Current.CancellationToken);
+        await store.CommitAsync(commit, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(now, await store.GetLastProcessedCloseAsync(commit.CheckpointScope));
-        Assert.NotNull(await store.ReadExecutionSubmissionContextAsync(commit.OutboxRecord!.Command.ClientOrderId.Value));
+        Assert.Equal(now, await store.GetLastProcessedCloseAsync(commit.CheckpointScope, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.NotNull(await store.ReadExecutionSubmissionContextAsync(commit.OutboxRecord!.Command.ClientOrderId.Value, cancellationToken: TestContext.Current.CancellationToken));
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var command = new NpgsqlCommand(
             "SELECT count(*) FROM trading.autonomy_decisions WHERE decision_id = @decision_id;", connection);
         command.Parameters.AddWithValue("decision_id", commit.DecisionId);
-        Assert.Equal(1L, await command.ExecuteScalarAsync());
+        Assert.Equal(1L, await command.ExecuteScalarAsync(cancellationToken: TestContext.Current.CancellationToken));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            store.CommitAsync(commit with { FeatureFingerprint = Hash("conflicting-feature") }));
+            store.CommitAsync(commit with { FeatureFingerprint = Hash("conflicting-feature") }, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -53,20 +53,20 @@ public sealed class PostgresTradingStoreIntegrationTests
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var now = new DateTimeOffset(2026, 9, 21, 12, 1, 0, TimeSpan.Zero);
         var commit = NewAutonomyCommit("no-trade-" + Guid.NewGuid().ToString("N")[..8], now, dispatchable: false);
 
-        await store.CommitAsync(commit);
+        await store.CommitAsync(commit, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(now, await store.GetLastProcessedCloseAsync(commit.CheckpointScope));
+        Assert.Equal(now, await store.GetLastProcessedCloseAsync(commit.CheckpointScope, cancellationToken: TestContext.Current.CancellationToken));
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var command = new NpgsqlCommand(
             "SELECT outcome, outbox_message_id IS NULL FROM trading.autonomy_decisions WHERE decision_id = @decision_id;", connection);
         command.Parameters.AddWithValue("decision_id", commit.DecisionId);
-        await using var reader = await command.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(await reader.ReadAsync(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("NO_TRADE", reader.GetString(0));
         Assert.True(reader.GetBoolean(1));
     }
@@ -77,14 +77,14 @@ public sealed class PostgresTradingStoreIntegrationTests
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var transition = new RuntimeStateTransition(RuntimeState.Stopped, RuntimeState.Bootstrapping, 1, "integration-boot", DateTimeOffset.UtcNow);
 
-        await store.AppendRuntimeTransitionAsync(transition);
-        await store.AppendRuntimeTransitionAsync(transition);
+        await store.AppendRuntimeTransitionAsync(transition, cancellationToken: TestContext.Current.CancellationToken);
+        await store.AppendRuntimeTransitionAsync(transition, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(new RuntimeStateCheckpoint(RuntimeState.Bootstrapping, 1), await store.ReadRuntimeStateAsync());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendRuntimeTransitionAsync(transition with { Reason = "conflict" }));
+        Assert.Equal(new RuntimeStateCheckpoint(RuntimeState.Bootstrapping, 1), await store.ReadRuntimeStateAsync(cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendRuntimeTransitionAsync(transition with { Reason = "conflict" }, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -93,28 +93,28 @@ public sealed class PostgresTradingStoreIntegrationTests
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var now = DateTimeOffset.UtcNow;
         var command = new CancelOrderCommand(OrderId.New(), new ClientOrderId("cancel-" + Guid.NewGuid().ToString("N")[..8]), new Symbol("BTCUSDT"),
             OrderSide.Buy, OrderType.Limit, new Quantity(.01m), new Quantity(.005m), new Price(10_000m), CorrelationId.New(),
             new IdempotencyKey("cancel-key-" + Guid.NewGuid().ToString("N")[..8]), 0, now.AddMinutes(-2), now.AddMinutes(-1), "42");
-        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord(command.Symbol.Value, 42, command.ClientOrderId.Value, "PENDING_CANCEL", now, .01m, .005m));
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord(command.Symbol.Value, 42, command.ClientOrderId.Value, "PENDING_CANCEL", now, .01m, .005m), cancellationToken: TestContext.Current.CancellationToken);
         var outcome = CancelLifecyclePlanner.Resolve(command, CancelVenueStatus.Canceled, new Quantity(.005m));
         var transition = new OrderTransition(OrderStatus.CancelPending, outcome.ProjectedStatus, new IdempotencyKey("terminal-" + command.ClientOrderId.Value), now, "42");
         var resolution = new TerminalCancellationResolution(command, outcome, Guid.NewGuid(), OrderLifecycleEvent.Create(command.ClientOrderId.Value, transition));
 
-        var first = await store.ResolveTerminalCancellationAsync(resolution);
-        var replay = await store.ResolveTerminalCancellationAsync(resolution);
+        var first = await store.ResolveTerminalCancellationAsync(resolution, cancellationToken: TestContext.Current.CancellationToken);
+        var replay = await store.ResolveTerminalCancellationAsync(resolution, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(first);
         Assert.Equal(first, replay);
-        Assert.Contains(await store.ReadReplanCandidatesAsync(), candidate => candidate.CandidateId == first.CandidateId);
-        Assert.DoesNotContain(await store.ReadOpenOrdersAsync(), item => item.ClientOrderId == command.ClientOrderId.Value);
+        Assert.Contains(await store.ReadReplanCandidatesAsync(cancellationToken: TestContext.Current.CancellationToken), candidate => candidate.CandidateId == first.CandidateId);
+        Assert.DoesNotContain(await store.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken), item => item.ClientOrderId == command.ClientOrderId.Value);
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var count = new NpgsqlCommand("SELECT count(*) FROM trading.execution_replan_candidates WHERE cancel_message_id = @message_id;", connection);
         count.Parameters.AddWithValue("message_id", resolution.CancelMessageId);
-        Assert.Equal(1L, await count.ExecuteScalarAsync());
+        Assert.Equal(1L, await count.ExecuteScalarAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -123,21 +123,21 @@ public sealed class PostgresTradingStoreIntegrationTests
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var now = DateTimeOffset.UtcNow;
         var first = NewExpiredSubmit("ttl-a-" + Guid.NewGuid().ToString("N")[..8], now);
         var second = NewExpiredSubmit("ttl-b-" + Guid.NewGuid().ToString("N")[..8], now);
         foreach (var command in new[] { first, second })
         {
-            await store.EnqueueAsync(new OutboxRecord(Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, command.CorrelationId, command.IdempotencyKey, "ttl", command, OutboxRecordStatus.Pending, command.CreatedAtUtc));
-            await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord(command.Symbol.Value, 42, command.ClientOrderId.Value, "NEW", now, command.Quantity.Value, 0m));
-            await store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(command.ClientOrderId.Value, new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged, new IdempotencyKey("ack-" + command.ClientOrderId.Value), now, "42")));
+            await store.EnqueueAsync(new OutboxRecord(Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, command.CorrelationId, command.IdempotencyKey, "ttl", command, OutboxRecordStatus.Pending, command.CreatedAtUtc), cancellationToken: TestContext.Current.CancellationToken);
+            await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord(command.Symbol.Value, 42, command.ClientOrderId.Value, "NEW", now, command.Quantity.Value, 0m), cancellationToken: TestContext.Current.CancellationToken);
+            await store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(command.ClientOrderId.Value, new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged, new IdempotencyKey("ack-" + command.ClientOrderId.Value), now, "42")), cancellationToken: TestContext.Current.CancellationToken);
         }
-        var firstPlan = CancelLifecyclePlanner.Plan((await store.ReadExpiredCancellableExecutionsAsync(now)).Single(item => item.ClientOrderId == first.ClientOrderId));
-        await store.EnqueueCancellationAsync(firstPlan.OutboxRecord!);
-        await store.EnqueueCancellationAsync(firstPlan.OutboxRecord!);
+        var firstPlan = CancelLifecyclePlanner.Plan((await store.ReadExpiredCancellableExecutionsAsync(now, cancellationToken: TestContext.Current.CancellationToken)).Single(item => item.ClientOrderId == first.ClientOrderId));
+        await store.EnqueueCancellationAsync(firstPlan.OutboxRecord!, cancellationToken: TestContext.Current.CancellationToken);
+        await store.EnqueueCancellationAsync(firstPlan.OutboxRecord!, cancellationToken: TestContext.Current.CancellationToken);
 
-        var eligible = await store.ReadExpiredCancellableExecutionsAsync(now);
+        var eligible = await store.ReadExpiredCancellableExecutionsAsync(now, cancellationToken: TestContext.Current.CancellationToken);
 
         var snapshot = Assert.Single(eligible);
         Assert.Equal(second.ClientOrderId, snapshot.ClientOrderId);
@@ -152,7 +152,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var suffix = Guid.NewGuid().ToString("N")[..8];
         var clientOrderId = "ct-lifecycle-" + suffix;
         var occurredAtUtc = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
@@ -160,20 +160,20 @@ public sealed class PostgresTradingStoreIntegrationTests
             OrderStatus.Validated, OrderStatus.Submitted, new IdempotencyKey("lifecycle-" + suffix), occurredAtUtc, "12345");
         var lifecycleEvent = OrderLifecycleEvent.Create(clientOrderId, transition);
 
-        Assert.True(await store.AppendOrderLifecycleEventAsync(lifecycleEvent));
-        Assert.False(await store.AppendOrderLifecycleEventAsync(lifecycleEvent));
+        Assert.True(await store.AppendOrderLifecycleEventAsync(lifecycleEvent, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await store.AppendOrderLifecycleEventAsync(lifecycleEvent, cancellationToken: TestContext.Current.CancellationToken));
 
         var conflicting = OrderLifecycleEvent.Create(
             clientOrderId,
             transition with { To = OrderStatus.Rejected });
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendOrderLifecycleEventAsync(conflicting));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendOrderLifecycleEventAsync(conflicting, cancellationToken: TestContext.Current.CancellationToken));
 
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var command = new NpgsqlCommand(
             "SELECT count(*) FROM trading.order_lifecycle_events WHERE client_order_id = @client_order_id;", connection);
         command.Parameters.AddWithValue("client_order_id", clientOrderId);
-        Assert.Equal(1L, await command.ExecuteScalarAsync());
+        Assert.Equal(1L, await command.ExecuteScalarAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -187,7 +187,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
         var symbol = new Symbol($"FOO{suffix}USDT");
         var baseAsset = new Asset($"FOO{suffix}");
@@ -195,16 +195,16 @@ public sealed class PostgresTradingStoreIntegrationTests
         var wallet = new AccountId($"integration-execution-wallet-{suffix}");
         var fees = new AccountId($"integration-execution-fees-{suffix}");
         var first = ExecutionCommand("buy-" + suffix, 1001, OrderSide.Buy, 1m, 100m, .1m, symbol, baseAsset, quoteAsset, wallet, fees);
-        var firstResult = await store.RecordExecutionAsync(first);
-        var replay = await store.RecordExecutionAsync(first);
+        var firstResult = await store.RecordExecutionAsync(first, cancellationToken: TestContext.Current.CancellationToken);
+        var replay = await store.RecordExecutionAsync(first, cancellationToken: TestContext.Current.CancellationToken);
         Assert.False(firstResult.IsDuplicate);
         Assert.True(replay.IsDuplicate);
         Assert.Equal(firstResult.LedgerEntry.Id, replay.LedgerEntry.Id);
 
         var sell = ExecutionCommand("sell-" + suffix, 1002, OrderSide.Sell, .5m, 120m, .05m, symbol, baseAsset, quoteAsset, wallet, fees);
-        var sellResult = await store.RecordExecutionAsync(sell);
+        var sellResult = await store.RecordExecutionAsync(sell, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(9.9m, sellResult.RealizedPnlQuote);
-        Assert.Equal(.5m, (await store.GetBalanceAsync(wallet, baseAsset)).Amount);
+        Assert.Equal(.5m, (await store.GetBalanceAsync(wallet, baseAsset, cancellationToken: TestContext.Current.CancellationToken)).Amount);
 
         static ExecutionAccountingCommand ExecutionCommand(
             string id, long tradeId, OrderSide side, decimal quantity, decimal price, decimal commission,
@@ -224,7 +224,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
         var baseAsset = new Asset("REB" + suffix);
         var quoteAsset = new Asset("USDT");
@@ -234,14 +234,14 @@ public sealed class PostgresTradingStoreIntegrationTests
             OrderSide.Buy, new Quantity(1m), new Price(100m), new Money(-.1m, quoteAsset), wallet,
             new AccountId("integration-rebate-fees-" + suffix), LedgerEntryId.New(), CorrelationId.New(), IdempotencyKey.New(), DateTimeOffset.UtcNow);
 
-        _ = await store.RecordExecutionAsync(command);
-        Assert.Equal(-99.9m, (await store.GetBalanceAsync(wallet, quoteAsset)).Amount);
+        _ = await store.RecordExecutionAsync(command, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(-99.9m, (await store.GetBalanceAsync(wallet, quoteAsset, cancellationToken: TestContext.Current.CancellationToken)).Amount);
 
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var query = new NpgsqlCommand("SELECT commission FROM trading.execution_fills WHERE execution_id = @execution_id;", connection);
         query.Parameters.AddWithValue("execution_id", command.ExecutionId);
-        Assert.Equal(-.1m, await query.ExecuteScalarAsync());
+        Assert.Equal(-.1m, await query.ExecuteScalarAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
         var now = DateTimeOffset.UtcNow;
         var clientOrderId = new ClientOrderId("fee-" + suffix);
@@ -269,15 +269,15 @@ public sealed class PostgresTradingStoreIntegrationTests
             Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType, submit.CorrelationId, submit.IdempotencyKey,
             "integration-fee", submit, OutboxRecordStatus.Pending, now.AddDays(1));
 
-        await store.EnqueueAsync(outbox);
-        var persistedEstimate = await store.ReadExpectedExecutionFeeAsync(clientOrderId.Value);
+        await store.EnqueueAsync(outbox, cancellationToken: TestContext.Current.CancellationToken);
+        var persistedEstimate = await store.ReadExpectedExecutionFeeAsync(clientOrderId.Value, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(persistedEstimate);
         Assert.Equal(estimate.Rate, persistedEstimate.Rate);
         Assert.Equal(estimate.SnapshotHash, persistedEstimate.SnapshotHash);
         Assert.Equal(estimate.Source, persistedEstimate.Source);
         Assert.Equal(100m, persistedEstimate.ReferencePrice);
         Assert.Equal(1m, persistedEstimate.AuthorizedQuantity);
-        var context = await store.ReadExecutionSubmissionContextAsync(clientOrderId.Value);
+        var context = await store.ReadExecutionSubmissionContextAsync(clientOrderId.Value, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(context);
         Assert.Equal(submit.OrderId, context.ApplicationOrderId);
         Assert.Equal(submit.CorrelationId, context.CorrelationId);
@@ -296,20 +296,20 @@ public sealed class PostgresTradingStoreIntegrationTests
             clientOrderId.Value, persistedEstimate, 25m,
             new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 100m, now, "integration:bnb-valuation"),
             new Quantity(1m));
-        var result = await store.RecordExecutionAsync(accounting);
+        var result = await store.RecordExecutionAsync(accounting, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.FeeComparison!.IsDrift);
         Assert.Equal("COMPARABLE", result.QualityComparison!.Status);
         Assert.Equal(1m, result.QualityComparison.FillRatio);
         Assert.Equal(0m, result.QualityComparison.ImplementationShortfallQuote);
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var query = new NpgsqlCommand(
             "SELECT client_order_id, fee_comparison_status, fee_comparison_reason, commission_valuation_source, cumulative_fill_ratio, implementation_shortfall_quote, execution_quality_status FROM trading.execution_fills WHERE trade_id = @trade_id;",
             connection);
         query.Parameters.AddWithValue("trade_id", tradeId);
-        await using var reader = await query.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
+        await using var reader = await query.ExecuteReaderAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(await reader.ReadAsync(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(clientOrderId.Value, reader.GetString(0));
         Assert.Equal("DRIFT", reader.GetString(1));
         Assert.Equal("EXECUTION_FEE_DRIFT", reader.GetString(2));
@@ -322,9 +322,9 @@ public sealed class PostgresTradingStoreIntegrationTests
             clientOrderId.Value,
             new OrderTransition(
                 OrderStatus.Submitted, OrderStatus.Acknowledged, new IdempotencyKey("ack-" + suffix), now.AddSeconds(1), "123"));
-        Assert.True(await store.AppendOrderLifecycleEventAsync(lifecycle));
+        Assert.True(await store.AppendOrderLifecycleEventAsync(lifecycle, cancellationToken: TestContext.Current.CancellationToken));
 
-        var report = await store.ReadExecutionAttributionReportAsync(clientOrderId.Value);
+        var report = await store.ReadExecutionAttributionReportAsync(clientOrderId.Value, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(report);
         Assert.Equal(context, report.Context);
         Assert.Equal(0, report.OutboxAttempts);
@@ -350,10 +350,13 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.CheckConnectivityAsync();
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        await store.CheckConnectivityAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        var now = DateTimeOffset.UtcNow;
+        // The integration script deliberately preserves its database volume. Keep
+        // this message earlier than other run-scoped outbox records so the claim
+        // assertions cannot consume unrelated pending work from a previous test.
+        var now = new DateTimeOffset(1900, 1, 1, 0, 0, 0, TimeSpan.Zero);
         var correlationId = CorrelationId.New();
         var ledgerId = LedgerEntryId.New();
         var ledgerKey = IdempotencyKey.New();
@@ -369,11 +372,11 @@ public sealed class PostgresTradingStoreIntegrationTests
             ],
             ledgerKey);
 
-        Assert.Same(ledger, await store.AppendJournalEntryAsync(ledger));
-        var replayed = await store.AppendJournalEntryAsync(ledger);
+        Assert.Same(ledger, await store.AppendJournalEntryAsync(ledger, cancellationToken: TestContext.Current.CancellationToken));
+        var replayed = await store.AppendJournalEntryAsync(ledger, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ledgerId, replayed.Id);
-        Assert.Equal(100m, (await store.GetBalanceAsync(new AccountId("integration-cash"), usdt)).Amount);
-        Assert.Contains("USDT", await store.GetAssetsAsync(new AccountId("integration-cash")));
+        Assert.Equal(100m, (await store.GetBalanceAsync(new AccountId("integration-cash"), usdt, cancellationToken: TestContext.Current.CancellationToken)).Amount);
+        Assert.Contains("USDT", await store.GetAssetsAsync(new AccountId("integration-cash"), cancellationToken: TestContext.Current.CancellationToken));
 
         var orderId = OrderId.New();
         var commandKey = IdempotencyKey.New();
@@ -400,11 +403,11 @@ public sealed class PostgresTradingStoreIntegrationTests
             OutboxRecordStatus.Pending,
             now);
 
-        await store.EnqueueAsync(outbox);
-        await store.EnqueueAsync(outbox);
+        await store.EnqueueAsync(outbox, cancellationToken: TestContext.Current.CancellationToken);
+        await store.EnqueueAsync(outbox, cancellationToken: TestContext.Current.CancellationToken);
 
         var firstOwner = "integration-owner-a";
-        var firstLease = await store.ClaimOutboxAsync(firstOwner, now, TimeSpan.FromSeconds(5), 1);
+        var firstLease = await store.ClaimOutboxAsync(firstOwner, now, TimeSpan.FromSeconds(5), 1, cancellationToken: TestContext.Current.CancellationToken);
         var leased = Assert.Single(firstLease);
         Assert.Equal(1, leased.Attempts);
         Assert.Equal(firstOwner, leased.LeaseOwner);
@@ -413,16 +416,16 @@ public sealed class PostgresTradingStoreIntegrationTests
             leased.MessageId,
             firstOwner,
             "simulated-transient-failure",
-            now.AddSeconds(-1)));
+            now.AddSeconds(-1), cancellationToken: TestContext.Current.CancellationToken));
 
         var secondOwner = "integration-owner-b";
-        var retryLease = await store.ClaimOutboxAsync(secondOwner, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5), 1);
+        var retryLease = await store.ClaimOutboxAsync(secondOwner, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5), 1, cancellationToken: TestContext.Current.CancellationToken);
         var retried = Assert.Single(retryLease);
         Assert.Equal(leased.MessageId, retried.MessageId);
         Assert.Equal(2, retried.Attempts);
         Assert.Equal(secondOwner, retried.LeaseOwner);
-        Assert.True(await store.MarkOutboxProcessedAsync(retried.MessageId, secondOwner, DateTimeOffset.UtcNow));
-        Assert.Empty(await store.ClaimOutboxAsync("integration-owner-c", DateTimeOffset.UtcNow, TimeSpan.FromSeconds(5), 1));
+        Assert.True(await store.MarkOutboxProcessedAsync(retried.MessageId, secondOwner, DateTimeOffset.UtcNow, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Empty(await store.ClaimOutboxAsync("integration-owner-c", now, TimeSpan.FromSeconds(5), 1, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -466,14 +469,14 @@ public sealed class PostgresTradingStoreIntegrationTests
 
         await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
         {
-            await firstProcess.ApplyMigrationsAsync();
-            await firstProcess.EnqueueAsync(outbox);
+            await firstProcess.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            await firstProcess.EnqueueAsync(outbox, cancellationToken: TestContext.Current.CancellationToken);
 
             var claimedBeforeCrash = await firstProcess.ClaimOutboxAsync(
                 "integration-crashed-worker",
                 now,
                 TimeSpan.FromSeconds(1),
-                1);
+                1, cancellationToken: TestContext.Current.CancellationToken);
             var leasedBeforeCrash = Assert.Single(claimedBeforeCrash);
             Assert.Equal(1, leasedBeforeCrash.Attempts);
         }
@@ -485,7 +488,7 @@ public sealed class PostgresTradingStoreIntegrationTests
             "integration-restarted-worker",
             now.AddSeconds(2),
             TimeSpan.FromSeconds(5),
-            1);
+            1, cancellationToken: TestContext.Current.CancellationToken);
         var recoveredMessage = Assert.Single(recovered);
         Assert.Equal(outbox.MessageId, recoveredMessage.MessageId);
         Assert.Equal(2, recoveredMessage.Attempts);
@@ -494,16 +497,16 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.False(await restartedProcess.MarkOutboxProcessedAsync(
             recoveredMessage.MessageId,
             "integration-crashed-worker",
-            now.AddSeconds(2)));
+            now.AddSeconds(2), cancellationToken: TestContext.Current.CancellationToken));
         Assert.True(await restartedProcess.MarkOutboxProcessedAsync(
             recoveredMessage.MessageId,
             "integration-restarted-worker",
-            now.AddSeconds(2)));
+            now.AddSeconds(2), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Empty(await restartedProcess.ClaimOutboxAsync(
             "integration-verification-worker",
             now.AddSeconds(2),
             TimeSpan.FromSeconds(5),
-            1));
+            1, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -517,15 +520,15 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-        await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT");
-        await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT");
+        await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
+        await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
-        var ids = await store.GetKnownTradeIdsAsync();
+        var ids = await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(9_000_001, ids);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordKnownTradeAsync(9_000_001, "ETHUSDT"));
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => store.RecordKnownTradeAsync(-1, "BTCUSDT"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordKnownTradeAsync(9_000_001, "ETHUSDT", cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => store.RecordKnownTradeAsync(-1, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -539,7 +542,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var now = DateTimeOffset.UtcNow;
         var entry = new LedgerEntry(
             LedgerEntryId.New(),
@@ -552,13 +555,13 @@ public sealed class PostgresTradingStoreIntegrationTests
             ],
             IdempotencyKey.New());
 
-        await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT");
-        await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT");
+        await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
+        await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Contains(9_000_002, await store.GetKnownTradeIdsAsync());
-        Assert.Equal(7m, (await store.GetBalanceAsync(new AccountId("atomic-cash"), new Asset("USDT"))).Amount);
+        Assert.Contains(9_000_002, await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(7m, (await store.GetBalanceAsync(new AccountId("atomic-cash"), new Asset("USDT"), cancellationToken: TestContext.Current.CancellationToken)).Amount);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "ETHUSDT"));
+            store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "ETHUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -572,37 +575,37 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var now = DateTimeOffset.UtcNow.AddSeconds(-2);
         var expires = now.AddHours(2);
         var first = RiskPolicyDocument.CreateDraft(
             new RiskPolicy("registry-v1-" + Guid.NewGuid().ToString("N"), 100m, 250m, 25m, 50m, TimeSpan.FromSeconds(5)),
             now, expires, "policy-author");
 
-        await store.SaveRiskPolicyAsync(first);
-        await store.SaveRiskPolicyAsync(first);
+        await store.SaveRiskPolicyAsync(first, cancellationToken: TestContext.Current.CancellationToken);
+        await store.SaveRiskPolicyAsync(first, cancellationToken: TestContext.Current.CancellationToken);
         var conflicting = RiskPolicyDocument.CreateDraft(
             new RiskPolicy(first.Policy.Version, 101m, 250m, 25m, 50m, TimeSpan.FromSeconds(5)),
             now, expires, "policy-author");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveRiskPolicyAsync(conflicting));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveRiskPolicyAsync(conflicting, cancellationToken: TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentException>(() => store.ApproveRiskPolicyAsync(
-            first.Policy.Version, "approval-self", "policy-author", now.AddMinutes(1)));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.ActivateRiskPolicyAsync(first.Policy.Version, now.AddMinutes(1)));
+            first.Policy.Version, "approval-self", "policy-author", now.AddMinutes(1), cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.ActivateRiskPolicyAsync(first.Policy.Version, now.AddMinutes(1), cancellationToken: TestContext.Current.CancellationToken));
 
         var approvedFirst = await store.ApproveRiskPolicyAsync(
-            first.Policy.Version, "approval-v1", "policy-reviewer", now.AddMinutes(1));
+            first.Policy.Version, "approval-v1", "policy-reviewer", now.AddMinutes(1), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(RiskPolicyLifecycle.Approved, approvedFirst.Lifecycle);
-        var activeFirst = await store.ActivateRiskPolicyAsync(first.Policy.Version, now.AddMinutes(2));
+        var activeFirst = await store.ActivateRiskPolicyAsync(first.Policy.Version, now.AddMinutes(2), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(RiskPolicyLifecycle.Active, activeFirst.Lifecycle);
-        Assert.Equal(first.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(3)))?.Policy.Version);
+        Assert.Equal(first.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(3), cancellationToken: TestContext.Current.CancellationToken))?.Policy.Version);
 
         var second = RiskPolicyDocument.CreateDraft(
             new RiskPolicy("registry-v2-" + Guid.NewGuid().ToString("N"), 90m, 200m, 20m, 40m, TimeSpan.FromSeconds(5)),
             now, expires, "policy-author");
-        await store.SaveRiskPolicyAsync(second);
-        await store.ApproveRiskPolicyAsync(second.Policy.Version, "approval-v2", "policy-reviewer", now.AddMinutes(4));
-        await store.ActivateRiskPolicyAsync(second.Policy.Version, now.AddMinutes(5));
-        Assert.Equal(second.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(6)))?.Policy.Version);
+        await store.SaveRiskPolicyAsync(second, cancellationToken: TestContext.Current.CancellationToken);
+        await store.ApproveRiskPolicyAsync(second.Policy.Version, "approval-v2", "policy-reviewer", now.AddMinutes(4), cancellationToken: TestContext.Current.CancellationToken);
+        await store.ActivateRiskPolicyAsync(second.Policy.Version, now.AddMinutes(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(second.Policy.Version, (await store.GetActiveRiskPolicyAsync(now.AddMinutes(6), cancellationToken: TestContext.Current.CancellationToken))?.Policy.Version);
     }
 
     [Fact]
@@ -616,7 +619,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var receivedAt = DateTimeOffset.UtcNow.AddSeconds(-1);
         var record = new AccountStreamEventRecord(
             Guid.NewGuid(), "executionReport", "execution-" + Guid.NewGuid().ToString("N"),
@@ -624,9 +627,9 @@ public sealed class PostgresTradingStoreIntegrationTests
             "{\"e\":\"executionReport\",\"s\":\"BTCUSDT\",\"x\":\"TRADE\"}", "BTCUSDT",
             Guid.NewGuid(), 1, 7);
 
-        Assert.True(await store.AppendAccountStreamEventAsync(record));
-        Assert.False(await store.AppendAccountStreamEventAsync(record));
-        var events = await store.ReadAccountStreamEventsAsync(receivedAt.AddSeconds(-1));
+        Assert.True(await store.AppendAccountStreamEventAsync(record, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await store.AppendAccountStreamEventAsync(record, cancellationToken: TestContext.Current.CancellationToken));
+        var events = await store.ReadAccountStreamEventsAsync(receivedAt.AddSeconds(-1), cancellationToken: TestContext.Current.CancellationToken);
         var persisted = Assert.Single(events, item => item.EventId == record.EventId);
         Assert.Equal(record.PayloadSha256, persisted.PayloadSha256);
         Assert.Equal(record.Symbol, persisted.Symbol);
@@ -638,7 +641,7 @@ public sealed class PostgresTradingStoreIntegrationTests
             record.EventId, record.EventType, record.DedupeKey, record.EventTimeMilliseconds,
             record.ReceivedAtUtc, "{\"e\":\"executionReport\",\"s\":\"ETHUSDT\"}", "ETHUSDT",
             record.SessionId, record.SessionGeneration, record.SubscriptionId);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendAccountStreamEventAsync(conflicting));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AppendAccountStreamEventAsync(conflicting, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -670,32 +673,32 @@ public sealed class PostgresTradingStoreIntegrationTests
 
         await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
         {
-            await firstProcess.ApplyMigrationsAsync();
-            await firstProcess.UpsertOpenOrderAsync(initial);
-            await firstProcess.UpsertOpenOrderAsync(initial);
-            await firstProcess.UpsertOpenOrderAsync(updated);
+            await firstProcess.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            await firstProcess.UpsertOpenOrderAsync(initial, cancellationToken: TestContext.Current.CancellationToken);
+            await firstProcess.UpsertOpenOrderAsync(initial, cancellationToken: TestContext.Current.CancellationToken);
+            await firstProcess.UpsertOpenOrderAsync(updated, cancellationToken: TestContext.Current.CancellationToken);
         }
 
         // A new store instance represents a worker restart. The projection is
         // replayable: only the latest active identity/status is visible.
         await using (var restartedProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
         {
-            var replayed = Assert.Single(await restartedProcess.ReadOpenOrdersAsync());
+            var replayed = Assert.Single(await restartedProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
             Assert.Equal(updated, replayed);
 
-            await restartedProcess.RemoveOpenOrderAsync(clientOrderId);
+            await restartedProcess.RemoveOpenOrderAsync(clientOrderId, cancellationToken: TestContext.Current.CancellationToken);
         }
 
         await using var verificationProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        Assert.Empty(await verificationProcess.ReadOpenOrdersAsync());
+        Assert.Empty(await verificationProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
 
         // A later authoritative open-order snapshot may recreate the identity;
         // this verifies that removal is a projection state transition, not a
         // destructive loss of the ability to replay the order.
-        await verificationProcess.UpsertOpenOrderAsync(updated);
-        var replayedAfterRemoval = Assert.Single(await verificationProcess.ReadOpenOrdersAsync());
+        await verificationProcess.UpsertOpenOrderAsync(updated, cancellationToken: TestContext.Current.CancellationToken);
+        var replayedAfterRemoval = Assert.Single(await verificationProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(updated, replayedAfterRemoval);
-        await verificationProcess.RemoveOpenOrderAsync(clientOrderId);
+        await verificationProcess.RemoveOpenOrderAsync(clientOrderId, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -709,7 +712,7 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var occurredAtUtc = DateTimeOffset.UtcNow;
         var auditEvent = new OperationalControlAuditEvent(
             Guid.NewGuid(),
@@ -721,25 +724,25 @@ public sealed class PostgresTradingStoreIntegrationTests
             occurredAtUtc,
             null);
 
-        Assert.True(await store.AppendOperationalControlAuditEventAsync(auditEvent));
-        Assert.False(await store.AppendOperationalControlAuditEventAsync(auditEvent));
+        Assert.True(await store.AppendOperationalControlAuditEventAsync(auditEvent, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await store.AppendOperationalControlAuditEventAsync(auditEvent, cancellationToken: TestContext.Current.CancellationToken));
 
         var persisted = Assert.Single(
-            await store.ReadOperationalControlAuditEventsAsync(occurredAtUtc.AddSeconds(-1)));
+            await store.ReadOperationalControlAuditEventsAsync(occurredAtUtc.AddSeconds(-1), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(auditEvent, persisted);
         Assert.Equal(auditEvent.PayloadSha256, persisted.PayloadSha256);
 
         var conflictingIdentity = auditEvent with { EventId = Guid.NewGuid() };
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            store.AppendOperationalControlAuditEventAsync(conflictingIdentity));
+            store.AppendOperationalControlAuditEventAsync(conflictingIdentity, cancellationToken: TestContext.Current.CancellationToken));
 
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var delete = new NpgsqlCommand(
             "DELETE FROM trading.operational_control_audit_events WHERE event_id = @event_id;",
             connection);
         delete.Parameters.AddWithValue("event_id", auditEvent.EventId);
-        await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
+        await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -753,34 +756,34 @@ public sealed class PostgresTradingStoreIntegrationTests
         }
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString!));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         var registration = NewExperimentRegistration();
-        Assert.True(await store.AppendExperimentPreregistrationAsync(registration));
-        Assert.False(await store.AppendExperimentPreregistrationAsync(registration));
+        Assert.True(await store.AppendExperimentPreregistrationAsync(registration, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await store.AppendExperimentPreregistrationAsync(registration, cancellationToken: TestContext.Current.CancellationToken));
 
         var trial = new ExperimentTrial(
             1, "baseline", "{\"ema_fast\":20}", Hash("trial-result"),
             ExperimentDecision.Rejected, registration.PreregisteredAtUtc, "integration", new IdempotencyKey("trial-1"));
-        Assert.True(await store.AppendExperimentTrialAsync(registration.ExperimentId, trial));
-        Assert.False(await store.AppendExperimentTrialAsync(registration.ExperimentId, trial));
+        Assert.True(await store.AppendExperimentTrialAsync(registration.ExperimentId, trial, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await store.AppendExperimentTrialAsync(registration.ExperimentId, trial, cancellationToken: TestContext.Current.CancellationToken));
 
         var registry = new InMemoryExperimentRegistry();
         registry.Register(registration);
         var access = registry.AccessHoldout(registration.ExperimentId,
             new HoldoutAccessRequest("reviewer", "locked evaluation", registration.PreregisteredAtUtc,
                 new IdempotencyKey("holdout-1"), true, "approval-integration"));
-        Assert.True(await store.AppendHoldoutAccessAuditAsync(access.Audit));
-        Assert.False(await store.AppendHoldoutAccessAuditAsync(access.Audit));
+        Assert.True(await store.AppendHoldoutAccessAuditAsync(access.Audit, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(await store.AppendHoldoutAccessAuditAsync(access.Audit, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.True(await store.AppendHoldoutContaminationAsync(
             registration.ExperimentId, "reviewer", "manual contamination drill", "holdout-v2",
-            registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1")));
+            registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1"), cancellationToken: TestContext.Current.CancellationToken));
         Assert.False(await store.AppendHoldoutContaminationAsync(
             registration.ExperimentId, "reviewer", "manual contamination drill", "holdout-v2",
-            registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1")));
+            registration.PreregisteredAtUtc.AddMinutes(1), new IdempotencyKey("contamination-1"), cancellationToken: TestContext.Current.CancellationToken));
 
         await using var restartedStore = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        var snapshot = await restartedStore.ReadExperimentGovernanceSnapshotAsync(registration.ExperimentId);
+        var snapshot = await restartedStore.ReadExperimentGovernanceSnapshotAsync(registration.ExperimentId, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(snapshot);
         Assert.Equal(registration.PreregistrationSha256, snapshot!.Preregistration.PreregistrationSha256);
         Assert.Single(snapshot.Trials);
@@ -790,11 +793,11 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.Equal("manual contamination drill", snapshot.ContaminationReason);
 
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var delete = new NpgsqlCommand(
             "DELETE FROM trading.experiment_trials WHERE experiment_id = @experiment_id;", connection);
         delete.Parameters.AddWithValue("experiment_id", registration.ExperimentId.Value);
-        await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync());
+        await Assert.ThrowsAsync<PostgresException>(() => delete.ExecuteNonQueryAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -841,8 +844,8 @@ public sealed class PostgresTradingStoreIntegrationTests
             dataset.Bars[^1].CloseTimeUtc.AddDays(1));
 
         await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
-        Assert.True(await store.AppendExperimentPreregistrationAsync(preregistration));
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(await store.AppendExperimentPreregistrationAsync(preregistration, cancellationToken: TestContext.Current.CancellationToken));
         var trial = new ExperimentTrial(
             1,
             "baseline",
@@ -852,10 +855,10 @@ public sealed class PostgresTradingStoreIntegrationTests
             preregistration.PreregisteredAtUtc,
             "integration",
             IdempotencyKey.New());
-        Assert.True(await store.AppendExperimentTrialAsync(preregistration.ExperimentId, trial));
+        Assert.True(await store.AppendExperimentTrialAsync(preregistration.ExperimentId, trial, cancellationToken: TestContext.Current.CancellationToken));
 
         await using var restarted = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        var snapshot = await restarted.ReadExperimentGovernanceSnapshotAsync(preregistration.ExperimentId);
+        var snapshot = await restarted.ReadExperimentGovernanceSnapshotAsync(preregistration.ExperimentId, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(snapshot);
         using var output = new TemporaryDirectory();
         var input = ExperimentEvidenceWriter.FromGovernanceState(

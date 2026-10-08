@@ -43,8 +43,8 @@ test_command=(
     "$dotnet_command" test "$test_project"
     --no-restore
     --configuration Release
-    --filter 'Category=ShadowSoak'
-    --logger 'console;verbosity=minimal'
+    --minimum-expected-tests 1
+    -- --filter-trait 'Category=ShadowSoak'
 )
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -59,15 +59,12 @@ for ((run_index = 1; run_index <= soak_runs; run_index++)); do
     fi
     tee -a "$test_log" <"$run_log"
 
-    run_summary="$(rg -o 'Passed!.*' "$run_log" | tail -n 1 || true)"
+    run_summary="$(rg -A5 '^Test run summary:' "$run_log" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g' || true)"
     if [[ -z "$run_summary" ]]; then
-        run_summary="No test summary was emitted."
+        run_summary="MTP exit code: $run_status; minimum expected tests: 1."
     fi
     run_summaries+=("Run $run_index: $run_summary")
-    if (( run_status != 0 )) \
-        || [[ ! "$run_summary" =~ Passed! ]] \
-        || [[ ! "$run_summary" =~ Failed:[[:space:]]+0 ]] \
-        || [[ ! "$run_summary" =~ Total:[[:space:]]+[1-9][0-9]* ]]; then
+    if (( run_status != 0 )); then
         all_passed=0
     fi
     rm -f -- "$run_log"

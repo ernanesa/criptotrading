@@ -37,7 +37,7 @@ public sealed class BinanceMarketDataClientTests
             },
             () => transport);
 
-        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)]).GetAsyncEnumerator();
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
         Assert.True(await enumerator.MoveNextAsync());
         var trade = Assert.IsType<BinanceTradeEvent>(enumerator.Current);
         Assert.Equal(42, trade.TradeId);
@@ -63,7 +63,7 @@ public sealed class BinanceMarketDataClientTests
             },
             () => transports.Dequeue());
 
-        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)]).GetAsyncEnumerator();
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
         Assert.True(await enumerator.MoveNextAsync());
         Assert.Equal(43, Assert.IsType<BinanceTradeEvent>(enumerator.Current).TradeId);
     }

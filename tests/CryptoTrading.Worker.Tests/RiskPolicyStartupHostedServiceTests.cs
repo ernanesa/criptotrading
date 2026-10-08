@@ -15,7 +15,7 @@ public sealed class RiskPolicyStartupHostedServiceTests
         var options = Options.Create(new WorkerRuntimeOptions { RiskPolicyRequired = false });
         var service = new RiskPolicyStartupHostedService(store, options, NullLogger<RiskPolicyStartupHostedService>.Instance);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, store.GetActiveCalls);
     }
@@ -27,7 +27,7 @@ public sealed class RiskPolicyStartupHostedServiceTests
         var options = Options.Create(new WorkerRuntimeOptions { RiskPolicyRequired = true });
         var service = new RiskPolicyStartupHostedService(store, options, NullLogger<RiskPolicyStartupHostedService>.Instance);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(TestContext.Current.CancellationToken));
         Assert.Contains("WORKER_RISK_POLICY_REQUIRED=true but no valid active RiskPolicy was found", ex.Message, StringComparison.Ordinal);
     }
 
@@ -54,7 +54,7 @@ public sealed class RiskPolicyStartupHostedServiceTests
         var options = Options.Create(new WorkerRuntimeOptions { RiskPolicyRequired = true, AutonomySymbol = "BTCUSDT" });
         var service = new RiskPolicyStartupHostedService(store, options, NullLogger<RiskPolicyStartupHostedService>.Instance);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(TestContext.Current.CancellationToken));
         Assert.Contains("withdrawals enabled", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -66,7 +66,7 @@ public sealed class RiskPolicyStartupHostedServiceTests
         var options = Options.Create(new WorkerRuntimeOptions { RiskPolicyRequired = true, AutonomySymbol = " " });
         var service = new RiskPolicyStartupHostedService(store, options, NullLogger<RiskPolicyStartupHostedService>.Instance);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(CancellationToken.None));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(TestContext.Current.CancellationToken));
         Assert.Contains("Autonomy symbol is invalid", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -78,7 +78,7 @@ public sealed class RiskPolicyStartupHostedServiceTests
         var options = Options.Create(new WorkerRuntimeOptions { RiskPolicyRequired = true, AutonomySymbol = "BTCUSDT" });
         var service = new RiskPolicyStartupHostedService(store, options, NullLogger<RiskPolicyStartupHostedService>.Instance);
 
-        await service.StartAsync(CancellationToken.None);
+        await service.StartAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, store.GetActiveCalls);
     }

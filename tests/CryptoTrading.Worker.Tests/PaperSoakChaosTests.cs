@@ -45,8 +45,8 @@ public sealed class PaperSoakChaosTests
                 OutboxRecordStatus.Pending,
                 command.CreatedAtUtc);
 
-            await store.EnqueueAsync(record);
-            await store.EnqueueAsync(record); // duplicate producer delivery
+            await store.EnqueueAsync(record, cancellationToken: TestContext.Current.CancellationToken);
+            await store.EnqueueAsync(record, cancellationToken: TestContext.Current.CancellationToken); // duplicate producer delivery
         }
 
         Assert.Equal(orderCount, store.Count);
@@ -58,7 +58,7 @@ public sealed class PaperSoakChaosTests
             cycle++;
             Assert.True(cycle <= orderCount * 8, "The bounded chaos drill did not converge.");
             var owner = $"paper-chaos-worker-{cycle:D3}"; // each cycle is a process restart
-            var claimed = await store.ClaimOutboxAsync(owner, now, TimeSpan.FromSeconds(2), 1);
+            var claimed = await store.ClaimOutboxAsync(owner, now, TimeSpan.FromSeconds(2), 1, cancellationToken: TestContext.Current.CancellationToken);
 
             if (claimed.Count == 0)
             {
@@ -69,8 +69,8 @@ public sealed class PaperSoakChaosTests
             var message = Assert.Single(claimed);
             try
             {
-                await executor.ExecuteAsync(message);
-                Assert.True(await store.MarkOutboxProcessedAsync(message.MessageId, owner, now));
+                await executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken);
+                Assert.True(await store.MarkOutboxProcessedAsync(message.MessageId, owner, now, cancellationToken: TestContext.Current.CancellationToken));
             }
             catch (SimulatedWorkerCrashException)
             {
@@ -81,7 +81,7 @@ public sealed class PaperSoakChaosTests
             }
             catch (IOException exception)
             {
-                Assert.True(await store.FailOutboxAsync(message.MessageId, owner, exception.GetType().Name, now));
+                Assert.True(await store.FailOutboxAsync(message.MessageId, owner, exception.GetType().Name, now, cancellationToken: TestContext.Current.CancellationToken));
                 now = now.AddSeconds(1);
             }
         }

@@ -22,7 +22,7 @@ public sealed class SubmissionDispatchSafetyTests
         var store = new TestSubmissionStore();
         var executor = CreateExecutor(command, client, store, new TestSubmissionGuard(), new RecordingOrderProjectionStore());
 
-        await executor.ExecuteAsync(message);
+        await executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, client.SubmitCalls);
         Assert.Equal(0, client.QueryCalls);
@@ -41,7 +41,7 @@ public sealed class SubmissionDispatchSafetyTests
         var guard = new TestSubmissionGuard { Reject = true };
         var executor = CreateExecutor(command, client, submissions, guard, projection);
 
-        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => executor.ExecuteAsync(message));
+        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(0, client.SubmitCalls);
         Assert.Empty(projection.OpenOrders);
@@ -58,7 +58,7 @@ public sealed class SubmissionDispatchSafetyTests
         var guard = new TestSubmissionGuard { RejectFinal = true };
         var executor = CreateExecutor(command, client, new TestSubmissionStore(), guard, projection);
 
-        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(message));
+        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(0, client.SubmitCalls);
         Assert.Equal(0, client.QueryCalls);
@@ -73,7 +73,7 @@ public sealed class SubmissionDispatchSafetyTests
         var projection = new RecordingOrderProjectionStore(failOnUpsert: 2);
         var executor = CreateExecutor(command, client, new TestSubmissionStore(), new TestSubmissionGuard(), projection);
 
-        await executor.ExecuteAsync(CreateMessage(command, attempts: 1));
+        await executor.ExecuteAsync(CreateMessage(command, attempts: 1), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, client.SubmitCalls);
         Assert.Equal(1, client.QueryCalls);

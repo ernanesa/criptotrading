@@ -14,7 +14,7 @@ public sealed class ReliableAlertDeliveryTests
             sink,
             new TradingAlertRetryOptions { MaxAttempts = 3, InitialDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
 
-        await retrying.DeliverAsync(CreateAlert()).ConfigureAwait(true);
+        await retrying.DeliverAsync(CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true);
 
         Assert.Equal(3, sink.Attempts);
         Assert.Equal(1, sink.Deliveries);
@@ -28,7 +28,8 @@ public sealed class ReliableAlertDeliveryTests
             sink,
             new TradingAlertRetryOptions { MaxAttempts = 3, InitialDelay = TimeSpan.Zero, MaxDelay = TimeSpan.Zero });
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => await retrying.DeliverAsync(CreateAlert()).ConfigureAwait(true)).ConfigureAwait(true);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await retrying.DeliverAsync(
+            CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true)).ConfigureAwait(true);
 
         Assert.Equal(3, sink.Attempts);
         Assert.Equal(0, sink.Deliveries);

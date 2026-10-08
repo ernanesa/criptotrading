@@ -16,10 +16,10 @@ public sealed class RuntimeTransitionJournalTests
             using var journal = new RuntimeTransitionJournal(path);
             var first = new RuntimeStateTransition(RuntimeState.Stopped, RuntimeState.Bootstrapping, 1, "startup", DateTimeOffset.UnixEpoch);
             var second = new RuntimeStateTransition(RuntimeState.Bootstrapping, RuntimeState.Reconciling, 2, "reconcile", DateTimeOffset.UnixEpoch.AddSeconds(1));
-            await journal.AppendAsync(first);
-            await journal.AppendAsync(second);
+            await journal.AppendAsync(first, cancellationToken: TestContext.Current.CancellationToken);
+            await journal.AppendAsync(second, cancellationToken: TestContext.Current.CancellationToken);
 
-            var lines = await File.ReadAllLinesAsync(path);
+            var lines = await File.ReadAllLinesAsync(path, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(2, lines.Length);
             using var firstDocument = JsonDocument.Parse(lines[0]);
             using var secondDocument = JsonDocument.Parse(lines[1]);
@@ -49,14 +49,14 @@ public sealed class RuntimeTransitionJournalTests
             var second = new RuntimeStateTransition(RuntimeState.Bootstrapping, RuntimeState.Reconciling, 2, "reconcile", DateTimeOffset.UnixEpoch.AddSeconds(1));
             using (var firstJournal = new RuntimeTransitionJournal(path))
             {
-                await firstJournal.AppendAsync(first);
+                await firstJournal.AppendAsync(first, cancellationToken: TestContext.Current.CancellationToken);
             }
 
             using var restartedJournal = new RuntimeTransitionJournal(path);
             Assert.Equal(1, restartedJournal.LastRevision);
-            await restartedJournal.AppendAsync(second);
+            await restartedJournal.AppendAsync(second, cancellationToken: TestContext.Current.CancellationToken);
 
-            var lines = await File.ReadAllLinesAsync(path);
+            var lines = await File.ReadAllLinesAsync(path, cancellationToken: TestContext.Current.CancellationToken);
             using var secondDocument = JsonDocument.Parse(lines[1]);
             Assert.Equal(2, secondDocument.RootElement.GetProperty("transition").GetProperty("revision").GetInt64());
             var previousHash = secondDocument.RootElement.GetProperty("previousHash").GetString();

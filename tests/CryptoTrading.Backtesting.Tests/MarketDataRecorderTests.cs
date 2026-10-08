@@ -19,16 +19,18 @@ public sealed class MarketDataRecorderTests
                 "trade",
                 "btcusdt@trade",
                 "BTCUSDT",
-                new { price = 102.5m, quantity = 0.01m });
+                new { price = 102.5m, quantity = 0.01m },
+                TestContext.Current.CancellationToken);
             await recorder.AppendAsync(
                 DateTimeOffset.Parse("2026-09-19T12:00:01+00:00", CultureInfo.InvariantCulture),
                 received.AddSeconds(1),
                 "trade",
                 "btcusdt@trade",
                 "BTCUSDT",
-                new { price = 101.5m, quantity = 0.02m });
+                new { price = 101.5m, quantity = 0.02m },
+                TestContext.Current.CancellationToken);
 
-            var replay = await recorder.ReadReplayAsync();
+            var replay = await recorder.ReadReplayAsync(cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Equal(2, replay.Records.Count);
             Assert.Equal(1, replay.Records[0].Sequence);
@@ -51,9 +53,9 @@ public sealed class MarketDataRecorderTests
         {
             var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00", CultureInfo.InvariantCulture);
             using var first = new MarketDataRecorder(directory);
-            var firstRecord = await first.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { value = 1 });
+            var firstRecord = await first.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { value = 1 }, TestContext.Current.CancellationToken);
             using var second = new MarketDataRecorder(directory);
-            var secondRecord = await second.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { value = 2 });
+            var secondRecord = await second.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { value = 2 }, TestContext.Current.CancellationToken);
 
             Assert.Equal(0, firstRecord.Sequence);
             Assert.Equal(1, secondRecord.Sequence);
@@ -74,10 +76,10 @@ public sealed class MarketDataRecorderTests
             using (var first = new MarketDataRecorder(directory))
             {
                 await first.AppendAsync(timestamp, timestamp.AddMinutes(1), "kline-rest", "rest:klines:1d", "BTCUSDT",
-                    new { closeTimeUtc = timestamp, close = 100m });
-                var written = await first.ReadReplayAsync();
+                    new { closeTimeUtc = timestamp, close = 100m }, TestContext.Current.CancellationToken);
+                var written = await first.ReadReplayAsync(cancellationToken: TestContext.Current.CancellationToken);
                 using var second = new MarketDataRecorder(directory);
-                var restarted = await second.ReadReplayAsync();
+                var restarted = await second.ReadReplayAsync(cancellationToken: TestContext.Current.CancellationToken);
                 Assert.Equal(written.DatasetChecksum, restarted.DatasetChecksum);
             }
         }
@@ -95,14 +97,15 @@ public sealed class MarketDataRecorderTests
         {
             using var recorder = new MarketDataRecorder(directory);
             var timestamp = DateTimeOffset.Parse("2026-09-19T12:00:00+00:00", CultureInfo.InvariantCulture);
-            await recorder.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { price = 100m });
+            await recorder.AppendAsync(timestamp, timestamp, "trade", "stream", "BTCUSDT", new { price = 100m }, TestContext.Current.CancellationToken);
             var path = Assert.Single(Directory.EnumerateFiles(directory, "*.jsonl"));
-            var line = await File.ReadAllTextAsync(path);
+            var line = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
             var changed = line.Replace("100", "101", StringComparison.Ordinal);
             Assert.NotEqual(line, changed);
-            await File.WriteAllTextAsync(path, changed);
+            await File.WriteAllTextAsync(path, changed, TestContext.Current.CancellationToken);
 
-            var exception = await Assert.ThrowsAsync<InvalidDataException>(() => recorder.ReadReplayAsync());
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => recorder.ReadReplayAsync(cancellationToken: TestContext.Current.CancellationToken));
             Assert.Contains("checksum mismatch", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
@@ -119,13 +122,14 @@ public sealed class MarketDataRecorderTests
         {
             using var recorder = new MarketDataRecorder(directory);
             var oldTime = DateTimeOffset.Parse("2026-09-17T12:00:00+00:00", CultureInfo.InvariantCulture);
-            await recorder.AppendAsync(oldTime, oldTime, "trade", "stream", "BTCUSDT", new { value = 1 });
+            await recorder.AppendAsync(oldTime, oldTime, "trade", "stream", "BTCUSDT", new { value = 1 }, TestContext.Current.CancellationToken);
             var oldPath = Assert.Single(Directory.EnumerateFiles(directory, "*.jsonl"));
             File.SetLastWriteTimeUtc(oldPath, DateTime.UtcNow.Subtract(TimeSpan.FromDays(3)));
 
             var result = await recorder.ApplyRetentionAsync(
                 new MarketDataRetentionPolicy(TimeSpan.FromDays(1), maximumBytes: 1024 * 1024),
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                TestContext.Current.CancellationToken);
 
             Assert.Equal(1, result.FilesDeleted);
             Assert.Empty(Directory.EnumerateFiles(directory, "*.jsonl"));

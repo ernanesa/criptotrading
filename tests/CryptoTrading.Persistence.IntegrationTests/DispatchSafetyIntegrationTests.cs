@@ -17,8 +17,8 @@ public sealed class DispatchSafetyIntegrationTests
         await using var first = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
         await using var second = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
 
-        await Task.WhenAll(first.ApplyMigrationsAsync(), second.ApplyMigrationsAsync());
-        await Task.WhenAll(first.CheckConnectivityAsync(), second.CheckConnectivityAsync());
+        await Task.WhenAll(first.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken), second.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken));
+        await Task.WhenAll(first.CheckConnectivityAsync(cancellationToken: TestContext.Current.CancellationToken), second.CheckConnectivityAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -28,16 +28,16 @@ public sealed class DispatchSafetyIntegrationTests
         await using (store)
         {
             var tooShort = await InsertLeasedMessageAsync(connectionString, "lease-short", DateTimeOffset.UtcNow.AddSeconds(2));
-            Assert.True(await store.TryBeginSubmissionAsync(tooShort, TimeSpan.FromSeconds(12)));
-            Assert.True(await store.ValidateOutboxLeaseAsync(tooShort, TimeSpan.FromSeconds(10)));
+            Assert.True(await store.TryBeginSubmissionAsync(tooShort, TimeSpan.FromSeconds(12), cancellationToken: TestContext.Current.CancellationToken));
+            Assert.True(await store.ValidateOutboxLeaseAsync(tooShort, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken));
             await SetLeaseExpiryAsync(connectionString, tooShort.MessageId, TimeSpan.FromSeconds(5));
-            Assert.False(await store.ValidateOutboxLeaseAsync(tooShort, TimeSpan.FromSeconds(10)));
+            Assert.False(await store.ValidateOutboxLeaseAsync(tooShort, TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken));
 
             var expired = await InsertLeasedMessageAsync(connectionString, "lease-expired", DateTimeOffset.UtcNow.AddSeconds(-1));
-            Assert.False(await store.TryBeginSubmissionAsync(expired, TimeSpan.FromSeconds(12)));
+            Assert.False(await store.TryBeginSubmissionAsync(expired, TimeSpan.FromSeconds(12), cancellationToken: TestContext.Current.CancellationToken));
 
             var staleOwner = tooShort with { LeaseOwner = "different-owner", LockedUntil = DateTimeOffset.UtcNow.AddMinutes(1) };
-            Assert.False(await store.TryBeginSubmissionAsync(staleOwner, TimeSpan.FromSeconds(12)));
+            Assert.False(await store.TryBeginSubmissionAsync(staleOwner, TimeSpan.FromSeconds(12), cancellationToken: TestContext.Current.CancellationToken));
         }
     }
 
@@ -49,12 +49,12 @@ public sealed class DispatchSafetyIntegrationTests
         {
             var message = await InsertLeasedMessageAsync(connectionString, "lease-race", DateTimeOffset.UtcNow.AddMinutes(1));
             var outcomes = await Task.WhenAll(
-                store.TryBeginSubmissionAsync(message, TimeSpan.FromSeconds(12)),
-                store.TryBeginSubmissionAsync(message, TimeSpan.FromSeconds(12)));
+                store.TryBeginSubmissionAsync(message, TimeSpan.FromSeconds(12), cancellationToken: TestContext.Current.CancellationToken),
+                store.TryBeginSubmissionAsync(message, TimeSpan.FromSeconds(12), cancellationToken: TestContext.Current.CancellationToken));
 
             Assert.Single(outcomes, item => item);
             Assert.Single(outcomes, item => !item);
-            Assert.True(await store.HasSubmissionStartedAsync(message));
+            Assert.True(await store.HasSubmissionStartedAsync(message, cancellationToken: TestContext.Current.CancellationToken));
         }
     }
 
@@ -62,7 +62,7 @@ public sealed class DispatchSafetyIntegrationTests
     {
         var connectionString = GetConnectionString();
         var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         return (store, connectionString);
     }
 
@@ -81,7 +81,7 @@ public sealed class DispatchSafetyIntegrationTests
         var owner = "dispatch-safety-" + suffix;
         const string payload = "{\"probe\":\"dispatch-safety\"}";
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var command = new NpgsqlCommand(
             """
             INSERT INTO trading.outbox_messages
@@ -99,7 +99,7 @@ public sealed class DispatchSafetyIntegrationTests
         command.Parameters.AddWithValue("available_at", new DateTimeOffset(2099, 12, 31, 0, 0, 0, TimeSpan.Zero));
         command.Parameters.AddWithValue("locked_until", lockedUntil);
         command.Parameters.AddWithValue("lease_owner", owner);
-        await command.ExecuteNonQueryAsync();
+        await command.ExecuteNonQueryAsync(cancellationToken: TestContext.Current.CancellationToken);
         return new LeasedOutboxMessage(messageId, OrderExecutionPipeline.SubmitOrderMessageType,
             new CorrelationId(correlationId), new IdempotencyKey("dispatch-safety-" + suffix), payload,
             DateTimeOffset.UtcNow, 1, lockedUntil, owner);
@@ -108,12 +108,12 @@ public sealed class DispatchSafetyIntegrationTests
     private static async Task SetLeaseExpiryAsync(string connectionString, Guid messageId, TimeSpan remaining)
     {
         await using var connection = new NpgsqlConnection(connectionString);
-        await connection.OpenAsync();
+        await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
         await using var command = new NpgsqlCommand(
             "UPDATE trading.outbox_messages SET locked_until = clock_timestamp() + @remaining WHERE message_id = @message_id;",
             connection);
         command.Parameters.AddWithValue("remaining", remaining);
         command.Parameters.AddWithValue("message_id", messageId);
-        await command.ExecuteNonQueryAsync();
+        await command.ExecuteNonQueryAsync(cancellationToken: TestContext.Current.CancellationToken);
     }
 }

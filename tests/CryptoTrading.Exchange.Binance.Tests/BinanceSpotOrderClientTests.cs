@@ -17,7 +17,7 @@ public sealed class BinanceSpotOrderClientTests
         using var handler = new RecordingHandler();
         var client = CreateClient(handler, enableExecution: false);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SubmitAsync(Request()));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SubmitAsync(Request(), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Empty(handler.Requests);
     }
@@ -30,7 +30,7 @@ public sealed class BinanceSpotOrderClientTests
             "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-test-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"NEW\",\"transactTime\":1789905600000}");
         var client = CreateClient(handler, enableExecution: true);
 
-        var result = await client.SubmitAsync(Request());
+        var result = await client.SubmitAsync(Request(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(42, result.OrderId);
         Assert.Equal("BTCUSDT", result.Symbol);
@@ -57,8 +57,8 @@ public sealed class BinanceSpotOrderClientTests
             "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-test-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"CANCELED\",\"transactTime\":1789905600000}");
         var client = CreateClient(handler, enableExecution: true);
 
-        var queried = await client.QueryByClientOrderIdAsync(" btcusdt ", "ct-test-1");
-        var cancelled = await client.CancelAsync("BTCUSDT", "ct-test-1");
+        var queried = await client.QueryByClientOrderIdAsync(" btcusdt ", "ct-test-1", cancellationToken: TestContext.Current.CancellationToken);
+        var cancelled = await client.CancelAsync("BTCUSDT", "ct-test-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("CANCELED", queried.Status);
         Assert.Equal("CANCELED", cancelled.Status);
@@ -91,9 +91,9 @@ public sealed class BinanceSpotOrderClientTests
             "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-test-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"CANCELED\",\"transactTime\":1789905600000}");
         var client = CreateClient(handler, enableExecution: true);
 
-        _ = await client.SubmitAsync(Request());
-        _ = await client.QueryByClientOrderIdAsync("BTCUSDT", "ct-test-1");
-        _ = await client.CancelAsync("BTCUSDT", "ct-test-1");
+        _ = await client.SubmitAsync(Request(), cancellationToken: TestContext.Current.CancellationToken);
+        _ = await client.QueryByClientOrderIdAsync("BTCUSDT", "ct-test-1", cancellationToken: TestContext.Current.CancellationToken);
+        _ = await client.CancelAsync("BTCUSDT", "ct-test-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(["submit", "query", "cancel"], activities
             .Select(activity => activity.GetTagItem("crypto.operation")?.ToString() ?? string.Empty)
@@ -112,7 +112,7 @@ public sealed class BinanceSpotOrderClientTests
         using var handler = new RecordingHandler("{\"serverTime\":1789905600000}", throwTransportError: true);
         var client = CreateClient(handler, enableExecution: true);
 
-        var exception = await Assert.ThrowsAsync<BinanceOrderSubmissionAmbiguousException>(() => client.SubmitAsync(Request()));
+        var exception = await Assert.ThrowsAsync<BinanceOrderSubmissionAmbiguousException>(() => client.SubmitAsync(Request(), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("ct-test-1", exception.ClientOrderId);
         Assert.Equal(2, handler.Requests.Count);
@@ -127,7 +127,7 @@ public sealed class BinanceSpotOrderClientTests
             "{}");
         var client = CreateClient(handler, enableExecution: true);
 
-        await Assert.ThrowsAsync<BinanceOrderSubmissionAmbiguousException>(() => client.SubmitAsync(Request()));
+        await Assert.ThrowsAsync<BinanceOrderSubmissionAmbiguousException>(() => client.SubmitAsync(Request(), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(2, handler.Requests.Count);
     }
@@ -141,7 +141,7 @@ public sealed class BinanceSpotOrderClientTests
             "{\"code\":-1013,\"msg\":\"Filter failure: LOT_SIZE\"}");
         var client = CreateClient(handler, enableExecution: true);
 
-        var exception = await Assert.ThrowsAsync<BinanceOrderRejectedException>(() => client.SubmitAsync(Request()));
+        var exception = await Assert.ThrowsAsync<BinanceOrderRejectedException>(() => client.SubmitAsync(Request(), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal("ct-test-1", exception.ClientOrderId);
         Assert.Equal(HttpStatusCode.BadRequest, exception.StatusCode);

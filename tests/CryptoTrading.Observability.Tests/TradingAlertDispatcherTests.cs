@@ -14,8 +14,9 @@ public sealed class TradingAlertDispatcherTests
         using var dispatcher = new TradingAlertDispatcher(sink);
         var alert = CreateAlert();
 
-        Assert.True(await dispatcher.PublishAsync(alert).ConfigureAwait(true));
-        Assert.False(await dispatcher.PublishAsync(alert with { CorrelationId = "second-correlation" }).ConfigureAwait(true));
+        Assert.True(await dispatcher.PublishAsync(alert, TestContext.Current.CancellationToken).ConfigureAwait(true));
+        Assert.False(await dispatcher.PublishAsync(
+            alert with { CorrelationId = "second-correlation" }, TestContext.Current.CancellationToken).ConfigureAwait(true));
 
         var delivered = Assert.Single(sink.Alerts);
         Assert.Equal("TESTNET", delivered.Environment);
@@ -32,8 +33,9 @@ public sealed class TradingAlertDispatcherTests
         var sink = new FailingSink();
         using var dispatcher = new TradingAlertDispatcher(sink);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(async () => await dispatcher.PublishAsync(CreateAlert()).ConfigureAwait(true)).ConfigureAwait(true);
-        Assert.True(await dispatcher.PublishAsync(CreateAlert()).ConfigureAwait(true));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await dispatcher.PublishAsync(
+            CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true)).ConfigureAwait(true);
+        Assert.True(await dispatcher.PublishAsync(CreateAlert(), TestContext.Current.CancellationToken).ConfigureAwait(true));
         Assert.Equal(2, sink.Attempts);
     }
 
@@ -44,7 +46,8 @@ public sealed class TradingAlertDispatcherTests
         using var dispatcher = new TradingAlertDispatcher(sink);
         var alert = CreateAlert() with { OccurredAtUtc = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.FromHours(-3)) };
 
-        await Assert.ThrowsAsync<ArgumentException>(async () => await dispatcher.PublishAsync(alert).ConfigureAwait(true)).ConfigureAwait(true);
+        await Assert.ThrowsAsync<ArgumentException>(async () => await dispatcher.PublishAsync(
+            alert, TestContext.Current.CancellationToken).ConfigureAwait(true)).ConfigureAwait(true);
         Assert.Empty(sink.Alerts);
     }
 
@@ -55,10 +58,10 @@ public sealed class TradingAlertDispatcherTests
         try
         {
             using var sink = new JsonlTradingAlertSink(directory);
-            await sink.DeliverAsync(CreateAlert());
+            await sink.DeliverAsync(CreateAlert(), TestContext.Current.CancellationToken);
 
             var file = Assert.Single(Directory.EnumerateFiles(directory, "alerts-*.jsonl"));
-            var line = await File.ReadAllTextAsync(file).ConfigureAwait(true);
+            var line = await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken).ConfigureAwait(true);
             var persisted = JsonSerializer.Deserialize<TradingAlert>(line, JsonOptions);
             Assert.Equal("reconciliation:BTCUSDT", persisted?.DeduplicationKey);
             Assert.DoesNotContain("secret", line, StringComparison.OrdinalIgnoreCase);

@@ -19,7 +19,7 @@ public sealed class BinanceSpotAccountClientTests
         );
         var client = CreateClient(handler);
 
-        var account = await client.GetAccountAsync();
+        var account = await client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(account.CanTrade);
         Assert.Single(account.Balances);
@@ -48,7 +48,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account/commission", "{\"symbol\":\"BTCUSDT\",\"standardCommission\":{\"maker\":\"0.001\",\"taker\":\"0.002\",\"buyer\":\"0.0001\",\"seller\":\"0.0002\"},\"specialCommission\":{\"maker\":\"0.003\",\"taker\":\"0.004\",\"buyer\":\"0.005\",\"seller\":\"0.006\"},\"taxCommission\":{\"maker\":\"0.00001\",\"taker\":\"0.00002\",\"buyer\":\"0.00003\",\"seller\":\"0.00004\"},\"discount\":{\"enabledForAccount\":true,\"enabledForSymbol\":false,\"discountAsset\":\"BNB\",\"discount\":\"0.75\"}}"));
         var client = CreateClient(handler);
 
-        var snapshot = await client.GetCommissionAsync(" btcusdt ");
+        var snapshot = await client.GetCommissionAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("BTCUSDT", snapshot.Response.Symbol);
         Assert.Equal("0.003", snapshot.Response.SpecialCommission.Maker);
@@ -69,7 +69,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account/commission", "{\"symbol\":\"BTCUSDT\",\"standardCommission\":{\"maker\":\"0.001\",\"taker\":\"0.002\",\"buyer\":\"0\",\"seller\":\"0\"},\"specialCommission\":null,\"taxCommission\":{\"maker\":\"0\",\"taker\":\"0\",\"buyer\":\"0\",\"seller\":\"0\"},\"discount\":{\"enabledForAccount\":false,\"enabledForSymbol\":false,\"discountAsset\":null,\"discount\":null}}"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetCommissionAsync("BTCUSDT"));
+        await Assert.ThrowsAsync<JsonException>(() => client.GetCommissionAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account/commission", "{\"symbol\":\"BTCUSDT\",\"standardCommission\":{\"maker\":\"0.00000000\",\"taker\":\"0.00000000\",\"buyer\":\"0.00000000\",\"seller\":\"0.00000000\"},\"specialCommission\":{\"maker\":\"0.00000000\",\"taker\":\"0.00000000\",\"buyer\":\"0.00000000\",\"seller\":\"0.00000000\"},\"taxCommission\":{\"maker\":\"0.00000000\",\"taker\":\"0.00000000\",\"buyer\":\"0.00000000\",\"seller\":\"0.00000000\"},\"discount\":{\"enabledForAccount\":true,\"enabledForSymbol\":true,\"discountAsset\":null,\"discount\":\"0.00000000\"}}"));
         var client = CreateClient(handler);
 
-        var snapshot = await client.GetCommissionAsync("BTCUSDT");
+        var snapshot = await client.GetCommissionAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("BTCUSDT", snapshot.Response.Symbol);
         Assert.Null(snapshot.Response.Discount.DiscountAsset);
@@ -97,8 +97,8 @@ public sealed class BinanceSpotAccountClientTests
         );
         var client = CreateClient(handler);
 
-        var orders = await client.GetOpenOrdersAsync(" btcusdt ");
-        var trades = await client.GetMyTradesAsync("btcusdt", new BinanceTradeQuery(FromId: 4, Limit: 25));
+        var orders = await client.GetOpenOrdersAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
+        var trades = await client.GetMyTradesAsync("btcusdt", new BinanceTradeQuery(FromId: 4, Limit: 25), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(orders);
         Assert.Single(trades);
@@ -121,7 +121,7 @@ public sealed class BinanceSpotAccountClientTests
         using var handler = new RecordingHandler(("time", "{\"serverTime\":1789819260000}"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<BinanceClockDriftException>(() => client.GetAccountAsync());
+        await Assert.ThrowsAsync<BinanceClockDriftException>(() => client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Single(handler.Requests);
         Assert.DoesNotContain(handler.Requests, request => request.RequestUri!.AbsolutePath.EndsWith("/v3/account", StringComparison.Ordinal));
@@ -135,7 +135,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"USDT\",\"free\":\"-1\",\"locked\":\"0\"}]}"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -146,7 +146,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":true,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[]}"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":true,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[]}"));
         var client = CreateClient(handler, allowTestnetWithdrawCapability: true);
 
-        var account = await client.GetAccountAsync();
+        var account = await client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(account.CanWithdraw);
         Assert.Equal(2, handler.Requests.Count);
@@ -172,7 +172,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"testasset1\",\"free\":\"1\",\"locked\":\"0\"}]}"));
         var client = CreateClient(handler);
 
-        var account = await client.GetAccountAsync();
+        var account = await client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("testasset1", account.Balances.Single().Asset);
     }
@@ -185,7 +185,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"TEST-ASSET_1\",\"free\":\"1\",\"locked\":\"0\"}]}"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[],\"permissions\":[\"MARGIN\"]}"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync());
+        await Assert.ThrowsAsync<JsonException>(() => client.GetAccountAsync(cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -207,7 +207,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/openOrders", "[{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"local-1\",\"price\":\"100\",\"origQty\":\"0.01\",\"executedQty\":\"0.02\",\"cummulativeQuoteQty\":\"0\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"BUY\"}]"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetOpenOrdersAsync("BTCUSDT"));
+        await Assert.ThrowsAsync<JsonException>(() => client.GetOpenOrdersAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -218,7 +218,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/myTrades", "[{\"symbol\":\"BTCUSDT\",\"id\":7,\"orderId\":42,\"price\":\"100\",\"qty\":\"0.01\",\"quoteQty\":\"1\",\"commission\":\"0.001\",\"commissionAsset\":null,\"time\":1,\"isBuyer\":true,\"isMaker\":false,\"isBestMatch\":true}]"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetMyTradesAsync("BTCUSDT"));
+        await Assert.ThrowsAsync<JsonException>(() => client.GetMyTradesAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -229,7 +229,7 @@ public sealed class BinanceSpotAccountClientTests
             ("v3/openOrders", "[{\"symbol\":\"BTC-USDT\",\"orderId\":42,\"clientOrderId\":\"local-1\",\"price\":\"not-a-number\",\"origQty\":\"0.01\",\"executedQty\":\"0\",\"cummulativeQuoteQty\":\"0\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"BUY\"}]"));
         var client = CreateClient(handler);
 
-        await Assert.ThrowsAsync<JsonException>(() => client.GetOpenOrdersAsync("BTCUSDT"));
+        await Assert.ThrowsAsync<JsonException>(() => client.GetOpenOrdersAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]

@@ -16,9 +16,9 @@ public sealed class ReconciliationReportWriterTests
             2,
             1,
             3,
-            4));
+            4), cancellationToken: TestContext.Current.CancellationToken);
 
-        var lines = await File.ReadAllLinesAsync(path);
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Single(lines);
         Assert.Contains("READ_ONLY_RECONCILIATION", lines[0], StringComparison.Ordinal);
         Assert.Contains("unknownTradeCount", lines[0], StringComparison.Ordinal);
@@ -40,7 +40,7 @@ public sealed class ReconciliationReportWriterTests
             true,
             1,
             0,
-            0)).AsTask());
+            0), cancellationToken: TestContext.Current.CancellationToken).AsTask());
     }
 
     [Fact]
@@ -55,7 +55,7 @@ public sealed class ReconciliationReportWriterTests
             true,
             1,
             1,
-            0)).AsTask());
+            0), cancellationToken: TestContext.Current.CancellationToken).AsTask());
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public sealed class ReconciliationReportWriterTests
             1,
             1,
             0,
-            ExecutionMode: "LIVE")).AsTask());
+            ExecutionMode: "LIVE"), cancellationToken: TestContext.Current.CancellationToken).AsTask());
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class ReconciliationReportWriterTests
             false,
             0,
             0,
-            0)).AsTask());
+            0), cancellationToken: TestContext.Current.CancellationToken).AsTask());
     }
 
     private static void AssertUserOnlyFileMode(string path)
