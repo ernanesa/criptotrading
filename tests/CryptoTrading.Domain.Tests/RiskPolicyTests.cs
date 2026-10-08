@@ -110,7 +110,7 @@ public sealed class RiskPolicyTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new RiskPolicy("x", 0m, 1m, 1m, 1m, TimeSpan.FromSeconds(1)));
         Assert.Throws<ArgumentOutOfRangeException>(() => Request(requested: -1m));
         Assert.Throws<ArgumentException>(() => new RiskEvaluationRequest(1m, 0m, 0m, 0m,
-            DateTimeOffset.Now, DateTimeOffset.UtcNow));
+            new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.FromHours(-3)), DateTimeOffset.UtcNow));
     }
 
     private static RiskEvaluationRequest Request(

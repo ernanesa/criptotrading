@@ -1,41 +1,32 @@
+#pragma warning disable CA2007 // Database assertions follow the integration test task context.
+
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;
 using Xunit;
+using Xunit.Sdk;
 
-namespace CryptoTrading.Persistence.Tests;
+namespace CryptoTrading.Persistence.IntegrationTests;
 
 public sealed class AutonomousLearningPersistenceTests
 {
     private static readonly Symbol BtcUsdt = new("BTCUSDT");
 
-    private static PostgresTradingStore CreateStore()
+    private static async Task<PostgresTradingStore> CreateStoreAsync()
     {
         var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
-        if (string.IsNullOrWhiteSpace(connectionString) && File.Exists(".env"))
-        {
-            foreach (var line in File.ReadAllLines(".env"))
-            {
-                if (line.StartsWith("POSTGRES_CONNECTION_STRING=", StringComparison.OrdinalIgnoreCase))
-                {
-                    connectionString = line["POSTGRES_CONNECTION_STRING=".Length..].Trim();
-                    break;
-                }
-            }
-        }
-
         if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            connectionString = "Host=127.0.0.1;Port=5432;Database=cryptotrading;Username=cryptotrading;Password=cryptotrading_local_pwd";
-        }
+            throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
 
-        return new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        return store;
     }
 
     [Fact]
     public async Task MarketRegimeSnapshotPersistenceRoundTrip()
     {
-        await using var store = CreateStore();
+        await using var store = await CreateStoreAsync();
         var now = DateTimeOffset.UtcNow;
         var snapshot = new MarketRegimeSnapshot(
             BtcUsdt,
@@ -65,7 +56,7 @@ public sealed class AutonomousLearningPersistenceTests
     [Fact]
     public async Task ModelStrategyRegistryDurableLifecycleManagement()
     {
-        await using var store = CreateStore();
+        await using var store = await CreateStoreAsync();
         var now = DateTimeOffset.UtcNow;
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var strategyId = $"strat-{uniqueSuffix}";
@@ -135,7 +126,7 @@ public sealed class AutonomousLearningPersistenceTests
     [Fact]
     public async Task DriftObservationPersistenceAndEvaluation()
     {
-        await using var store = CreateStore();
+        await using var store = await CreateStoreAsync();
         var now = DateTimeOffset.UtcNow;
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var strategyId = $"strat-drift-{uniqueSuffix}";
@@ -165,7 +156,7 @@ public sealed class AutonomousLearningPersistenceTests
     [Fact]
     public async Task StrategyRegimePerformanceRewardAccumulation()
     {
-        await using var store = CreateStore();
+        await using var store = await CreateStoreAsync();
         var now = DateTimeOffset.UtcNow;
         var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
         var strategyId = $"strat-alloc-{uniqueSuffix}";

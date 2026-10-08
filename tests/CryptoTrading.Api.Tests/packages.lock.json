@@ -13,22 +13,6 @@
           "Microsoft.Extensions.Hosting": "10.0.12"
         }
       },
-      "Microsoft.NET.Test.Sdk": {
-        "type": "Direct",
-        "requested": "[17.14.1, )",
-        "resolved": "17.14.1",
-        "contentHash": "HJKqKOE+vshXra2aEHpi2TlxYX7Z9VFYkr+E5rwEvHC8eIXiyO+K9kNm8vmNom3e2rA56WqxU+/N9NJlLGXsJQ==",
-        "dependencies": {
-          "Microsoft.CodeCoverage": "17.14.1",
-          "Microsoft.TestPlatform.TestHost": "17.14.1"
-        }
-      },
-      "xunit.runner.visualstudio": {
-        "type": "Direct",
-        "requested": "[4.0.0, )",
-        "resolved": "4.0.0",
-        "contentHash": "kzLFyBYUnoidpGOXvpNOfIo8C92gVgVR6X8ncHwhcrDYugiOut5rrhDkr0L3cWHd7J2pKXf6LgaeXoBBDlx1ag=="
-      },
       "xunit.v3.mtp-v2": {
         "type": "Direct",
         "requested": "[4.0.1, )",
@@ -72,11 +56,6 @@
         "type": "Transitive",
         "resolved": "6.0.0",
         "contentHash": "UcSjPsst+DfAdJGVDsu346FX0ci0ah+lw3WRtn18NUwEqRt70HaOQ7lI72vy3+1LxtqI3T5GWwV39rQSrCzAeg=="
-      },
-      "Microsoft.CodeCoverage": {
-        "type": "Transitive",
-        "resolved": "17.14.1",
-        "contentHash": "pmTrhfFIoplzFVbhVwUquT+77CbGH+h4/3mBpdmIlYtBi9nAB+kKI6dN3A/nV4DFi3wLLx/BlHIPK+MkbQ6Tpg=="
       },
       "Microsoft.Extensions.Configuration": {
         "type": "Transitive",
@@ -304,29 +283,10 @@
           "Microsoft.Testing.Platform": "[2.4.0, 3.0.0)"
         }
       },
-      "Microsoft.TestPlatform.ObjectModel": {
-        "type": "Transitive",
-        "resolved": "17.14.1",
-        "contentHash": "xTP1W6Mi6SWmuxd3a+jj9G9UoC850WGwZUps1Wah9r1ZxgXhdJfj1QqDLJkFjHDCvN42qDL2Ps5KjQYWUU0zcQ=="
-      },
-      "Microsoft.TestPlatform.TestHost": {
-        "type": "Transitive",
-        "resolved": "17.14.1",
-        "contentHash": "d78LPzGKkJwsJXAQwsbJJ7LE7D1wB+rAyhHHAaODF+RDSQ0NgMjDFkSA1Djw18VrxO76GlKAjRUhl+H8NL8Z+Q==",
-        "dependencies": {
-          "Microsoft.TestPlatform.ObjectModel": "17.14.1",
-          "Newtonsoft.Json": "13.0.3"
-        }
-      },
       "Microsoft.Win32.Registry": {
         "type": "Transitive",
         "resolved": "5.0.0",
         "contentHash": "dDoKi0PnDz31yAyETfRntsLArTlVAVzUzCIvvEDsDsucrl33Dl8pIJG06ePTJTI3tGpeyHS9Cq7Foc/s4EeKcg=="
-      },
-      "Newtonsoft.Json": {
-        "type": "Transitive",
-        "resolved": "13.0.3",
-        "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
       },
       "Npgsql": {
         "type": "Transitive",
