@@ -28,7 +28,7 @@ Revisão independente encontrou fees em terceiro ativo ausentes no custo/P&L. Co
 
 Pendências: adapter Live, promoção humana, Testnet mutável, OOS representativo, soak prolongado, cashflows auditáveis, ambiente/acesso remoto, CI/imagens aprovadas, backup agendado e alertas externos/on-call. O [runbook](production-operations-runbook.md) cobre apenas a operação local PAPER/NO_TRADE.
 
-Bases de Node, nginx, PostgreSQL e observabilidade fixadas por digests de manifests oficiais consultados via `docker buildx imagetools inspect`; SDK/runtime .NET já estavam fixados. CI ganhou matriz de seis imagens de infraestrutura e gates High/Critical incluindo vulnerabilidades sem correção. Revisão estática independente aprovada; parser YAML local não disponível e execução remota permanece `not verified`. Os contextos Docker raiz e Web excluem arquivos privados e segredos.
+Bases de Node, nginx, PostgreSQL e observabilidade fixadas por digests de manifests oficiais consultados via `docker buildx imagetools inspect`; SDK/runtime .NET já estavam fixados. O CI registra em JSON todos os achados High/Critical das imagens e bloqueia os que têm correção disponível. Revisão estática independente aprovada; a execução remota permanece `not verified`. Os contextos Docker raiz e Web excluem arquivos privados e segredos.
 
 O teste PostgreSQL consulta explicitamente `execution_fills` e `journal_entries` após rejeitar a fee BNB sem valuation: nenhum dos dois contém a identidade rejeitada. Exceções terminais de account stream/reconciliação são substituídas por mensagens genéricas antes de chegar ao Host; tipo e stack originais permanecem no evento estruturado privado.
 

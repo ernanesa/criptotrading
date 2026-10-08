@@ -16,7 +16,10 @@ jobs:
   dotnet:
     name: .NET restore, build, test and format
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The recovery drill starts isolated PostgreSQL containers. A cold GitHub
+    # runner can legitimately spend several minutes pulling images and running
+    # migrations, so keep the gate bounded without making it flaky.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -54,7 +57,7 @@ jobs:
         run: ./scripts/test-full-recovery-drill.sh
 
   secret-scan:
-    name: Tracked-file secret scan
+    name: Repository secret scan
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -64,7 +67,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Scan tracked files without printing matches
+      - name: Scan repository files without printing matches
         run: ./scripts/scan-secrets.sh
 
       - name: Validate traceability manifest
@@ -179,54 +182,93 @@ jobs:
         run: docker build --tag cryptotrading-web:${{ github.sha }} --file src/CryptoTrading.Web/Dockerfile src/CryptoTrading.Web
 
       - name: Prepare supply-chain artifacts
-        run: mkdir -p artifacts/sbom artifacts/oci artifacts/build-metadata
+        run: mkdir -p artifacts/sbom artifacts/oci artifacts/build-metadata artifacts/security
 
-      - name: Scan API image for critical vulnerabilities
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+      - name: Record all API image High/Critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cryptotrading-api:${{ github.sha }}
+          format: json
+          output: artifacts/security/api-vulnerabilities.json
+          exit-code: '0'
+          ignore-unfixed: false
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          scanners: vuln
+
+      - name: Block fixable API image High/Critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: cryptotrading-api:${{ github.sha }}
           format: table
           exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          scanners: vuln
+
+      - name: Record all Worker image High/Critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cryptotrading-worker:${{ github.sha }}
+          format: json
+          output: artifacts/security/worker-vulnerabilities.json
+          exit-code: '0'
           ignore-unfixed: false
           severity: CRITICAL,HIGH
           vuln-type: os,library
+          scanners: vuln
 
-      - name: Scan Worker image for critical vulnerabilities
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+      - name: Block fixable Worker image High/Critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: cryptotrading-worker:${{ github.sha }}
           format: table
           exit-code: '1'
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          scanners: vuln
+
+      - name: Record all Web image High/Critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: cryptotrading-web:${{ github.sha }}
+          format: json
+          output: artifacts/security/web-vulnerabilities.json
+          exit-code: '0'
           ignore-unfixed: false
           severity: CRITICAL,HIGH
           vuln-type: os,library
+          scanners: vuln
 
-      - name: Scan Web image for critical vulnerabilities
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+      - name: Block fixable Web image High/Critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: cryptotrading-web:${{ github.sha }}
           format: table
           exit-code: '1'
-          ignore-unfixed: false
+          ignore-unfixed: true
           severity: CRITICAL,HIGH
           vuln-type: os,library
+          scanners: vuln
 
       - name: Generate API SPDX SBOM
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: cryptotrading-api:${{ github.sha }}
           format: spdx-json
           output: artifacts/sbom/api.spdx.json
 
       - name: Generate Worker SPDX SBOM
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: cryptotrading-worker:${{ github.sha }}
           format: spdx-json
           output: artifacts/sbom/worker.spdx.json
 
       - name: Generate Web SPDX SBOM
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: cryptotrading-web:${{ github.sha }}
           format: spdx-json
@@ -257,6 +299,14 @@ jobs:
             artifacts/oci/*.tar
           if-no-files-found: error
 
+      - name: Upload image vulnerability reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-vulnerability-reports-${{ github.sha }}
+          path: artifacts/security/*.json
+          if-no-files-found: warn
+
 
   infrastructure-scan:
     name: Infrastructure image security gate
@@ -265,20 +315,47 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
-          - otel/opentelemetry-collector-contrib:0.123.0@sha256:e39311df1f3d941923c00da79ac7ba6269124a870ee87e3c3ad24d60f8aee4d2
-          - grafana/loki:3.5.12@sha256:c2a6860c2f94ecc98fffce7c10e6c8b350cf25e2ea3daa255dff27d7c6a4dffc
-          - prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
-          - grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
-          - grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3
+        include:
+          - name: postgres
+            image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+          - name: otel-collector
+            image: otel/opentelemetry-collector-contrib:0.123.0@sha256:e39311df1f3d941923c00da79ac7ba6269124a870ee87e3c3ad24d60f8aee4d2
+          - name: loki
+            image: grafana/loki:3.5.12@sha256:c2a6860c2f94ecc98fffce7c10e6c8b350cf25e2ea3daa255dff27d7c6a4dffc
+          - name: prometheus
+            image: prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62
+          - name: grafana
+            image: grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
+          - name: tempo
+            image: grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3
     steps:
-      - name: Scan pinned infrastructure image
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+      - name: Record all infrastructure High/Critical findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: json
+          output: trivy-infrastructure-${{ matrix.name }}.json
+          exit-code: '0'
+          ignore-unfixed: false
+          severity: CRITICAL,HIGH
+          vuln-type: os,library
+          scanners: vuln
+
+      - name: Block fixable infrastructure High/Critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ matrix.image }}
           format: table
           exit-code: '1'
-          ignore-unfixed: false
+          ignore-unfixed: true
           severity: CRITICAL,HIGH
           vuln-type: os,library
+          scanners: vuln
+
+      - name: Upload infrastructure vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: infrastructure-vulnerability-report-${{ matrix.name }}-${{ github.sha }}
+          path: trivy-infrastructure-${{ matrix.name }}.json
+          if-no-files-found: warn

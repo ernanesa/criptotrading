@@ -196,15 +196,15 @@ localDiagnostics.MapGet("/operational/status", async (
     IServiceProvider services,
     CancellationToken cancellationToken) =>
 {
-    var currentStateStore = services.GetService<IOperationalControlCurrentStateStore>();
-    if (currentStateStore is null)
-    {
-        return ApiProblem.ServiceUnavailable("OPERATIONAL_STATE_UNAVAILABLE", "The durable Worker operational state is unavailable.");
-    }
-
     OperationalControlAuditEvent? latest;
     try
     {
+        var currentStateStore = services.GetService<IOperationalControlCurrentStateStore>();
+        if (currentStateStore is null)
+        {
+            return ApiProblem.ServiceUnavailable("OPERATIONAL_STATE_UNAVAILABLE", "The durable Worker operational state is unavailable.");
+        }
+
         latest = await currentStateStore.ReadLatestOperationalControlAuditEventAsync(cancellationToken).ConfigureAwait(false);
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
