@@ -82,6 +82,48 @@ public sealed class OperationalApiEndpointsTests
     }
 
     [Fact]
+    public async Task GetOperationalStatusFailsClosedWhenDurableWorkerStateIsUnavailable()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("urn:cryptotrading:error:OPERATIONAL_STATE_UNAVAILABLE", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetOperationalStatusFailsClosedWhenNoDurableWorkerStateHasBeenRecorded()
+    {
+        var store = new FakeOperationalControlAuditStore([]);
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+            services.AddSingleton<IOperationalControlCurrentStateStore>(store));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("urn:cryptotrading:error:OPERATIONAL_STATE_UNAVAILABLE", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetOperationalStatusFailsClosedWhenDurableWorkerStateCannotBeRead()
+    {
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+            services.AddSingleton<IOperationalControlCurrentStateStore>(new ThrowingOperationalControlCurrentStateStore()));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("urn:cryptotrading:error:OPERATIONAL_STATE_UNAVAILABLE", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetOperationalStatusFromNonLoopbackReturnsForbidden()
     {
         using var factory = CreateFactory(IPAddress.Parse("192.168.1.100"));
@@ -548,5 +590,12 @@ public sealed class OperationalApiEndpointsTests
         public Task<OperationalControlAuditEvent?> ReadLatestOperationalControlAuditEventAsync(
             CancellationToken cancellationToken = default) =>
             Task.FromResult(events.OrderByDescending(e => e.OccurredAtUtc).FirstOrDefault());
+    }
+
+    private sealed class ThrowingOperationalControlCurrentStateStore : IOperationalControlCurrentStateStore
+    {
+        public Task<OperationalControlAuditEvent?> ReadLatestOperationalControlAuditEventAsync(
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Synthetic persistence read failure.");
     }
 }
