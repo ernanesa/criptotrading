@@ -42,7 +42,7 @@ public sealed record FuturesPosition(
     decimal AllocatedMargin)
 {
     public decimal PositionNotional => Math.Round(Quantity * MarkPrice, 4);
-    
+
     public decimal UnrealizedPnl => Side switch
     {
         PositionSide.LongSide => Math.Round(Quantity * (MarkPrice - EntryPrice), 4),

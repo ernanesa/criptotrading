@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net11.0": {
+      "Microsoft.Extensions.Diagnostics.HealthChecks": {
+        "type": "Direct",
+        "requested": "[11.0.0-rc.1.26425.128, )",
+        "resolved": "11.0.0-rc.1.26425.128",
+        "contentHash": "hKmiCr68+QuYnBgJCg7qgV6PdevD0kpujPmRuRxj0UnfQKxZImmCKEZSqY1Ezu4jxQVxEZsdOBXw7rUsZzMxqg==",
+        "dependencies": {
+          "Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions": "11.0.0-rc.1.26425.128"
+        }
+      },
+      "Npgsql": {
+        "type": "Direct",
+        "requested": "[10.0.0, )",
+        "resolved": "10.0.0",
+        "contentHash": "xZAYhPOU2rUIFpV48xsqhCx9vXs6Y+0jX2LCoSEfDFYMw9jtAOUk3iQsCnDLrFIv9NT3JGMihn7nnuZsPKqJmA=="
+      },
+      "Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions": {
+        "type": "Transitive",
+        "resolved": "11.0.0-rc.1.26425.128",
+        "contentHash": "7I1lyFDMftIPBBf18/mlnvOW2/T/VCGbDxPjacw7zLkHuU95viIpLYH72V0stzAcoDi1BJL0GqkenxqVAVaAyg=="
+      },
+      "cryptotrading.domain": {
+        "type": "Project"
+      }
+    }
+  }
+}

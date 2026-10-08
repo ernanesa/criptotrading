@@ -1,147 +1,203 @@
-#pragma warning disable CA2007 // Npgsql async disposal/commands are intentionally awaited with ConfigureAwait(false) at each I/O boundary.
-#pragma warning disable CA2100 // Constant query strings with parameterized values.
+#pragma warning disable CA2007
+#pragma warning disable CA2100
 
-using System.Data;
 using Npgsql;
 using NpgsqlTypes;
 
 namespace CryptoTrading.Persistence;
 
-public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore
+public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, IPortfolioNavSnapshotStore
 {
-    public async Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(CancellationToken cancellationToken = default)
+    private const string PerformanceSymbol = "BTCUSDT";
+    private const string PerformanceQuoteAsset = "USDT";
+
+    public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(CancellationToken cancellationToken = default) =>
+        GetPerformanceMetricsAsync(DateTimeOffset.UtcNow, cancellationToken);
+
+    public async Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(DateTimeOffset asOfUtc, CancellationToken cancellationToken = default)
     {
+        if (asOfUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Performance as-of timestamp must be UTC.", nameof(asOfUtc));
+
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var basis = await ReadPositionBasisAsync(connection, cancellationToken).ConfigureAwait(false);
+        var totals = await ReadFillMetricsAsync(connection, null, asOfUtc, cancellationToken).ConfigureAwait(false);
+        var unvaluedFees = await ReadUnvaluedFeesAsync(connection, asOfUtc, cancellationToken).ConfigureAwait(false);
+        var currentSnapshot = await ReadSnapshotAtOrBeforeAsync(connection, asOfUtc, cancellationToken).ConfigureAwait(false);
+        var periods = new List<PerformancePeriodMetrics>(4);
 
-        // 1. Position cost basis for BTCUSDT
-        PositionCostBasisRecord? btcPositionBasis = null;
-        await using (var basisCommand = new NpgsqlCommand(
-            """
-            SELECT symbol, base_asset, quote_asset, quantity, cost_quote, updated_at
-            FROM trading.position_cost_basis
-            WHERE symbol = 'BTCUSDT';
-            """, connection))
+        foreach (var period in Periods(asOfUtc))
         {
-            await using var reader = await basisCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            var fills = await ReadFillMetricsAsync(connection, period.StartUtc, asOfUtc, cancellationToken).ConfigureAwait(false);
+            var snapshots = await ReadSnapshotPeriodMetricsAsync(connection, period.StartUtc, asOfUtc, cancellationToken).ConfigureAwait(false);
+            periods.Add(new(period.Name, fills.TradesCount, fills.WinningCount, fills.LosingCount, fills.RealizedPnlQuote, fills.FeesPaidQuote)
             {
-                btcPositionBasis = new PositionCostBasisRecord(
-                    reader.GetString(0),
-                    reader.GetString(1),
-                    reader.GetString(2),
-                    reader.GetDecimal(3),
-                    reader.GetDecimal(4),
-                    reader.GetDateTime(5));
-            }
+                NetAssetValueDeltaQuote = snapshots.NetAssetValueDeltaQuote,
+                UnrealizedPnlDeltaQuote = snapshots.UnrealizedPnlDeltaQuote,
+                SnapshotAvailability = snapshots.Availability,
+            });
         }
 
-        // 2. Aggregated metrics across all execution fills
-        int totalTrades = 0;
-        int totalWinning = 0;
-        int totalLosing = 0;
-        decimal totalRealizedPnl = 0m;
-        decimal totalFees = 0m;
-        decimal totalGrossProfit = 0m;
-        decimal totalGrossLoss = 0m;
-
-        await using (var fillsCommand = new NpgsqlCommand(
-            """
-            SELECT 
-                COUNT(*) as total_trades,
-                COUNT(CASE WHEN realized_pnl_quote > 0 THEN 1 END) as win_count,
-                COUNT(CASE WHEN realized_pnl_quote < 0 THEN 1 END) as loss_count,
-                COALESCE(SUM(realized_pnl_quote), 0) as total_realized_pnl,
-                COALESCE(SUM(commission), 0) as total_fees,
-                COALESCE(SUM(CASE WHEN realized_pnl_quote > 0 THEN realized_pnl_quote ELSE 0 END), 0) as gross_profit,
-                COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0) as gross_loss
-            FROM trading.execution_fills;
-            """, connection))
+        return new(totals.TradesCount, totals.WinningCount, totals.LosingCount, totals.RealizedPnlQuote, totals.FeesPaidQuote,
+            totals.GrossProfitQuote, totals.GrossLossQuote, periods, basis)
         {
-            await using var reader = await fillsCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                totalTrades = reader.GetInt32(0);
-                totalWinning = reader.GetInt32(1);
-                totalLosing = reader.GetInt32(2);
-                totalRealizedPnl = reader.GetDecimal(3);
-                totalFees = reader.GetDecimal(4);
-                totalGrossProfit = reader.GetDecimal(5);
-                totalGrossLoss = reader.GetDecimal(6);
-            }
-        }
-
-        // 3. Periodic metrics (Hoje, Semana, Mês, Ano)
-        var periods = new List<PerformancePeriodMetrics>();
-        await using (var periodsCommand = new NpgsqlCommand(
-            """
-            SELECT 
-                'Hoje (Dia / 24 Horas)' as period_name,
-                1 as sort_order,
-                COUNT(*) as trades_count,
-                COUNT(CASE WHEN realized_pnl_quote > 0 THEN 1 END) as win_count,
-                COUNT(CASE WHEN realized_pnl_quote < 0 THEN 1 END) as loss_count,
-                COALESCE(SUM(realized_pnl_quote), 0) as realized_pnl,
-                COALESCE(SUM(commission), 0) as fees_paid
-            FROM trading.execution_fills
-            WHERE occurred_at >= DATE_TRUNC('day', NOW() AT TIME ZONE 'UTC')
-            UNION ALL
-            SELECT 
-                'Semana (Últimos 7 Dias)',
-                2,
-                COUNT(*),
-                COUNT(CASE WHEN realized_pnl_quote > 0 THEN 1 END),
-                COUNT(CASE WHEN realized_pnl_quote < 0 THEN 1 END),
-                COALESCE(SUM(realized_pnl_quote), 0),
-                COALESCE(SUM(commission), 0)
-            FROM trading.execution_fills
-            WHERE occurred_at >= NOW() - INTERVAL '7 days'
-            UNION ALL
-            SELECT 
-                'Mês (Últimos 30 Dias)',
-                3,
-                COUNT(*),
-                COUNT(CASE WHEN realized_pnl_quote > 0 THEN 1 END),
-                COUNT(CASE WHEN realized_pnl_quote < 0 THEN 1 END),
-                COALESCE(SUM(realized_pnl_quote), 0),
-                COALESCE(SUM(commission), 0)
-            FROM trading.execution_fills
-            WHERE occurred_at >= NOW() - INTERVAL '30 days'
-            UNION ALL
-            SELECT 
-                'Ano (Acumulado / YTD)',
-                4,
-                COUNT(*),
-                COUNT(CASE WHEN realized_pnl_quote > 0 THEN 1 END),
-                COUNT(CASE WHEN realized_pnl_quote < 0 THEN 1 END),
-                COALESCE(SUM(realized_pnl_quote), 0),
-                COALESCE(SUM(commission), 0)
-            FROM trading.execution_fills
-            WHERE occurred_at >= DATE_TRUNC('year', NOW() AT TIME ZONE 'UTC')
-            ORDER BY sort_order;
-            """, connection))
-        {
-            await using var reader = await periodsCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                periods.Add(new PerformancePeriodMetrics(
-                    reader.GetString(0),
-                    reader.GetInt32(2),
-                    reader.GetInt32(3),
-                    reader.GetInt32(4),
-                    reader.GetDecimal(5),
-                    reader.GetDecimal(6)));
-            }
-        }
-
-        return new AggregatedPortfolioPerformanceMetrics(
-            totalTrades,
-            totalWinning,
-            totalLosing,
-            totalRealizedPnl,
-            totalFees,
-            totalGrossProfit,
-            totalGrossLoss,
-            periods,
-            btcPositionBasis);
+            ScopeSymbol = PerformanceSymbol,
+            QuoteAsset = PerformanceQuoteAsset,
+            AsOfUtc = asOfUtc,
+            CurrentSnapshotObservedAtUtc = currentSnapshot?.ObservedAtUtc,
+            CurrentNetAssetValueQuote = currentSnapshot?.NetAssetValueQuote,
+            CurrentUnrealizedPnlQuote = currentSnapshot?.UnrealizedPnlQuote,
+            UnvaluedFeeAmounts = unvaluedFees,
+        };
     }
+
+    public async Task RecordNavSnapshotAsync(PortfolioNavSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ValidateSnapshot(snapshot);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        const string sql = """
+            INSERT INTO trading.portfolio_nav_snapshots
+                (symbol, quote_asset, observed_at, nav_quote, unrealized_pnl_quote, external_cash_flow_quote, source)
+            VALUES (@symbol, @quote_asset, @observed_at, @nav_quote, @unrealized_pnl_quote, @external_cash_flow_quote, @source);
+            """;
+        await ExecuteAsync(connection, null, sql,
+        [
+            Parameter("symbol", NpgsqlDbType.Varchar, snapshot.Symbol.Trim().ToUpperInvariant()),
+            Parameter("quote_asset", NpgsqlDbType.Varchar, snapshot.QuoteAsset.Trim().ToUpperInvariant()),
+            Parameter("observed_at", NpgsqlDbType.TimestampTz, snapshot.ObservedAtUtc),
+            Parameter("nav_quote", NpgsqlDbType.Numeric, snapshot.NetAssetValueQuote),
+            Parameter("unrealized_pnl_quote", NpgsqlDbType.Numeric, snapshot.UnrealizedPnlQuote),
+            Parameter("external_cash_flow_quote", NpgsqlDbType.Numeric, snapshot.ExternalCashFlowQuote),
+            Parameter("source", NpgsqlDbType.Varchar, snapshot.Source.Trim()),
+        ], cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<PositionCostBasisRecord?> ReadPositionBasisAsync(NpgsqlConnection connection, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT symbol, base_asset, quote_asset, quantity, cost_quote, updated_at
+            FROM trading.position_cost_basis WHERE symbol = @symbol AND quote_asset = @quote_asset;
+            """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, PerformanceSymbol));
+        command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDecimal(3), reader.GetDecimal(4), Utc(reader.GetDateTime(5)))
+            : null;
+    }
+
+    private static async Task<FillMetrics> ReadFillMetricsAsync(NpgsqlConnection connection, DateTimeOffset? startUtc, DateTimeOffset asOfUtc, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT COUNT(*), COUNT(*) FILTER (WHERE realized_pnl_quote > 0), COUNT(*) FILTER (WHERE realized_pnl_quote < 0),
+                   COALESCE(SUM(realized_pnl_quote), 0),
+                   COALESCE(SUM(CASE WHEN actual_commission_quote IS NOT NULL AND commission_valuation_source IS NOT NULL AND commission_valuation_at IS NOT NULL THEN actual_commission_quote ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN realized_pnl_quote > 0 THEN realized_pnl_quote ELSE 0 END), 0),
+                   COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0)
+            FROM trading.execution_fills
+            WHERE symbol = @symbol AND quote_asset = @quote_asset AND occurred_at <= @as_of_utc
+              AND (@start_utc IS NULL OR occurred_at >= @start_utc);
+            """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, PerformanceSymbol));
+        command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
+        command.Parameters.Add(Parameter("as_of_utc", NpgsqlDbType.TimestampTz, asOfUtc));
+        command.Parameters.Add(Parameter("start_utc", NpgsqlDbType.TimestampTz, startUtc));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        _ = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return new(checked((int)reader.GetInt64(0)), checked((int)reader.GetInt64(1)), checked((int)reader.GetInt64(2)),
+            reader.GetDecimal(3), reader.GetDecimal(4), reader.GetDecimal(5), reader.GetDecimal(6));
+    }
+
+    private static async Task<IReadOnlyList<AssetAmount>> ReadUnvaluedFeesAsync(NpgsqlConnection connection, DateTimeOffset asOfUtc, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT commission_asset, SUM(commission) FROM trading.execution_fills
+            WHERE symbol = @symbol AND quote_asset = @quote_asset AND occurred_at <= @as_of_utc
+              AND (actual_commission_quote IS NULL OR commission_valuation_source IS NULL OR commission_valuation_at IS NULL)
+            GROUP BY commission_asset ORDER BY commission_asset;
+            """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, PerformanceSymbol));
+        command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
+        command.Parameters.Add(Parameter("as_of_utc", NpgsqlDbType.TimestampTz, asOfUtc));
+        var amounts = new List<AssetAmount>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) amounts.Add(new(reader.GetString(0), reader.GetDecimal(1)));
+        return amounts;
+    }
+
+    private static async Task<SnapshotPeriodMetrics> ReadSnapshotPeriodMetricsAsync(NpgsqlConnection connection, DateTimeOffset startUtc, DateTimeOffset asOfUtc, CancellationToken cancellationToken)
+    {
+        var baseline = await ReadSnapshotAtOrBeforeAsync(connection, startUtc, cancellationToken).ConfigureAwait(false);
+        if (baseline is null) return new(null, null, PerformanceSnapshotAvailability.MissingBaselineSnapshot);
+        var latest = await ReadSnapshotAtOrBeforeAsync(connection, asOfUtc, cancellationToken).ConfigureAwait(false);
+        if (latest is null || latest.ObservedAtUtc <= baseline.ObservedAtUtc) return new(null, null, PerformanceSnapshotAvailability.MissingLatestSnapshot);
+        var flows = await ReadExternalFlowAsync(connection, baseline.ObservedAtUtc, latest.ObservedAtUtc, cancellationToken).ConfigureAwait(false);
+        if (!flows.Known) return new(null, null, PerformanceSnapshotAvailability.UnknownExternalCashFlow);
+        var navDelta = latest.NetAssetValueQuote - baseline.NetAssetValueQuote - flows.Amount;
+        return baseline.UnrealizedPnlQuote is null || latest.UnrealizedPnlQuote is null
+            ? new(navDelta, null, PerformanceSnapshotAvailability.UnknownUnrealizedPnl)
+            : new(navDelta, latest.UnrealizedPnlQuote.Value - baseline.UnrealizedPnlQuote.Value, PerformanceSnapshotAvailability.Available);
+    }
+
+    private static async Task<PortfolioNavSnapshot?> ReadSnapshotAtOrBeforeAsync(NpgsqlConnection connection, DateTimeOffset timestampUtc, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT symbol, quote_asset, observed_at, nav_quote, unrealized_pnl_quote, external_cash_flow_quote, source
+            FROM trading.portfolio_nav_snapshots WHERE symbol = @symbol AND quote_asset = @quote_asset AND observed_at <= @timestamp_utc
+            ORDER BY observed_at DESC LIMIT 1;
+            """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, PerformanceSymbol));
+        command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
+        command.Parameters.Add(Parameter("timestamp_utc", NpgsqlDbType.TimestampTz, timestampUtc));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
+        decimal? unrealized = await reader.IsDBNullAsync(4, cancellationToken).ConfigureAwait(false) ? null : reader.GetDecimal(4);
+        decimal? externalFlow = await reader.IsDBNullAsync(5, cancellationToken).ConfigureAwait(false) ? null : reader.GetDecimal(5);
+        return new(reader.GetString(0), reader.GetString(1), Utc(reader.GetDateTime(2)), reader.GetDecimal(3), unrealized, externalFlow, reader.GetString(6));
+    }
+
+    private static async Task<(bool Known, decimal Amount)> ReadExternalFlowAsync(NpgsqlConnection connection, DateTimeOffset afterUtc, DateTimeOffset untilUtc, CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT COUNT(*) FILTER (WHERE external_cash_flow_quote IS NULL), COALESCE(SUM(external_cash_flow_quote), 0)
+            FROM trading.portfolio_nav_snapshots
+            WHERE symbol = @symbol AND quote_asset = @quote_asset AND observed_at > @after_utc AND observed_at <= @until_utc;
+            """;
+        await using var command = new NpgsqlCommand(sql, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, PerformanceSymbol));
+        command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
+        command.Parameters.Add(Parameter("after_utc", NpgsqlDbType.TimestampTz, afterUtc));
+        command.Parameters.Add(Parameter("until_utc", NpgsqlDbType.TimestampTz, untilUtc));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        _ = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return (reader.GetInt64(0) == 0, reader.GetDecimal(1));
+    }
+
+    private static IEnumerable<(string Name, DateTimeOffset StartUtc)> Periods(DateTimeOffset asOfUtc)
+    {
+        var dayStart = new DateTimeOffset(asOfUtc.UtcDateTime.Date, TimeSpan.Zero);
+        var yearStart = new DateTimeOffset(asOfUtc.Year, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        return [("Hoje (Dia / 24 Horas)", dayStart), ("Semana (Últimos 7 Dias)", asOfUtc.AddDays(-7)), ("Mês (Últimos 30 Dias)", asOfUtc.AddDays(-30)), ("Ano (Acumulado / YTD)", yearStart)];
+    }
+
+    private static void ValidateSnapshot(PortfolioNavSnapshot snapshot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshot.Symbol);
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshot.QuoteAsset);
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshot.Source);
+        if (!string.Equals(snapshot.Symbol, PerformanceSymbol, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(snapshot.QuoteAsset, PerformanceQuoteAsset, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Portfolio snapshots are limited to the BTCUSDT/USDT performance scope.", nameof(snapshot));
+        }
+        if (snapshot.ObservedAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Portfolio snapshot timestamp must be UTC.", nameof(snapshot));
+        if (snapshot.NetAssetValueQuote < 0m) throw new ArgumentOutOfRangeException(nameof(snapshot), "Net asset value cannot be negative.");
+    }
+
+    private sealed record FillMetrics(int TradesCount, int WinningCount, int LosingCount, decimal RealizedPnlQuote, decimal FeesPaidQuote, decimal GrossProfitQuote, decimal GrossLossQuote);
+    private sealed record SnapshotPeriodMetrics(decimal? NetAssetValueDeltaQuote, decimal? UnrealizedPnlDeltaQuote, PerformanceSnapshotAvailability Availability);
 }

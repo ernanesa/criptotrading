@@ -1,0 +1,26 @@
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location = /health/live {
+        proxy_pass http://cryptotrading-api:5000;
+        include /tmp/nginx/api-internal-access-token.conf;
+    }
+
+    location = /health/ready {
+        proxy_pass http://cryptotrading-api:5000;
+        include /tmp/nginx/api-internal-access-token.conf;
+    }
+
+    location ~ ^/(metrics|operational|market|portfolio|trading)(?:/|$) {
+        proxy_pass http://cryptotrading-api:5000;
+        include /tmp/nginx/api-internal-access-token.conf;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

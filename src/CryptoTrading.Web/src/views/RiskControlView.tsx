@@ -5,6 +5,8 @@ import { useState } from 'react';
 import { ApiError, apiClient, formatIsoDate } from '../api/client';
 import { StatusBadge } from '../components/StatusBadge';
 
+const formatMoneyLimit = (value: number | null | undefined) => (value == null ? 'Indisponível' : `$${value} USDT`);
+
 export const RiskControlView: React.FC = () => {
   const [showKillSwitchModal, setShowKillSwitchModal] = useState(false);
   const [interventionNotice, setInterventionNotice] = useState<string | null>(null);
@@ -59,8 +61,8 @@ export const RiskControlView: React.FC = () => {
         <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-5 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-amber-200">
-            <strong className="block mb-0.5 text-amber-300">Persistência Indisponível (503):</strong>O armazenamento
-            PostgreSQL da RiskPolicy não está conectado no host local da API.
+            <strong className="block mb-0.5 text-amber-300">Persistência Indisponível (503):</strong>O armazenamento da
+            RiskPolicy não está disponível para esta consulta. Verifique a dependência e o estado durável da API.
           </div>
         </div>
       )}
@@ -80,7 +82,7 @@ export const RiskControlView: React.FC = () => {
                 <ShieldCheck className="w-6 h-6 text-emerald-400" />
                 <div>
                   <h2 className="text-sm font-bold text-slate-100">
-                    RiskPolicy Document v{doc.policy?.version || '1.0'}
+                    RiskPolicy Document v{doc.policy?.version || 'Indisponível'}
                   </h2>
                   <span className="text-[11px] font-mono text-slate-400">
                     Hash: {(doc.documentHash || '').substring(0, 16)}...
@@ -97,38 +99,48 @@ export const RiskControlView: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs font-mono">
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Order Notional:</span>
-                <span className="text-lg font-bold text-slate-100">${doc.policy?.maxOrderNotional ?? 0} USDT</span>
+                <span className="text-lg font-bold text-slate-100">
+                  {formatMoneyLimit(doc.policy?.maxOrderNotional)}
+                </span>
                 <span className="text-[11px] text-slate-500 block mt-1">Limite máximo por ordem individual</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Exposure Notional:</span>
-                <span className="text-lg font-bold text-slate-100">${doc.policy?.maxExposureNotional ?? 0} USDT</span>
+                <span className="text-lg font-bold text-slate-100">
+                  {formatMoneyLimit(doc.policy?.maxExposureNotional)}
+                </span>
                 <span className="text-[11px] text-slate-500 block mt-1">Exposição total simultânea em carteira</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Daily Loss:</span>
-                <span className="text-lg font-bold text-amber-400">${doc.policy?.maxDailyLoss ?? 0} USDT</span>
+                <span className="text-lg font-bold text-amber-400">{formatMoneyLimit(doc.policy?.maxDailyLoss)}</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Perda máxima permitida em 24h</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Drawdown:</span>
-                <span className="text-lg font-bold text-rose-400">${doc.policy?.maxDrawdown ?? 0} USDT</span>
+                <span className="text-lg font-bold text-rose-400">{formatMoneyLimit(doc.policy?.maxDrawdown)}</span>
                 <span className="text-[11px] text-slate-500 block mt-1">Rebaixamento máximo acumulado</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Max Market Data Age:</span>
-                <span className="text-lg font-bold text-slate-200">{doc.policy?.maxMarketDataAge || '00:01:00'}</span>
+                <span className="text-lg font-bold text-slate-200">
+                  {doc.policy?.maxMarketDataAge || 'Indisponível'}
+                </span>
                 <span className="text-[11px] text-slate-500 block mt-1">Frescor máximo de candles / klines</span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Retiradas na API (Withdrawals):</span>
                 <span className="text-lg font-bold text-emerald-400">
-                  {doc.policy?.withdrawalsEnabled ? 'HABILITADAS (INSEGURO)' : 'BLOQUEADAS (0/1)'}
+                  {doc.policy?.withdrawalsEnabled === true
+                    ? 'HABILITADAS (INSEGURO)'
+                    : doc.policy?.withdrawalsEnabled === false
+                      ? 'BLOQUEADAS (0/1)'
+                      : 'Indisponível'}
                 </span>
                 <span className="text-[11px] text-emerald-500/80 block mt-1">Invariante de segurança obrigatória</span>
               </div>

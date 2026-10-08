@@ -29,6 +29,8 @@ trap cleanup EXIT
 
 export POSTGRES_DB="$postgres_db" POSTGRES_USER="$postgres_user" POSTGRES_PASSWORD="$password"
 export POSTGRES_PORT="$postgres_port" POSTGRES_VOLUME_NAME="$volume_name"
+# This harness starts PostgreSQL only; it never starts API/Web.
+export API_INTERNAL_ACCESS_TOKEN_SOURCE="${API_INTERNAL_ACCESS_TOKEN_SOURCE:-/dev/null}"
 "${compose[@]}" up -d postgres >/dev/null
 for attempt in {1..30}; do
     if "${compose[@]}" exec -T postgres pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then break; fi

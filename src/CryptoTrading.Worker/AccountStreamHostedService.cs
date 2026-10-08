@@ -32,7 +32,8 @@ internal sealed class AccountStreamHostedService(
     ReconciliationReportWriter reconciliationReportWriter,
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
-    ILogger<AccountStreamHostedService> logger) : BackgroundService
+    ILogger<AccountStreamHostedService> logger,
+    IExecutionLearningRewardStore? learningRewards = null) : BackgroundService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private bool initialConnectionPending = true;
@@ -52,6 +53,13 @@ internal sealed class AccountStreamHostedService(
             await foreach (var userEvent in streamClient.ReadAsync(string.Empty, stoppingToken).ConfigureAwait(false))
             {
                 var record = ToRecord(userEvent);
+                using var streamActivity = CryptoTrading.Observability.TradingTelemetry.ActivitySource.StartActivity("account-stream.persist");
+                using var streamScope = logger.BeginScope(new Dictionary<string, object?>
+                {
+                    ["event_name"] = "account-stream.persist",
+                    ["event_type"] = userEvent.GetType().Name,
+                    ["trace_id"] = System.Diagnostics.Activity.Current?.TraceId.ToString()
+                });
                 _ = await eventStore.AppendAccountStreamEventAsync(record, stoppingToken).ConfigureAwait(false);
                 if (userEvent is BinanceExecutionReportEvent execution)
                 {
@@ -71,6 +79,17 @@ internal sealed class AccountStreamHostedService(
                         try
                         {
                             var accountingResult = await executionAccountingStore.RecordExecutionAsync(accounting, stoppingToken).ConfigureAwait(false);
+                            AccountStreamLog.Accounted(logger, accountingResult.ExecutionId, execution.ClientOrderId,
+                                accountingResult.IsDuplicate, accounting.Symbol.Value, accounting.Side.ToString(),
+                                accounting.Quantity.Value, accounting.Price.Value, accounting.QuoteAsset.Value,
+                                accounting.Commission.Asset.Value, accounting.Commission.Amount,
+                                accountingResult.RealizedPnlQuote, accountingResult.AverageCostQuote,
+                                accountingResult.FeeComparison?.Status.ToString() ?? "UNAVAILABLE", accounting.OccurredAtUtc);
+                            if (learningRewards is not null)
+                            {
+                                var reward = await learningRewards.RecordExecutionRewardAsync(accountingResult.ExecutionId, stoppingToken).ConfigureAwait(false);
+                                AccountStreamLog.Learning(logger, accountingResult.ExecutionId, reward.Recorded, reward.Replayed, reward.SkippedReason);
+                            }
                             if (feeEstimate is not null && accountingResult.FeeComparison is { } comparison &&
                                 (comparison.IsDrift || comparison.Status == ExecutionFeeComparisonStatus.NotComparable))
                             {
@@ -79,6 +98,12 @@ internal sealed class AccountStreamHostedService(
                         }
                         catch (Exception ex) when (ex is not OperationCanceledException)
                         {
+                            using var accountingErrorScope = logger.BeginScope(new Dictionary<string, object?>
+                            {
+                                ["error_stack"] = ex.StackTrace,
+                                ["execution_id"] = accounting.ExecutionId,
+                                ["client_order_id"] = execution.ClientOrderId
+                            });
                             AccountStreamLog.Failed(logger, ex.GetType().Name);
                             await EnterSafeModeAsync("ACCOUNTING_EXECUTION_FAILURE", stoppingToken).ConfigureAwait(false);
                         }
@@ -118,10 +143,12 @@ internal sealed class AccountStreamHostedService(
         }
         catch (Exception exception)
         {
+            using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
             await runtimeSupervisor.MarkAccountStreamAsync(false, "account-stream-failure", stoppingToken).ConfigureAwait(false);
             await EnterSafeModeAsync("ACCOUNT_STREAM_FAILURE", stoppingToken).ConfigureAwait(false);
             AccountStreamLog.Failed(logger, exception.GetType().Name);
-            throw;
+            // The host logs terminal BackgroundService exceptions; do not forward an upstream payload to it.
+            throw new InvalidOperationException("Account stream failed closed; inspect the correlated structured failure event.");
         }
     }
 
@@ -241,6 +268,13 @@ internal sealed class AccountStreamHostedService(
 
 internal static partial class AccountStreamLog
 {
+    [LoggerMessage(LogLevel.Information, "Execution accounted. ExecutionId={ExecutionId} ClientOrderId={ClientOrderId} Replayed={Replayed} Symbol={Symbol} Side={Side} Quantity={Quantity} Price={Price} QuoteAsset={QuoteAsset} CommissionAsset={CommissionAsset} CommissionAmount={CommissionAmount} RealizedPnlQuote={RealizedPnlQuote} AverageCostQuote={AverageCostQuote} FeeStatus={FeeStatus} OccurredAtUtc={OccurredAtUtc}")]
+    public static partial void Accounted(ILogger logger, string executionId, string clientOrderId, bool replayed,
+        string symbol, string side, decimal quantity, decimal price, string quoteAsset, string commissionAsset,
+        decimal commissionAmount, decimal? realizedPnlQuote, decimal? averageCostQuote, string feeStatus, DateTimeOffset occurredAtUtc);
+
+    [LoggerMessage(LogLevel.Information, "Execution learning attribution. ExecutionId={ExecutionId} Recorded={Recorded} Replayed={Replayed} SkippedReason={SkippedReason}")]
+    public static partial void Learning(ILogger logger, string executionId, bool recorded, bool replayed, string? skippedReason);
     [LoggerMessage(LogLevel.Warning, "Account stream entered SafeMode. Reason={Reason}")]
     public static partial void SafeMode(ILogger logger, string reason);
 

@@ -119,7 +119,8 @@ public sealed class WorkerRuntimeTests
                 Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" }
             }),
             projection,
-            NullLogger<TestnetOutboxMessageExecutor>.Instance);
+            NullLogger<TestnetOutboxMessageExecutor>.Instance,
+            submissionGuard: new TestSubmissionGuard(), submissionStore: new TestSubmissionStore());
 
         await executor.ExecuteAsync(MessageFor(command));
 
@@ -155,7 +156,8 @@ public sealed class WorkerRuntimeTests
             }),
             Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
             projection,
-            NullLogger<TestnetOutboxMessageExecutor>.Instance);
+            NullLogger<TestnetOutboxMessageExecutor>.Instance,
+            submissionGuard: new TestSubmissionGuard(), submissionStore: new TestSubmissionStore());
 
         await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(MessageFor(command)));
 
@@ -324,10 +326,12 @@ public sealed class WorkerRuntimeTests
             AccountStreamEnabled = true
         }));
         testnetServices.AddSingleton<ILocalOpenOrderStore, RecordingOpenOrderStore>();
+        testnetServices.AddSingleton<IDurableSubmissionStore, TestSubmissionStore>();
         testnetServices.AddSingleton<IOrderCancellationStore>(serviceProvider =>
             new RecordingCancellationStore(serviceProvider.GetRequiredService<ILocalOpenOrderStore>()));
         testnetServices.AddSingleton<OrderProjectionService>();
         _ = testnetServices.AddOutboxExecution(configuration);
+        testnetServices.AddSingleton<IExecutionSubmissionGuard, TestSubmissionGuard>();
         _ = testnetServices.AddSingleton<IBinanceSpotOrderClient>(_ => new AmbiguousTestnetClient(NewCommand()));
         _ = testnetServices.AddSingleton<IBinanceSpotAccountClient, TestnetAccountClient>();
         await using var testnetProvider = testnetServices.BuildServiceProvider();
@@ -775,7 +779,8 @@ public sealed class WorkerRuntimeTests
             }),
             Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
             new OrderProjectionService(store),
-            NullLogger<TestnetOutboxMessageExecutor>.Instance);
+            NullLogger<TestnetOutboxMessageExecutor>.Instance,
+            submissionGuard: new TestSubmissionGuard(), submissionStore: new TestSubmissionStore());
 
     private static TestnetCancelOutboxMessageExecutor CreateTestnetCancelExecutor(
         IBinanceSpotOrderClient exchange,

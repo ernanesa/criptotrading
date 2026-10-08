@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
@@ -28,20 +27,46 @@ public sealed class OperationalApiEndpointsTests
     }
 
     [Fact]
-    public async Task GetHealthReadyReturnsOk()
+    public async Task GetHealthReadyFailsClosedWhenPostgresIsNotConfigured()
     {
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/health/ready", UriKind.Relative));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 
     [Fact]
     public async Task GetOperationalStatusFromLoopbackReturnsOkAndReadOnly()
     {
-        using var factory = CreateFactory(IPAddress.Loopback);
+        var events = new[]
+        {
+            new OperationalControlAuditEvent(
+                Guid.Parse("8e1d4e65-4c98-4878-9e1a-cad81858a890"),
+                OperationalMode.Normal,
+                OperationalMode.SafeMode,
+                "worker",
+                "test-safe-mode",
+                new IdempotencyKey("api-operational-status-safe"),
+                new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero),
+                null),
+            new OperationalControlAuditEvent(
+                Guid.Parse("a1c6d42e-d7d5-4498-b4ab-3178ccf6e702"),
+                OperationalMode.SafeMode,
+                OperationalMode.KillSwitch,
+                "worker",
+                "latest-kill-switch",
+                new IdempotencyKey("api-operational-status-kill"),
+                new DateTimeOffset(2026, 10, 7, 12, 1, 0, TimeSpan.Zero),
+                null)
+        };
+        var store = new FakeOperationalControlAuditStore(events);
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IOperationalControlAuditStore>(store);
+            services.AddSingleton<IOperationalControlCurrentStateStore>(store);
+        });
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
@@ -49,8 +74,10 @@ public sealed class OperationalApiEndpointsTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var json = await response.Content.ReadFromJsonAsync<JsonObject>();
         Assert.NotNull(json);
-        Assert.Equal("api-process", json["source"]?.GetValue<string>());
-        Assert.Equal("Normal", json["mode"]?.GetValue<string>());
+        Assert.Equal("worker-durable-audit", json["source"]?.GetValue<string>());
+        Assert.Equal("KillSwitch", json["mode"]?.GetValue<string>());
+        Assert.True(json["blocksNewEntries"]?.GetValue<bool>());
+        Assert.Equal("latest-kill-switch", json["reason"]?.GetValue<string>());
         Assert.False(json["mutatingEndpointsEnabled"]?.GetValue<bool>());
     }
 
@@ -63,6 +90,23 @@ public sealed class OperationalApiEndpointsTests
         var response = await client.GetAsync(new Uri("/operational/status", UriKind.Relative));
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ForwardedHeadersAndInvalidInternalTokenCannotBypassLocalDiagnosticsPolicy()
+    {
+        const string invalidToken = "invalid-token-value";
+        using var factory = CreateFactory(IPAddress.Parse("192.168.1.100"));
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/operational/status");
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "127.0.0.1");
+        request.Headers.TryAddWithoutValidation("X-Internal-Access-Token", invalidToken);
+
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.DoesNotContain(invalidToken, body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -211,61 +255,58 @@ public sealed class OperationalApiEndpointsTests
     }
 
     [Fact]
-    public async Task GetOperationalRegimesCurrentReturnsOk()
+    public async Task GetOperationalRegimesCurrentReturns503WhenStoreUnavailable()
     {
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/operational/regimes/current?symbol=BTCUSDT", UriKind.Relative));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
-        Assert.NotNull(json);
-        Assert.Equal("BTCUSDT", json["symbol"]?.GetValue<string>());
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 
     [Fact]
-    public async Task GetOperationalRegimesHistoryReturnsOk()
+    public async Task GetOperationalRegimesHistoryReturns503WhenStoreUnavailable()
     {
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/operational/regimes/history?symbol=BTCUSDT", UriKind.Relative));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 
     [Fact]
-    public async Task GetOperationalModelsReturnsOk()
+    public async Task GetOperationalModelsReturns503WhenStoreUnavailable()
     {
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/operational/models?strategyId=trend-following", UriKind.Relative));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 
     [Fact]
-    public async Task GetOperationalDriftReturnsOk()
+    public async Task GetOperationalDriftReturns503WhenStoreUnavailable()
     {
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/operational/drift", UriKind.Relative));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 
     [Fact]
-    public async Task GetOperationalAllocationsReturnsOk()
+    public async Task GetOperationalAllocationsReturns503WhenStoreUnavailable()
     {
         using var factory = CreateFactory(IPAddress.Loopback);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(new Uri("/operational/allocations", UriKind.Relative));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
     }
 
     [Fact]
@@ -281,16 +322,21 @@ public sealed class OperationalApiEndpointsTests
             TotalGrossLossQuote: 4.50m,
             Periods: new[]
             {
-                new PerformancePeriodMetrics("Hoje (Dia / 24 Horas)", 5, 5, 0, 25.00m, 0.60m),
-                new PerformancePeriodMetrics("Semana (Últimos 7 Dias)", 10, 9, 1, 45.50m, 1.20m),
-                new PerformancePeriodMetrics("Mês (Últimos 30 Dias)", 10, 9, 1, 45.50m, 1.20m),
-                new PerformancePeriodMetrics("Ano (Acumulado / YTD)", 10, 9, 1, 45.50m, 1.20m)
+                new PerformancePeriodMetrics("Hoje (Dia / 24 Horas)", 5, 5, 0, 25.00m, 0.60m) { NetAssetValueDeltaQuote = 25m, UnrealizedPnlDeltaQuote = 2m, SnapshotAvailability = PerformanceSnapshotAvailability.Available },
+                new PerformancePeriodMetrics("Semana (Últimos 7 Dias)", 10, 9, 1, 45.50m, 1.20m) { NetAssetValueDeltaQuote = 45.5m, UnrealizedPnlDeltaQuote = 2m, SnapshotAvailability = PerformanceSnapshotAvailability.Available },
+                new PerformancePeriodMetrics("Mês (Últimos 30 Dias)", 10, 9, 1, 45.50m, 1.20m) { NetAssetValueDeltaQuote = 45.5m, UnrealizedPnlDeltaQuote = 2m, SnapshotAvailability = PerformanceSnapshotAvailability.Available },
+                new PerformancePeriodMetrics("Ano (Acumulado / YTD)", 10, 9, 1, 45.50m, 1.20m) { NetAssetValueDeltaQuote = 45.5m, UnrealizedPnlDeltaQuote = 2m, SnapshotAvailability = PerformanceSnapshotAvailability.Available }
             },
-            BtcPositionBasis: new PositionCostBasisRecord("BTCUSDT", "BTC", "USDT", 0.5m, 40000m, DateTimeOffset.UtcNow));
+            BtcPositionBasis: new PositionCostBasisRecord("BTCUSDT", "BTC", "USDT", 0.5m, 40000m, DateTimeOffset.UtcNow))
+        {
+            CurrentNetAssetValueQuote = 500m,
+            CurrentUnrealizedPnlQuote = 2m,
+            CurrentSnapshotObservedAtUtc = DateTimeOffset.UtcNow
+        };
 
         using var factory = CreateFactory(IPAddress.Loopback, services =>
         {
-            services.AddSingleton<IPortfolioPerformanceStore>(new FakePortfolioPerformanceStore(fakeMetrics));
+            services.AddSingleton<IPortfolioNavSnapshotStore>(new FakePortfolioSnapshotStore(fakeMetrics));
         });
         using var client = factory.CreateClient();
 
@@ -300,6 +346,8 @@ public sealed class OperationalApiEndpointsTests
         var json = await response.Content.ReadFromJsonAsync<JsonObject>();
         Assert.NotNull(json);
         Assert.Equal(10, json["totalTradesCount"]?.GetValue<int>());
+        Assert.Null(json["initialCapitalUsd"]);
+        Assert.Null(json["totalProfitPct"]);
         Assert.Equal(90.00m, json["winRatePercentage"]?.GetValue<decimal>());
         Assert.Equal(45.50m, json["totalRealizedPnlUsd"]?.GetValue<decimal>());
         Assert.Equal(11.11m, json["profitFactor"]?.GetValue<decimal>());
@@ -308,6 +356,52 @@ public sealed class OperationalApiEndpointsTests
         Assert.Equal(4, periods.Count);
         Assert.Equal(5, periods[0]?["tradesCount"]?.GetValue<int>());
         Assert.Equal(100.00m, periods[0]?["winRatePercentage"]?.GetValue<decimal>());
+    }
+
+    [Fact]
+    public async Task GetPortfolioPerformanceRejectsStaleCurrentSnapshot()
+    {
+        var staleMetrics = new AggregatedPortfolioPerformanceMetrics(
+            0, 0, 0, 0m, 0m, 0m, 0m, Array.Empty<PerformancePeriodMetrics>(), null)
+        {
+            CurrentNetAssetValueQuote = 500m,
+            CurrentUnrealizedPnlQuote = 0m,
+            CurrentSnapshotObservedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-3)
+        };
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IPortfolioNavSnapshotStore>(new FakePortfolioSnapshotStore(staleMetrics));
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetPortfolioPerformanceLeavesProfitFactorUnknownWithoutRealizedLosses()
+    {
+        var metrics = new AggregatedPortfolioPerformanceMetrics(
+            1, 1, 0, 5m, 0m, 5m, 0m, Array.Empty<PerformancePeriodMetrics>(), null)
+        {
+            CurrentNetAssetValueQuote = 505m,
+            CurrentUnrealizedPnlQuote = 0m,
+            CurrentSnapshotObservedAtUtc = DateTimeOffset.UtcNow
+        };
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IPortfolioNavSnapshotStore>(new FakePortfolioSnapshotStore(metrics));
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative));
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(json);
+        Assert.Null(json["profitFactor"]);
+        Assert.Equal("UNKNOWN_WITHOUT_REALIZED_LOSSES", json["profitFactorAvailabilityReason"]?.GetValue<string>());
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The caller disposes the created WebApplicationFactory.")]
@@ -345,11 +439,13 @@ public sealed class OperationalApiEndpointsTests
                     d.ServiceType == typeof(IExecutionSubmissionContextStore) ||
                     d.ServiceType == typeof(IOrderLifecycleStore) ||
                     d.ServiceType == typeof(IRuntimeStateStore) ||
+                    d.ServiceType == typeof(IOperationalControlAuditStore) ||
                     d.ServiceType == typeof(IMarketRegimeStore) ||
                     d.ServiceType == typeof(IModelStrategyRegistryStore) ||
                     d.ServiceType == typeof(IDriftObservationStore) ||
                     d.ServiceType == typeof(IStrategyRegimePerformanceStore) ||
-                    d.ServiceType == typeof(IPortfolioPerformanceStore)).ToList();
+                    d.ServiceType == typeof(IPortfolioPerformanceStore) ||
+                    d.ServiceType == typeof(IPortfolioNavSnapshotStore)).ToList();
                 foreach (var d in storesToRemove)
                 {
                     services.Remove(d);
@@ -423,9 +519,34 @@ public sealed class OperationalApiEndpointsTests
             Task.FromResult(activePolicy);
     }
 
-    private sealed class FakePortfolioPerformanceStore(AggregatedPortfolioPerformanceMetrics metrics) : IPortfolioPerformanceStore
+    private sealed class FakePortfolioSnapshotStore(AggregatedPortfolioPerformanceMetrics metrics) : IPortfolioNavSnapshotStore
     {
-        public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(metrics);
+        public Task RecordNavSnapshotAsync(PortfolioNavSnapshot snapshot, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(
+            DateTimeOffset asOfUtc,
+            CancellationToken cancellationToken = default) => Task.FromResult(metrics);
+    }
+
+    private sealed class FakeOperationalControlAuditStore(
+        IReadOnlyList<OperationalControlAuditEvent> events) : IOperationalControlAuditStore, IOperationalControlCurrentStateStore
+    {
+        public Task<bool> AppendOperationalControlAuditEventAsync(
+            OperationalControlAuditEvent auditEvent,
+            CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+        public Task<IReadOnlyList<OperationalControlAuditEvent>> ReadOperationalControlAuditEventsAsync(
+            DateTimeOffset? sinceUtc = null,
+            int limit = 1_000,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<OperationalControlAuditEvent>>(
+                events.Where(e => sinceUtc is null || e.OccurredAtUtc >= sinceUtc)
+                    .OrderByDescending(e => e.OccurredAtUtc)
+                    .Take(limit)
+                    .ToArray());
+
+        public Task<OperationalControlAuditEvent?> ReadLatestOperationalControlAuditEventAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(events.OrderByDescending(e => e.OccurredAtUtc).FirstOrDefault());
     }
 }

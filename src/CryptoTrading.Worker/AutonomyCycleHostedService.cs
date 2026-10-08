@@ -43,7 +43,9 @@ internal sealed class AutonomyCycleHostedService(
     AdaptiveDecisionCycle? adaptiveCycle = null,
     IMarketRegimeStore? regimeStore = null,
     IDriftObservationStore? driftStore = null,
-    IBinanceSymbolTradingRulesProvider? rulesProvider = null) : BackgroundService
+    IBinanceSymbolTradingRulesProvider? rulesProvider = null,
+    IPortfolioNavSnapshotStore? navSnapshots = null,
+    IStrategyRegimePerformanceStore? durablePerformances = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
     private int consecutiveTransientFailures;
@@ -66,8 +68,9 @@ internal sealed class AutonomyCycleHostedService(
             }
             catch (Exception exception)
             {
+                using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
                 var classification = FailureClassifier.Classify(exception);
-                AutonomyCycleLog.Failed(logger, exception.GetType().Name, $"{classification.ReasonCode}: {exception.Message}");
+                AutonomyCycleLog.Failed(logger, exception.GetType().Name, classification.ReasonCode);
                 try
                 {
                     if (classification.TargetState == CryptoTrading.Domain.Runtime.RuntimeState.KillSwitch)
@@ -109,6 +112,14 @@ internal sealed class AutonomyCycleHostedService(
 
     internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
     {
+        using var cycleActivity = CryptoTrading.Observability.TradingTelemetry.ActivitySource.StartActivity("autonomy.cycle");
+        using var cycleScope = logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["event_name"] = "autonomy.cycle",
+            ["symbol"] = runtime.AutonomySymbol,
+            ["engine_mode"] = runtime.AutonomyEngineMode,
+            ["trace_id"] = System.Diagnostics.Activity.Current?.TraceId.ToString()
+        });
         var now = DateTimeOffset.UtcNow;
         var isAdaptive = adaptiveCycle is not null && !string.Equals(runtime.AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase);
         var activeStrategyVersion = isAdaptive ? AdaptiveDecisionCycle.StrategyVersion : cycle.StrategyVersion;
@@ -252,6 +263,21 @@ internal sealed class AutonomyCycleHostedService(
         var bookTicker = await marketClient.GetBookTickerAsync(
             runtime.AutonomySymbol,
             cancellationToken).ConfigureAwait(false);
+        if (navSnapshots is not null && !unsupportedAssetBalance &&
+            bookTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
+            DateTimeOffset.UtcNow - bookTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+        {
+            var valuationPrice = (bookTicker.BidPrice + bookTicker.AskPrice) / 2m;
+            decimal? unrealized = btcQuantity == 0m ? 0m :
+                accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m
+                    ? btcQuantity * valuationPrice - accounting.PositionCostNotional : null;
+            await navSnapshots.RecordNavSnapshotAsync(new PortfolioNavSnapshot(
+                runtime.AutonomySymbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
+                totalQuoteBalance + btcQuantity * valuationPrice, unrealized,
+                null, "account-snapshot+observed-book-mid"), cancellationToken).ConfigureAwait(false);
+            AutonomyCycleLog.Valuation(logger, runtime.AutonomySymbol, bookTicker.ObservedAtUtc,
+                totalQuoteBalance + btcQuantity * valuationPrice, unrealized);
+        }
         BinanceSymbolTradingRules? rules = null;
         if (rulesProvider is not null)
         {
@@ -284,11 +310,16 @@ internal sealed class AutonomyCycleHostedService(
             accounting.PositionCostNotional,
             riskContextComplete,
             riskContextReason);
+        var candles = closed.Select(item => new MarketCandle(item.Bar.CloseTimeUtc, item.Bar.ClosePrice.Value)).ToArray();
+        var bids = new[] { new MarketBookLevel(bookTicker.BidPrice, bookTicker.BidQuantity) };
+        var asks = new[] { new MarketBookLevel(bookTicker.AskPrice, bookTicker.AskQuantity) };
+        var buyRisk = MarketRiskCalculator.Calculate(candles, bids, asks, MarketRiskSide.Buy, bookTicker.ObservedAtUtc);
+        var sellRisk = MarketRiskCalculator.Calculate(candles, bids, asks, MarketRiskSide.Sell, bookTicker.ObservedAtUtc);
         var marketRisk = new MarketRiskSnapshot(
-            expectedSlippageBps: 5m,
-            volatilityBps: 0m,
-            availableLiquidityNotional: availableQuoteLiquidity,
-            latest.CloseTimeUtc);
+            Math.Max(buyRisk.ExpectedSlippageBps, sellRisk.ExpectedSlippageBps),
+            buyRisk.VolatilityBps,
+            Math.Min(buyRisk.AvailableLiquidityNotional, sellRisk.AvailableLiquidityNotional),
+            bookTicker.ObservedAtUtc, buyRisk.IsComplete && sellRisk.IsComplete);
         var runtimeSnapshot = runtimeSupervisor.Snapshot;
         var effectiveControl = runtimeSnapshot.CanCreateNewExposure
             ? operationalControl.Snapshot
@@ -321,6 +352,10 @@ internal sealed class AutonomyCycleHostedService(
                 policyDocument.Policy.MaxMarketDataAge,
                 featureSnapshot);
 
+            if (durablePerformances is not null)
+            {
+                adaptiveCycle.LoadStrategyRegimePerformances(await durablePerformances.GetPerformancesAsync(cancellationToken).ConfigureAwait(false));
+            }
             var adaptiveResult = adaptiveCycle.Evaluate(adaptiveRequest);
 
             if (regimeStore is not null)
@@ -641,6 +676,8 @@ internal sealed class AutonomyCycleHostedService(
 
 internal static partial class AutonomyCycleLog
 {
+    [LoggerMessage(LogLevel.Information, "Portfolio valuation recorded. Symbol={Symbol} ObservedAt={ObservedAt} NavQuote={NavQuote} UnrealizedPnlQuote={UnrealizedPnlQuote} ExternalCashFlowKnown=false")]
+    public static partial void Valuation(ILogger logger, string symbol, DateTimeOffset observedAt, decimal navQuote, decimal? unrealizedPnlQuote);
     [LoggerMessage(LogLevel.Information, "Autonomy cycle selected NO_TRADE. CloseTime={CloseTime} Reason={Reason}")]
     public static partial void NoTrade(ILogger logger, DateTimeOffset closeTime, string reason);
 

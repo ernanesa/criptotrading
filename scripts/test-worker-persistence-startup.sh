@@ -30,14 +30,18 @@ worker_assembly="$repo_root/src/CryptoTrading.Worker/bin/Release/net11.0/CryptoT
 compose=(docker compose --project-name "$compose_project" --file "$repo_root/compose.yaml")
 worker_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-worker-startup.XXXXXX")"
 restart_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-worker-restart.XXXXXX")"
+worker_directory="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-worker-host.XXXXXX")"
 cleanup() {
     rm -f -- "$worker_log" "$restart_log"
+    rm -rf -- "$worker_directory"
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 export POSTGRES_DB="$postgres_db" POSTGRES_USER="$postgres_user" POSTGRES_PASSWORD="$password"
 export POSTGRES_PORT="$postgres_port" POSTGRES_VOLUME_NAME="$volume_name"
+# This harness starts PostgreSQL only; it never starts API/Web.
+export API_INTERNAL_ACCESS_TOKEN_SOURCE="${API_INTERNAL_ACCESS_TOKEN_SOURCE:-/dev/null}"
 "${compose[@]}" up -d postgres >/dev/null
 for attempt in {1..30}; do
     if "${compose[@]}" exec -T postgres pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then
@@ -52,13 +56,15 @@ export WORKER_PERSISTENCE_ENABLED=true WORKER_APPLY_MIGRATIONS=true
 export WORKER_EXECUTION_MODE=PAPER WORKER_NO_TRADE=true
 export WORKER_RECONCILIATION_ENABLED=false WORKER_ACCOUNT_STREAM_ENABLED=false
 export WORKER_RISK_POLICY_REQUIRED=false WORKER_SHADOW_ENABLED=false
+export WORKER_AUTONOMY_ENABLED=false
+export WORKER_ALERT_WEBHOOK_URL= OTEL_EXPORTER_OTLP_ENDPOINT=
 # No Binance variables are exported: account-stream/reconciliation are disabled
 # and the Worker therefore cannot construct an authenticated client.
 
 run_worker() {
     local log_path="$1"
     set +e
-    timeout --foreground --signal=TERM --kill-after=15s 12s "$dotnet_command" "$worker_assembly" >"$log_path" 2>&1
+    (cd "$worker_directory" && timeout --foreground --signal=TERM --kill-after=15s 12s "$dotnet_command" "$worker_assembly") >"$log_path" 2>&1
     local status=$?
     set -e
     printf '%s' "$status"

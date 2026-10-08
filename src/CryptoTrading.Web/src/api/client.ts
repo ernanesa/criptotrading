@@ -77,7 +77,9 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
     let message = `API request failed with status ${response.status}`;
     try {
       const data = await response.json();
-      if (data && typeof data.error === 'string') {
+      if (data && typeof data.title === 'string') {
+        message = data.title;
+      } else if (data && typeof data.error === 'string') {
         message = data.error;
       }
     } catch {
@@ -85,7 +87,7 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
     }
 
     if (response.status === 403) {
-      message = 'Acesso proibido: o endpoint de diagnóstico requer conexão local de loopback.';
+      message = 'Acesso proibido: o endpoint requer conexão local ou proxy privado autenticado.';
     } else if (response.status === 503) {
       message = 'Serviço indisponível: o armazenamento persistente (PostgreSQL) não está conectado.';
     } else if (response.status === 404) {

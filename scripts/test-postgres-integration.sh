@@ -30,7 +30,7 @@ if [[ ! "$postgres_port" =~ ^[0-9]+$ ]] || (( postgres_port < 1024 || postgres_p
     exit 1
 fi
 
-compose=(docker compose --project-name "$compose_project" --file "$repo_root/compose.yaml")
+compose=(docker compose --env-file /dev/null --project-name "$compose_project" --file "$repo_root/compose.yaml")
 cleanup() {
     # Deliberately omit --volumes: preserving the named volume is part of this
     # test's contract and allows a later run to prove migration idempotency.
@@ -43,6 +43,9 @@ export POSTGRES_USER="$postgres_user"
 export POSTGRES_PASSWORD="$password"
 export POSTGRES_PORT="$postgres_port"
 export POSTGRES_VOLUME_NAME="$volume_name"
+# This harness starts PostgreSQL only. An explicit empty source keeps the
+# required API/Web proxy secret out of this isolated database-only scenario.
+export API_INTERNAL_ACCESS_TOKEN_SOURCE="${API_INTERNAL_ACCESS_TOKEN_SOURCE:-/dev/null}"
 
 "${compose[@]}" up -d postgres >/dev/null
 for attempt in {1..30}; do
@@ -60,7 +63,6 @@ connection_string="Host=127.0.0.1;Port=$postgres_port;Database=$postgres_db;User
 export POSTGRES_CONNECTION_STRING="$connection_string"
 
 "$dotnet_command" test "$repo_root/tests/CryptoTrading.Persistence.IntegrationTests/CryptoTrading.Persistence.IntegrationTests.csproj" \
-    --filter 'FullyQualifiedName~PostgresTradingStoreIntegrationTests' \
     --logger 'console;verbosity=minimal'
 
 "${compose[@]}" down --remove-orphans >/dev/null

@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net11.0": {
+      "Microsoft.AspNetCore.OpenApi": {
+        "type": "Direct",
+        "requested": "[11.0.0-rc.1.26425.128, )",
+        "resolved": "11.0.0-rc.1.26425.128",
+        "contentHash": "Gy2njnO4YX6Vdd8ca5q86MNYQSyMdvWKkLiQrT4cvCgIyTg+pNIwh5Sq+LJf+gzIXmeBnolE+RWDYOkbnndDZA==",
+        "dependencies": {
+          "Microsoft.OpenApi": "[3.10.0, 4.0.0)"
+        }
+      },
+      "OpenTelemetry": {
+        "type": "Direct",
+        "requested": "[1.19.0, )",
+        "resolved": "1.19.0",
+        "contentHash": "tH3Y3ABOCcUXbnz/jntnfEXcSxEy+GzS2niNqwJPIcNdAYUpP09QHLaAwcJExeS+ibfmlcSkmIfWlKhe7yVjIA==",
+        "dependencies": {
+          "OpenTelemetry.Api.ProviderBuilderExtensions": "1.19.0"
+        }
+      },
+      "OpenTelemetry.Instrumentation.AspNetCore": {
+        "type": "Direct",
+        "requested": "[1.19.0, )",
+        "resolved": "1.19.0",
+        "contentHash": "reypo7g0Nzyssg1EkbfWU6W58CVFgtgkSEGrFXtbpA+bNit7HUs7587DOkOdPCgqWr3IL4f6X9B2yhnU6POrFA==",
+        "dependencies": {
+          "OpenTelemetry.Api.ProviderBuilderExtensions": "[1.19.0, 2.0.0)"
+        }
+      },
+      "Microsoft.OpenApi": {
+        "type": "Transitive",
+        "resolved": "3.10.0",
+        "contentHash": "Iltx5vuQ+TWyuxsLNnLAaqm9RDdOtwWLgJtwH/XSKe/MkdpDQepqDi7it/4OM7JpLsHl1Ir65mm9vpAkbiNlow=="
+      },
+      "Npgsql": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "xZAYhPOU2rUIFpV48xsqhCx9vXs6Y+0jX2LCoSEfDFYMw9jtAOUk3iQsCnDLrFIv9NT3JGMihn7nnuZsPKqJmA=="
+      },
+      "OpenTelemetry.Api": {
+        "type": "Transitive",
+        "resolved": "1.19.0",
+        "contentHash": "ZupI0cvo9Jyk2IwLLMrXQm3PvX67tCBIiFws5fslm2Xw7gYctq5wZiGPS+mKmMususAAE9+jyv5Jp7ADxdZDJw=="
+      },
+      "OpenTelemetry.Api.ProviderBuilderExtensions": {
+        "type": "Transitive",
+        "resolved": "1.19.0",
+        "contentHash": "V+nYo7IIqH7cXagkERfGZUNstdoZQkplpn+hZMkLBlJ0ZJNQBvTMv2Cvjq8eqqxkB9lmBw+CUH78hWxJB1Vdcg==",
+        "dependencies": {
+          "OpenTelemetry.Api": "1.19.0"
+        }
+      },
+      "OpenTelemetry.Exporter.OpenTelemetryProtocol": {
+        "type": "Transitive",
+        "resolved": "1.19.0",
+        "contentHash": "x1QtTiMXvM4POUv92FX0S3KPLCwaFpZ76NwNsd4Os7jWDT+oESkfDSdP7JisoTdMP3x+s4xjXlc7eXEuU5SBMw==",
+        "dependencies": {
+          "OpenTelemetry": "1.19.0"
+        }
+      },
+      "OpenTelemetry.Extensions.Hosting": {
+        "type": "Transitive",
+        "resolved": "1.19.0",
+        "contentHash": "XmjQIPG36zgkpc2nYkveQvmVe7zqffmXG+/7rGlE67Be59clUlPyJA8NKMi1XeZheoNkQG6SZcZ5NykzGRHrdA==",
+        "dependencies": {
+          "OpenTelemetry": "1.19.0"
+        }
+      },
+      "cryptotrading.configuration": {
+        "type": "Project"
+      },
+      "cryptotrading.domain": {
+        "type": "Project"
+      },
+      "cryptotrading.exchange.binance": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Configuration": "[1.0.0, )",
+          "CryptoTrading.Observability": "[1.0.0, )"
+        }
+      },
+      "cryptotrading.observability": {
+        "type": "Project",
+        "dependencies": {
+          "OpenTelemetry": "[1.19.0, )",
+          "OpenTelemetry.Exporter.OpenTelemetryProtocol": "[1.19.0, )",
+          "OpenTelemetry.Extensions.Hosting": "[1.19.0, )"
+        }
+      },
+      "cryptotrading.persistence": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )",
+          "Npgsql": "[10.0.0, )"
+        }
+      }
+    }
+  }
+}

@@ -2,32 +2,68 @@ name: cryptotrading-observability
 
 services:
   otel-collector:
-    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.123.0}
+    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.123.0@sha256:e39311df1f3d941923c00da79ac7ba6269124a870ee87e3c3ad24d60f8aee4d2}
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    user: "0:0"
+    environment:
+      DOCKER_LOG_ROOT: /var/lib/docker
+      CRYPTO_API_CONTAINER_ID: ${CRYPTO_API_CONTAINER_ID:-disabled-api}
+      CRYPTO_WORKER_CONTAINER_ID: ${CRYPTO_WORKER_CONTAINER_ID:-disabled-worker}
+      CRYPTO_WEB_CONTAINER_ID: ${CRYPTO_WEB_CONTAINER_ID:-disabled-web}
     volumes:
       - ./ops/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      # Rootful Docker default is /var/lib/docker. Set DOCKER_LOG_ROOT for a
+      # rootless daemon; this is read-only and deliberately excludes the socket.
+      - ${DOCKER_LOG_ROOT:-/var/lib/docker}/containers:/var/lib/docker/containers:ro
+      - cryptotrading-otel-collector-data:/var/lib/otelcol
     ports:
       - "127.0.0.1:${OTEL_GRPC_PORT:-4317}:4317"
       - "127.0.0.1:${OTEL_HTTP_PORT:-4318}:4318"
       - "127.0.0.1:${OTEL_HEALTH_PORT:-13133}:13133"
     security_opt:
       - no-new-privileges:true
+    logging: &json-logs
+      driver: json-file
+      options:
+        max-size: ${CONTAINER_LOG_MAX_SIZE:-10m}
+        max-file: ${CONTAINER_LOG_MAX_FILES:-5}
+        # Only fixed Docker labels are retained; never include env values.
+        labels: com.docker.compose.project,com.docker.compose.service
+
+  loki:
+    # Version verified against Grafana's official 3.5 release notes; select a
+    # digest from an inspected image before a release.
+    image: ${LOKI_IMAGE:-grafana/loki:3.5.12@sha256:c2a6860c2f94ecc98fffce7c10e6c8b350cf25e2ea3daa255dff27d7c6a4dffc}
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yaml", "-config.expand-env=true"]
+    environment:
+      LOKI_RETENTION_PERIOD: ${LOKI_RETENTION_PERIOD:-336h}
+    volumes:
+      - ./ops/observability/loki.yaml:/etc/loki/config.yaml:ro
+      - cryptotrading-loki-data:/loki
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    security_opt:
+      - no-new-privileges:true
+    logging: *json-logs
 
   prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.2.1}
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62}
     restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
     volumes:
       - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/observability/prometheus-alerts.yml:/etc/prometheus/prometheus-alerts.yml:ro
       - cryptotrading-prometheus-data:/prometheus
     ports:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     security_opt:
       - no-new-privileges:true
+    logging: *json-logs
 
   grafana:
-    image: ${GRAFANA_IMAGE:-grafana/grafana:11.5.2}
+    image: ${GRAFANA_IMAGE:-grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7}
     restart: unless-stopped
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
@@ -41,9 +77,10 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     security_opt:
       - no-new-privileges:true
+    logging: *json-logs
 
   tempo:
-    image: ${TEMPO_IMAGE:-grafana/tempo:2.7.2}
+    image: ${TEMPO_IMAGE:-grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3}
     restart: unless-stopped
     user: "0:0"
     command: ["-config.file=/etc/tempo.yaml"]
@@ -54,8 +91,15 @@ services:
       - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
     security_opt:
       - no-new-privileges:true
+    logging: *json-logs
+
+networks:
+  default:
+    name: ${OBSERVABILITY_NETWORK_NAME:-cryptotrading-observability}
 
 volumes:
+  cryptotrading-otel-collector-data:
   cryptotrading-prometheus-data:
   cryptotrading-grafana-data:
   cryptotrading-tempo-data:
+  cryptotrading-loki-data:

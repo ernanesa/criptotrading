@@ -59,6 +59,7 @@ internal sealed class PeriodicReconciliationHostedService(
         }
         catch (Exception exception)
         {
+            using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
             try
             {
                 _ = await operationalControl.EnterSafeModeAsync(new OperationalControlCommand(
@@ -77,7 +78,7 @@ internal sealed class PeriodicReconciliationHostedService(
             }
 
             PeriodicReconciliationLog.Failed(logger, exception.GetType().Name);
-            throw;
+            throw new InvalidOperationException("Periodic reconciliation failed closed; inspect the correlated structured failure event.");
         }
     }
 }

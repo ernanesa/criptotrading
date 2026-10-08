@@ -1,0 +1,24 @@
+groups:
+  - name: cryptotrading-runtime
+    rules:
+      - alert: CryptoTradingApiErrors
+        expr: sum(rate(cryptotrading_api_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: CryptoTrading API is returning errors.
+      - alert: CryptoTradingReconciliationMismatch
+        expr: sum(increase(cryptotrading_reconciliation_mismatches_total[15m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Reconciliation mismatch observed.
+      - alert: CryptoTradingWorkerHeartbeatMissing
+        expr: sum(rate(cryptotrading_worker_heartbeats_total[10m])) == 0 or absent(cryptotrading_worker_heartbeats_total)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: No worker heartbeat was observed.

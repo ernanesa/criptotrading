@@ -93,6 +93,10 @@ public sealed class AdaptiveDecisionCycle
     public static string StrategyId => DefaultStrategyId;
     public static string StrategyVersion => DefaultStrategyVersion;
 
+    /// <summary>Loads durable reward aggregates before this cycle starts evaluating strategies.</summary>
+    public void LoadStrategyRegimePerformances(IEnumerable<StrategyRegimePerformance> performances) =>
+        _metaAllocator.LoadPerformances(performances);
+
     public AdaptiveDecisionCycleResult Evaluate(AdaptiveDecisionCycleRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);

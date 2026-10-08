@@ -38,140 +38,52 @@ export const AutonomyDashboardView: React.FC = () => {
     modelsQuery.refetch();
   };
 
-  // Resolved Regime
+  // Only display regime evidence returned by the API. Missing/unknown evidence blocks exposure.
   const regimeData = regimeQuery.data;
-  const rawRegime = regimeData?.regime && regimeData.regime !== 'Unknown' ? regimeData.regime : 'BullTrend';
-  const regimeDisplayName =
-    rawRegime === 'BullTrend'
-      ? 'BULL TREND'
-      : rawRegime === 'BearTrend'
-        ? 'BEAR TREND'
-        : rawRegime === 'MeanRevertingRange'
-          ? 'MEAN REVERTING RANGE'
-          : rawRegime === 'HighVolatilityChop'
-            ? 'HIGH VOLATILITY CHOP'
-            : rawRegime === 'IlliquidOrStale'
-              ? 'ILLIQUID OR STALE'
-              : rawRegime;
-
-  const confidencePct = Math.round((regimeData?.confidence ?? 0.88) * 100);
+  const knownRegime = Boolean(
+    regimeData &&
+      ['BullTrend', 'BearTrend', 'MeanRevertingRange', 'HighVolatilityChop', 'IlliquidOrStale'].includes(
+        regimeData.regime,
+      ),
+  );
+  const isChopProhibited = !knownRegime || regimeData?.prohibitsNewExposure !== false;
+  const regimeDisplayName = knownRegime ? regimeData?.regime : 'Indisponível (Unknown)';
+  const confidencePct = knownRegime ? Math.round((regimeData?.confidence ?? 0) * 100) : 0;
   const trendSlopeRate =
-    regimeData?.trendSlopeRate !== undefined
-      ? `+${(regimeData.trendSlopeRate * 100).toFixed(2)}% / bar`
-      : '+0.42% / bar';
+    regimeData && knownRegime ? `${(regimeData.trendSlopeRate * 100).toFixed(2)}% / bar` : 'Indisponível';
   const volatilityRate =
-    regimeData?.volatilityRate !== undefined ? `${(regimeData.volatilityRate * 100).toFixed(2)}%` : '1.85%';
-  const regimeReason =
-    regimeData?.reason && regimeData.reason !== 'REGIME_STORE_UNAVAILABLE'
-      ? regimeData.reason
-      : 'Regressão linear com inclinação positiva sustentada e fluxo de volume comprador.';
-  const isChopProhibited = regimeData?.prohibitsNewExposure ?? false;
+    regimeData && knownRegime ? `${(regimeData.volatilityRate * 100).toFixed(2)}%` : 'Indisponível';
+  const regimeReason = knownRegime
+    ? regimeData?.reason
+    : 'Sem evidência de regime; novas exposições permanecem bloqueadas.';
 
-  // Resolved Allocations
-  const liveAllocations = allocationsQuery.data || [];
-  const defaultAllocations = [
-    {
-      id: 'trend-following-btcusdt',
-      name: 'Trend Following EMA Cross',
-      weight: 0.55,
-      allocatedNotional: 5500.0,
-      expectedUtility: 1.82,
-    },
-    {
-      id: 'breakout-momentum-btcusdt',
-      name: 'Donchian Breakout Momentum',
-      weight: 0.3,
-      allocatedNotional: 3000.0,
-      expectedUtility: 1.64,
-    },
-    {
-      id: 'mean-reversion-btcusdt',
-      name: 'Mean Reversion Z-Score',
-      weight: 0.15,
-      allocatedNotional: 1500.0,
-      expectedUtility: 0.95,
-    },
-    {
-      id: 'adaptive-grid-btcusdt',
-      name: 'Adaptive Geometric Grid',
-      weight: 0.0,
-      allocatedNotional: 0.0,
-      expectedUtility: 0.2,
-    },
-  ];
+  const allocations = allocationsQuery.data || [];
 
-  const allocations =
-    liveAllocations.length > 0
-      ? liveAllocations.map((a, idx) => ({
-          id: `${a.strategyId || 'strat'}-${idx}`,
-          name: String(a.strategyId || '').toUpperCase(),
-          weight: Math.min(1, Math.max(0.1, Number(a.averageReward || 0))),
-          allocatedNotional: (a.observationCount || 1) * 1000,
-          expectedUtility: Number(a.cumulativeReward || 0),
-        }))
-      : defaultAllocations;
-
-  // Resolved Drifts
+  // Preserve API values and enum meaning; an unrecognized status is never reported as normal.
   const liveDrifts = driftsQuery.data || [];
-  const defaultDrifts = [
-    { type: 'Execution Slippage Drift (US-172)', observed: '2.4 bps', threshold: '5.0 bps', status: 'Normal' },
-    { type: 'Realized vs Expected Return (US-174)', observed: '-0.8%', threshold: '2.5%', status: 'Normal' },
-    { type: 'Volatility Regime Drift (US-174)', observed: '2.1%', threshold: '5.0%', status: 'Normal' },
-  ];
-
-  const driftMetrics =
-    liveDrifts.length > 0
-      ? liveDrifts.map((d) => ({
-          type: `${d.type} (${d.strategyId || 'global'})`,
-          observed: `${(d.observedValue ?? 0).toFixed(1)} bps`,
-          threshold: `${(d.allowedDeviationThreshold ?? 0).toFixed(1)} bps`,
-          status: d.severity === 'BreachedThreshold' ? 'Breached' : d.severity === 'Warning' ? 'Warning' : 'Normal',
-        }))
-      : defaultDrifts;
+  const driftMetrics = liveDrifts.map((d) => ({
+    type: `${d.type} (${d.strategyId || 'global'})`,
+    observed: Number.isFinite(d.observedValue) ? d.observedValue.toString() : 'Indisponível',
+    threshold: Number.isFinite(d.allowedDeviationThreshold) ? d.allowedDeviationThreshold.toString() : 'Indisponível',
+    status:
+      d.severity === 'BreachedThreshold'
+        ? 'Breached'
+        : d.severity === 'ElevatedWarning'
+          ? 'Warning'
+          : d.severity === 'WithinTolerance'
+            ? 'Normal'
+            : 'Unknown',
+  }));
 
   // Resolved Models
   const liveModels = modelsQuery.data || [];
-  const defaultModels = [
-    {
-      modelId: 'mdl-trend-prod-v1.2',
-      strategyFamily: 'Trend Following',
-      version: '1.2.0',
-      status: 'Active',
-      datasetHash: 'e3b0c44298fc1c14...ca495991b7852b855',
-    },
-    {
-      modelId: 'mdl-trend-challenger-v1.3',
-      strategyFamily: 'Trend Following',
-      version: '1.3.0',
-      status: 'Candidate',
-      datasetHash: '7f83b1657ff1fc53...bf09e46a782436f56',
-    },
-    {
-      modelId: 'mdl-reversion-base-v1.0',
-      strategyFamily: 'Mean Reversion',
-      version: '1.0.0',
-      status: 'Active',
-      datasetHash: 'b45cffe084dd3d20...194c653a060cc8784',
-    },
-    {
-      modelId: 'mdl-grid-experimental-v0.9',
-      strategyFamily: 'Adaptive Grid',
-      version: '0.9.1',
-      status: 'Quarantined',
-      datasetHash: 'a591a6d40bf42040...c26e10e786b402092',
-    },
-  ];
-
-  const registeredModels =
-    liveModels.length > 0
-      ? liveModels.map((m) => ({
-          modelId: m.modelId,
-          strategyFamily: m.strategyId,
-          version: m.version,
-          status: m.status,
-          datasetHash: m.datasetHash ? `${m.datasetHash.substring(0, 16)}...` : 'sha256-verified',
-        }))
-      : defaultModels;
+  const registeredModels = liveModels.map((m) => ({
+    modelId: m.modelId,
+    strategyFamily: m.strategyId,
+    version: m.version,
+    status: m.status,
+    datasetHash: m.datasetHash ? `${m.datasetHash.substring(0, 16)}...` : 'Indisponível',
+  }));
 
   return (
     <div className="space-y-6" data-testid="autonomy-dashboard-view">
@@ -222,9 +134,8 @@ export const AutonomyDashboardView: React.FC = () => {
         <div className="bg-rose-950/40 border border-rose-800/60 rounded-xl p-4 flex items-start gap-3">
           <ShieldAlert className="w-5 h-5 text-rose-400 flex-shrink-0 mt-0.5" />
           <div className="text-xs text-rose-200/90 leading-relaxed">
-            <strong className="text-rose-300 block mb-0.5">Trava de Proteção Fail-Closed Ativa:</strong>O classificador
-            de regime identificou alta volatilidade sem tendência definida (High Volatility Chop). Novas entradas e
-            alocações de risco foram automaticamente suprimidas pela política fail-closed (NO_TRADE).
+            <strong className="text-rose-300 block mb-0.5">Novas exposições bloqueadas:</strong>Não há evidência de
+            regime suficiente ou a política retornou bloqueio. A interface não autoriza entradas.
           </div>
         </div>
       )}
@@ -248,9 +159,9 @@ export const AutonomyDashboardView: React.FC = () => {
               <span className="font-mono text-slate-200">{volatilityRate}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-slate-400">Trava de High Volatility Chop:</span>
+              <span className="text-slate-400">Bloqueio de novas exposições:</span>
               <span className={`font-mono font-bold ${isChopProhibited ? 'text-rose-400' : 'text-emerald-400'}`}>
-                {isChopProhibited ? 'ATIVADA (NO_TRADE)' : 'DESATIVADA (Normal)'}
+                {isChopProhibited ? 'ATIVADA (NO_TRADE)' : 'DESATIVADA (API informou permissão)'}
               </span>
             </div>
           </div>
@@ -265,26 +176,29 @@ export const AutonomyDashboardView: React.FC = () => {
         <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-lg p-5">
           <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
             <Scale className="w-4 h-4 text-cyan-400" />
-            Alocação Dinâmica de Capital por Estratégia (Bandit Bayesiano)
+            Histórico de Recompensas por Estratégia e Regime
           </h3>
 
           <div className="space-y-4">
-            {allocations.map((alloc) => (
-              <div key={alloc.id} className="space-y-1.5">
-                <div className="flex justify-between text-xs">
-                  <span className="font-semibold text-slate-200">{alloc.name}</span>
-                  <span className="font-mono text-cyan-400 font-bold">
-                    {(alloc.weight * 100).toFixed(0)}% (${alloc.allocatedNotional.toFixed(0)})
-                  </span>
+            {allocationsQuery.isError ? (
+              <p className="text-xs text-rose-400">Histórico de recompensas indisponível.</p>
+            ) : allocations.length === 0 ? (
+              <p className="text-xs text-slate-400">Nenhum desempenho de estratégia registrado.</p>
+            ) : (
+              allocations.map((alloc) => (
+                <div key={`${alloc.strategyId}-${alloc.regime}`} className="space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="font-semibold text-slate-200">
+                      {alloc.strategyId} · {alloc.regime}
+                    </span>
+                    <span className="font-mono text-cyan-400 font-bold">
+                      {alloc.observationCount} observações · recompensa acumulada {alloc.cumulativeReward} · média{' '}
+                      {alloc.averageReward}
+                    </span>
+                  </div>
                 </div>
-                <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
-                  <div
-                    className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-full rounded-full transition-all duration-300"
-                    style={{ width: `${Math.min(100, Math.max(2, alloc.weight * 100))}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -309,26 +223,42 @@ export const AutonomyDashboardView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 font-mono">
-                {driftMetrics.map((dm, idx) => (
-                  <tr key={`${dm.type}-${idx}`} className="hover:bg-slate-800/30">
-                    <td className="py-2.5 px-3 font-sans font-medium text-slate-200">{dm.type}</td>
-                    <td className="py-2.5 px-3 text-slate-300">{dm.observed}</td>
-                    <td className="py-2.5 px-3 text-slate-400">{dm.threshold}</td>
-                    <td className="py-2.5 px-3">
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          dm.status === 'Breached'
-                            ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                            : dm.status === 'Warning'
-                              ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                              : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                        }`}
-                      >
-                        {dm.status}
-                      </span>
+                {driftsQuery.isError ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 text-center text-rose-400">
+                      Observações de drift indisponíveis.
                     </td>
                   </tr>
-                ))}
+                ) : driftMetrics.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 text-center text-slate-400">
+                      Nenhuma observação de drift registrada.
+                    </td>
+                  </tr>
+                ) : (
+                  driftMetrics.map((dm, idx) => (
+                    <tr key={`${dm.type}-${idx}`} className="hover:bg-slate-800/30">
+                      <td className="py-2.5 px-3 font-sans font-medium text-slate-200">{dm.type}</td>
+                      <td className="py-2.5 px-3 text-slate-300">{dm.observed}</td>
+                      <td className="py-2.5 px-3 text-slate-400">{dm.threshold}</td>
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            dm.status === 'Breached'
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                              : dm.status === 'Warning'
+                                ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                : dm.status === 'Normal'
+                                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                  : 'bg-slate-700 text-slate-300 border border-slate-600'
+                          }`}
+                        >
+                          {dm.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -352,26 +282,42 @@ export const AutonomyDashboardView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 font-mono">
-                {registeredModels.map((m) => (
-                  <tr key={m.modelId} className="hover:bg-slate-800/30">
-                    <td className="py-2.5 px-3 font-medium text-indigo-300">{m.modelId}</td>
-                    <td className="py-2.5 px-3 text-slate-300">v{m.version}</td>
-                    <td className="py-2.5 px-3 text-slate-400">{m.datasetHash}</td>
-                    <td className="py-2.5 px-3">
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          m.status === 'Active'
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                            : m.status === 'Candidate'
-                              ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                              : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                        }`}
-                      >
-                        {m.status}
-                      </span>
+                {modelsQuery.isError ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 text-center text-rose-400">
+                      Registro de modelos indisponível.
                     </td>
                   </tr>
-                ))}
+                ) : registeredModels.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="py-4 text-center text-slate-400">
+                      Nenhum modelo registrado.
+                    </td>
+                  </tr>
+                ) : (
+                  registeredModels.map((m) => (
+                    <tr key={m.modelId} className="hover:bg-slate-800/30">
+                      <td className="py-2.5 px-3 font-medium text-indigo-300">{m.modelId}</td>
+                      <td className="py-2.5 px-3 text-slate-300">v{m.version}</td>
+                      <td className="py-2.5 px-3 text-slate-400">{m.datasetHash}</td>
+                      <td className="py-2.5 px-3">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            m.status === 'Active'
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : m.status === 'Candidate'
+                                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
+                                : ['Quarantined', 'Superseded', 'Revoked'].includes(m.status)
+                                  ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
+                                  : 'bg-slate-700 text-slate-300 border border-slate-600'
+                          }`}
+                        >
+                          {m.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>

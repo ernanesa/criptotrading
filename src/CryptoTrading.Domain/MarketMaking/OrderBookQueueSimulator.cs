@@ -34,7 +34,7 @@ public sealed class OrderBookQueueSimulator
         var remainingAhead = Math.Max(0m, initialVolumeAhead - executedVolumeSincePlacement);
 
         var isAtFront = remainingAhead <= 0m;
-        
+
         // Probability of fill estimates: inversely proportional to queue remaining ahead
         var fillProbability = initialVolumeAhead > 0m
             ? Math.Clamp(executedVolumeSincePlacement / (initialVolumeAhead + myOrderQuantity), 0m, 1.0m)

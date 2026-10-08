@@ -1,7 +1,6 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
-using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
@@ -18,6 +17,7 @@ builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
 {
     options.IncludeScopes = true;
+    options.UseUtcTimestamp = true;
     options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
     options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
 });

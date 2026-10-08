@@ -57,6 +57,13 @@ export const OperationalOverviewView: React.FC = () => {
     balancesQuery.refetch();
   };
 
+  const telemetry = telemetryQuery.data;
+  const unavailable = 'Indisponível';
+  const apiErrorRate =
+    telemetry && telemetry.apiRequests > 0 && telemetry.apiErrors !== undefined
+      ? `${((telemetry.apiErrors / telemetry.apiRequests) * 100).toFixed(1)}%`
+      : unavailable;
+
   return (
     <div className="space-y-6" data-testid="operational-overview-view">
       {/* Top action row */}
@@ -99,9 +106,11 @@ export const OperationalOverviewView: React.FC = () => {
             )}
           </div>
           <p className="text-xs text-slate-400">
-            {statusQuery.data?.blocksNewEntries
-              ? 'Novas exposições estão estritamente bloqueadas.'
-              : 'Operação padrão sem restrições de emergência.'}
+            {statusQuery.data
+              ? statusQuery.data.blocksNewEntries
+                ? 'A API reporta bloqueio de novas exposições.'
+                : 'A API não reporta bloqueio de novas exposições.'
+              : 'Estado de bloqueio indisponível.'}
           </p>
         </div>
 
@@ -109,41 +118,41 @@ export const OperationalOverviewView: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">API Liveness</span>
-            {livenessQuery.data?.status === 'Healthy' || livenessQuery.isSuccess ? (
+            {livenessQuery.data?.status === 'Healthy' ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             ) : (
               <AlertCircle className="w-4 h-4 text-rose-400" />
             )}
           </div>
           <div className="text-2xl font-bold text-slate-100 mb-2">
-            <StatusBadge
-              status={livenessQuery.data?.status || (livenessQuery.isSuccess ? 'Healthy' : 'Unhealthy')}
-              size="lg"
-            />
+            <StatusBadge status={livenessQuery.data?.status || 'Unknown'} size="lg" />
           </div>
-          <p className="text-xs text-slate-400">Processo web respondendo a checagens locais de liveness.</p>
+          <p className="text-xs text-slate-400">
+            {livenessQuery.data?.status
+              ? `Status reportado pela checagem: ${livenessQuery.data.status}.`
+              : 'Status de liveness indisponível.'}
+          </p>
         </div>
 
         {/* Readiness */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Trading Readiness</span>
-            {readinessQuery.data?.status === 'Healthy' || readinessQuery.isSuccess ? (
+            {readinessQuery.data?.status === 'Healthy' ? (
               <CheckCircle2 className="w-4 h-4 text-emerald-400" />
             ) : (
               <AlertCircle className="w-4 h-4 text-amber-400" />
             )}
           </div>
           <div className="text-2xl font-bold text-slate-100 mb-2">
-            <StatusBadge
-              status={readinessQuery.data?.status || (readinessQuery.isSuccess ? 'Healthy' : 'Degraded')}
-              size="lg"
-            />
+            <StatusBadge status={readinessQuery.data?.status || 'Unknown'} size="lg" />
           </div>
           <p className="text-xs text-slate-400">
-            {readinessQuery.data?.status === 'Healthy' || readinessQuery.isSuccess
-              ? 'Configuração segura de Testnet carregada e validada.'
-              : 'Verificação de configuração pendente ou incompleta.'}
+            {readinessQuery.data?.status === 'Healthy'
+              ? 'A API reportou readiness Healthy.'
+              : readinessQuery.data?.status
+                ? `A API reportou readiness ${readinessQuery.data.status}.`
+                : 'Readiness indisponível; estado não confirmado.'}
           </p>
         </div>
 
@@ -158,8 +167,10 @@ export const OperationalOverviewView: React.FC = () => {
               formatUtcTimestamp(checkpointQuery.data.lastProcessedCloseUtc)
             ) : checkpointQuery.isLoading ? (
               <span className="text-slate-500">consultando...</span>
+            ) : checkpointQuery.isError ? (
+              <span className="text-rose-400 font-normal">Checkpoint indisponível</span>
             ) : (
-              <span className="text-slate-500 font-normal">Sem watermark recente</span>
+              <span className="text-slate-500 font-normal">A API não reportou watermark</span>
             )}
           </div>
           <div className="flex items-center justify-between text-xs text-slate-400">
@@ -193,9 +204,10 @@ export const OperationalOverviewView: React.FC = () => {
           {/* Total HTTP Requests */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
             <span className="text-slate-400 font-sans block mb-1">Requisições HTTP</span>
-            <span className="text-slate-100 font-bold text-sm block">{telemetryQuery.data?.apiRequests ?? 0}</span>
+            <span className="text-slate-100 font-bold text-sm block">{telemetry?.apiRequests ?? unavailable}</span>
             <span className="text-cyan-400 text-[11px]">
-              Duração: {telemetryQuery.data?.apiDurationMilliseconds ?? 0} ms
+              Duração: {telemetry?.apiDurationMilliseconds ?? unavailable}
+              {telemetry?.apiDurationMilliseconds !== undefined ? ' ms' : ''}
             </span>
           </div>
 
@@ -204,42 +216,44 @@ export const OperationalOverviewView: React.FC = () => {
             <span className="text-slate-400 font-sans block mb-1">Erros de API</span>
             <span
               className={`font-bold text-sm block ${
-                (telemetryQuery.data?.apiErrors ?? 0) === 0 ? 'text-emerald-400' : 'text-rose-400'
+                telemetry?.apiErrors === undefined
+                  ? 'text-slate-400'
+                  : telemetry.apiErrors === 0
+                    ? 'text-emerald-400'
+                    : 'text-rose-400'
               }`}
             >
-              {telemetryQuery.data?.apiErrors ?? 0}
+              {telemetry?.apiErrors ?? unavailable}
             </span>
-            <span className="text-slate-400 text-[11px]">Taxa de erro: 0.0%</span>
+            <span className="text-slate-400 text-[11px]">Taxa de erro: {apiErrorRate}</span>
           </div>
 
           {/* Reconciliações */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
             <span className="text-slate-400 font-sans block mb-1">Reconciliações</span>
             <span className="text-cyan-400 font-bold text-sm block">
-              {telemetryQuery.data?.reconciliationRuns ?? 0}
+              {telemetry?.reconciliationRuns ?? unavailable}
             </span>
             <span className="text-slate-400 text-[11px]">
-              Divergências: {telemetryQuery.data?.reconciliationMismatches ?? 0}
+              Divergências: {telemetry?.reconciliationMismatches ?? unavailable}
             </span>
           </div>
 
           {/* Heartbeats do Worker */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
             <span className="text-slate-400 font-sans block mb-1">Heartbeats</span>
-            <span className="text-emerald-400 font-bold text-sm block">
-              {telemetryQuery.data?.workerHeartbeats ?? 0}
-            </span>
-            <span className="text-slate-400 text-[11px]">Supervisor ativo</span>
+            <span className="text-slate-100 font-bold text-sm block">{telemetry?.workerHeartbeats ?? unavailable}</span>
+            <span className="text-slate-400 text-[11px]">Contagem reportada pela telemetria</span>
           </div>
 
           {/* Outbox / Eventos */}
           <div className="p-3 bg-slate-950 rounded-lg border border-slate-800 col-span-2 lg:col-span-1">
             <span className="text-slate-400 font-sans block mb-1">Outbox Dispatches</span>
             <span className="text-purple-400 font-bold text-sm block">
-              {telemetryQuery.data?.outboxDispatches ?? 0}
+              {telemetry?.outboxDispatches ?? unavailable}
             </span>
             <span className="text-slate-400 text-[11px]">
-              Dead-letters: {telemetryQuery.data?.outboxDeadLetters ?? 0}
+              Dead-letters: {telemetry?.outboxDeadLetters ?? unavailable}
             </span>
           </div>
         </div>

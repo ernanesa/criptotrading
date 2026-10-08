@@ -305,6 +305,12 @@ public sealed class OutboxDispatcher(
         activity?.SetTag("crypto.operation", "outbox_dispatch");
         try
         {
+            if (store is IDurableSubmissionStore safetyStore &&
+                !await safetyStore.ValidateOutboxLeaseAsync(message, cancellationToken).ConfigureAwait(false))
+            {
+                DispatcherLog.LeaseLost(logger, message.MessageId);
+                return;
+            }
             if (!executors.TryGetValue(message.MessageType, out var executor))
             {
                 throw new InvalidOperationException($"No executor registered for '{message.MessageType}'.");
@@ -326,6 +332,13 @@ public sealed class OutboxDispatcher(
         {
             throw;
         }
+        catch (ExecutionDispatchBlockedException exception)
+        {
+            _ = await store.DeadLetterOutboxAsync(message.MessageId, leaseOwner,
+                exception.Message, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            TradingTelemetry.RecordOutboxDispatch(succeeded: false, deadLettered: true);
+            DispatcherLog.SafetyBlocked(logger, message.MessageId, exception.Message);
+        }
         catch (OrderOutcomeUnknownException exception)
         {
             // An ambiguous submit is not a transient failure. Dead-lettering
@@ -342,10 +355,11 @@ public sealed class OutboxDispatcher(
         }
         catch (Exception exception)
         {
+            using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
             activity?.SetStatus(ActivityStatusCode.Error);
             activity?.SetTag("error.type", exception.GetType().Name);
             var delaySeconds = Math.Min(300d, Math.Pow(2d, Math.Min(message.Attempts - 1, 8)));
-            var errorText = $"{exception.GetType().Name}: {exception.Message}";
+            var errorText = exception.GetType().Name;
             if (message.Attempts >= options.Value.MaxOutboxAttempts)
             {
                 _ = await store.DeadLetterOutboxAsync(
@@ -379,6 +393,8 @@ internal static partial class PaperExecutorLog
 
 internal static partial class DispatcherLog
 {
+    [LoggerMessage(LogLevel.Warning, "Dispatch blocked by safety boundary. MessageId={MessageId} Reason={Reason}")]
+    public static partial void SafetyBlocked(ILogger logger, Guid messageId, string reason);
     [LoggerMessage(LogLevel.Information, "Outbox dispatcher started. LeaseOwner={LeaseOwner} ExecutionMode={ExecutionMode} NoTrade={NoTrade}")]
     public static partial void Started(ILogger logger, string leaseOwner, bool noTrade, string executionMode);
 

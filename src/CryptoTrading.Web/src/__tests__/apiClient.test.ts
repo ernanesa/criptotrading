@@ -58,6 +58,23 @@ describe('apiClient', () => {
     });
   });
 
+  it('uses the sanitized problem title instead of an untrusted error detail', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ title: 'Market data could not be retrieved.', detail: 'credential=should-not-be-shown' }),
+        {
+          status: 502,
+          headers: { 'Content-Type': 'application/problem+json' },
+        },
+      ),
+    );
+
+    await expect(apiClient.getMarketTicker()).rejects.toMatchObject({
+      status: 502,
+      message: 'Market data could not be retrieved.',
+    });
+  });
+
   it('correctly requests decision by ID', async () => {
     let requestedUrl = '';
     globalThis.fetch = vi.fn().mockImplementation(async (url) => {
