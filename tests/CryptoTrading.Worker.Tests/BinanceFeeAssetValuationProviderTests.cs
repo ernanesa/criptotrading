@@ -18,7 +18,7 @@ public sealed class BinanceFeeAssetValuationProviderTests
             market,
             Options.Create(new WorkerRuntimeOptions { FeeAssetValuationMaxAgeSeconds = 30 }));
 
-        var valuation = await provider.ResolveAsync(Execution(fillAt));
+        var valuation = await provider.ResolveAsync(Execution(fillAt), TestContext.Current.CancellationToken);
 
         Assert.NotNull(valuation);
         Assert.Equal(601m, valuation!.QuotePerAsset);
@@ -35,7 +35,7 @@ public sealed class BinanceFeeAssetValuationProviderTests
             new StubMarketClient([Trade(1, 600m, fillAt.AddSeconds(-31))]),
             Options.Create(new WorkerRuntimeOptions { FeeAssetValuationMaxAgeSeconds = 30 }));
 
-        Assert.Null(await provider.ResolveAsync(Execution(fillAt)));
+        Assert.Null(await provider.ResolveAsync(Execution(fillAt), TestContext.Current.CancellationToken));
     }
 
     private static BinanceExecutionReportEvent Execution(DateTimeOffset occurredAt) => new(

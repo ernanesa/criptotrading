@@ -68,12 +68,12 @@ public sealed class MarketDataQualityGateTests
         using var recorder = new MarketDataRecorder(directory.Path);
         var first = DateTimeOffset.UnixEpoch.AddDays(1);
         await recorder.AppendAsync(first, first.AddMinutes(1), "kline-rest", "rest:klines:1d", "BTCUSDT",
-            new { closeTimeUtc = first, close = 100m });
+            new { closeTimeUtc = first, close = 100m }, TestContext.Current.CancellationToken);
         var second = first.AddDays(1);
         await recorder.AppendAsync(second, second.AddMinutes(1), "kline-rest", "rest:klines:1d", "BTCUSDT",
-            new { closeTimeUtc = second, close = 101m });
+            new { closeTimeUtc = second, close = 101m }, TestContext.Current.CancellationToken);
 
-        var replay = await recorder.ReadReplayAsync();
+        var replay = await recorder.ReadReplayAsync(cancellationToken: TestContext.Current.CancellationToken);
         var loaded = PublicKlineDatasetLoader.Load(
             replay,
             "btc-testnet-1d",

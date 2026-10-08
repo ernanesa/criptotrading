@@ -32,21 +32,18 @@ set +e
 env -u BINANCE_API_KEY -u BINANCE_API_SECRET "$dotnet_command" test "$test_project" \
     --no-restore \
     --configuration Release \
-    --filter 'Category=OosSensitivity' \
-    --logger 'console;verbosity=minimal' > >(tee "$test_log") 2>&1
+    --minimum-expected-tests 1 \
+    -- --filter-trait 'Category=OosSensitivity' > >(tee "$test_log") 2>&1
 test_status=$?
 set -e
 
-summary="$(rg -o 'Passed!.*' "$test_log" | tail -n 1 || true)"
+summary="$(rg -A5 '^Test run summary:' "$test_log" | tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g' || true)"
 if [[ -z "$summary" ]]; then
-    summary="No test summary was emitted."
+    summary="MTP exit code: $test_status; minimum expected tests: 1."
 fi
 
 result="FAIL"
-if (( test_status == 0 )) \
-    && [[ "$summary" =~ Passed! ]] \
-    && [[ "$summary" =~ Failed:[[:space:]]+0 ]] \
-    && [[ "$summary" =~ Total:[[:space:]]+[1-9][0-9]* ]]; then
+if (( test_status == 0 )); then
     result="PASS"
 fi
 

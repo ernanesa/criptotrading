@@ -32,7 +32,8 @@ public sealed class AutonomyDecisionReconstructionTests
         var commit = CreateCommit(decisionId, close);
 
         var commitStore = new FakeDecisionStore([commit]);
-        var report = await AutonomyDecisionReconstructor.ReconstructAsync(decisionId, commitStore);
+        var report = await AutonomyDecisionReconstructor.ReconstructAsync(
+            decisionId, commitStore, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(report);
         Assert.True(report.CanonicalIdentityHashMatches);
@@ -150,7 +151,8 @@ public sealed class AutonomyDecisionReconstructionTests
             commitStore,
             feeStore,
             subStore,
-            lifeStore);
+            lifeStore,
+            TestContext.Current.CancellationToken);
 
         Assert.NotNull(report);
         Assert.True(report.CanonicalIdentityHashMatches);

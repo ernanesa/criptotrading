@@ -15,7 +15,7 @@ env -u BINANCE_API_KEY -u BINANCE_API_SECRET "$dotnet_command" test \
     "$repo_root/tests/CryptoTrading.Worker.Tests/CryptoTrading.Worker.Tests.csproj" \
     --no-restore \
     --configuration Release \
-    --filter 'Category=PaperChaos' \
-    --logger 'console;verbosity=minimal'
+    --minimum-expected-tests 1 \
+    -- --filter-trait 'Category=PaperChaos'
 
 echo "Paper soak/chaos evidence passed: deterministic restarts, transient failures, idempotency, and no duplicate simulated orders."

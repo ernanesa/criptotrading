@@ -59,7 +59,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
             NullLogger<AutonomyCycleHostedService>.Instance,
             openOrderStore);
 
-        await hostedService.RunOnceAsync(options.Value, CancellationToken.None);
+        await hostedService.RunOnceAsync(options.Value, TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(decisionCommitStore.Commits);
         var latestCommit = decisionCommitStore.Commits[^1];
@@ -114,7 +114,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
             NullLogger<AutonomyCycleHostedService>.Instance,
             openOrderStore);
 
-        await hostedService.RunOnceAsync(options.Value, CancellationToken.None);
+        await hostedService.RunOnceAsync(options.Value, TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(decisionCommitStore.Commits);
         var latestCommit = decisionCommitStore.Commits[^1];

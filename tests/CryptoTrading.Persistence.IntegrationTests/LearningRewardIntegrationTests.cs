@@ -34,12 +34,12 @@ public sealed class LearningRewardIntegrationTests
             commission: .11m,
             clientOrderId: context.ClientOrderId,
             feeRate: .001m);
-        var execution = await store.RecordExecutionAsync(sell);
+        var execution = await store.RecordExecutionAsync(sell, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(execution.RealizedPnlQuote);
         Assert.Equal(ExecutionFeeComparisonStatus.WithinTolerance, execution.FeeComparison!.Status);
 
         var attempts = await Task.WhenAll(Enumerable.Range(0, 8)
-            .Select(_ => store.RecordExecutionRewardAsync(sell.ExecutionId)));
+            .Select(_ => store.RecordExecutionRewardAsync(sell.ExecutionId, cancellationToken: TestContext.Current.CancellationToken)));
 
         Assert.Single(attempts, attempt => attempt.Recorded);
         Assert.Equal(7, attempts.Count(attempt => attempt.Replayed));
@@ -48,7 +48,7 @@ public sealed class LearningRewardIntegrationTests
         Assert.All(attempts, attempt => Assert.Equal(expectedReward, attempt.Reward));
 
         var aggregate = Assert.Single(
-            await store.GetPerformancesAsync(),
+            await store.GetPerformancesAsync(cancellationToken: TestContext.Current.CancellationToken),
             performance => performance.StrategyId == context.StrategyId && performance.Regime == MarketRegime.BullTrend);
         Assert.Equal(1, aggregate.ObservationCount);
         Assert.Equal(expectedReward, aggregate.CumulativeReward);
@@ -72,10 +72,10 @@ public sealed class LearningRewardIntegrationTests
             commission: .1m,
             clientOrderId: buyContext.ClientOrderId,
             feeRate: .001m);
-        var buyResult = await store.RecordExecutionAsync(buy);
+        var buyResult = await store.RecordExecutionAsync(buy, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Null(buyResult.RealizedPnlQuote);
         Assert.Equal(ExecutionFeeComparisonStatus.WithinTolerance, buyResult.FeeComparison!.Status);
-        var noPnl = await store.RecordExecutionRewardAsync(buy.ExecutionId);
+        var noPnl = await store.RecordExecutionRewardAsync(buy.ExecutionId, cancellationToken: TestContext.Current.CancellationToken);
 
         var driftContext = await CreateCommittedOrderAsync(store, connectionString, "learning-drift");
         await SeedInventoryAsync(store, driftContext.Symbol, driftContext.BaseAsset, driftContext.QuoteAsset, "seed-drift-" + driftContext.Suffix);
@@ -90,10 +90,10 @@ public sealed class LearningRewardIntegrationTests
             commission: .5m,
             clientOrderId: driftContext.ClientOrderId,
             feeRate: .001m);
-        var driftResult = await store.RecordExecutionAsync(drift);
+        var driftResult = await store.RecordExecutionAsync(drift, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(driftResult.RealizedPnlQuote);
         Assert.Equal(ExecutionFeeComparisonStatus.Drift, driftResult.FeeComparison!.Status);
-        var driftReward = await store.RecordExecutionRewardAsync(drift.ExecutionId);
+        var driftReward = await store.RecordExecutionRewardAsync(drift.ExecutionId, cancellationToken: TestContext.Current.CancellationToken);
 
         var noAttributionContext = await CreateCommittedOrderAsync(store, connectionString, "learning-no-attribution");
         await SeedInventoryAsync(store, noAttributionContext.Symbol, noAttributionContext.BaseAsset, noAttributionContext.QuoteAsset, "seed-unlinked-" + noAttributionContext.Suffix);
@@ -108,10 +108,10 @@ public sealed class LearningRewardIntegrationTests
             commission: .11m,
             clientOrderId: null,
             feeRate: .001m);
-        var unlinkedResult = await store.RecordExecutionAsync(unlinked);
+        var unlinkedResult = await store.RecordExecutionAsync(unlinked, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(unlinkedResult.RealizedPnlQuote);
         Assert.Equal(ExecutionFeeComparisonStatus.WithinTolerance, unlinkedResult.FeeComparison!.Status);
-        var missingAttribution = await store.RecordExecutionRewardAsync(unlinked.ExecutionId);
+        var missingAttribution = await store.RecordExecutionRewardAsync(unlinked.ExecutionId, cancellationToken: TestContext.Current.CancellationToken);
 
         var incompleteFeeContext = await CreateCommittedOrderAsync(store, connectionString, "learning-incomplete-fee");
         await SeedInventoryAsync(store, incompleteFeeContext.Symbol, incompleteFeeContext.BaseAsset,
@@ -127,10 +127,10 @@ public sealed class LearningRewardIntegrationTests
             commission: .11m,
             clientOrderId: incompleteFeeContext.ClientOrderId,
             feeRate: null);
-        var incompleteFeeResult = await store.RecordExecutionAsync(incompleteFeeSell);
+        var incompleteFeeResult = await store.RecordExecutionAsync(incompleteFeeSell, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(incompleteFeeResult.RealizedPnlQuote);
         Assert.Equal(ExecutionFeeComparisonStatus.NotComparable, incompleteFeeResult.FeeComparison!.Status);
-        var incompleteFeeReward = await store.RecordExecutionRewardAsync(incompleteFeeSell.ExecutionId);
+        var incompleteFeeReward = await store.RecordExecutionRewardAsync(incompleteFeeSell.ExecutionId, cancellationToken: TestContext.Current.CancellationToken);
 
         var baseFeeContext = await CreateCommittedOrderAsync(store, connectionString, "learning-base-fee");
         await SeedInventoryAsync(store, baseFeeContext.Symbol, baseFeeContext.BaseAsset, baseFeeContext.QuoteAsset,
@@ -147,10 +147,10 @@ public sealed class LearningRewardIntegrationTests
             clientOrderId: baseFeeContext.ClientOrderId,
             feeRate: .001m,
             commissionAsset: baseFeeContext.BaseAsset);
-        var baseFeeResult = await store.RecordExecutionAsync(baseFeeSell);
+        var baseFeeResult = await store.RecordExecutionAsync(baseFeeSell, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotNull(baseFeeResult.RealizedPnlQuote);
         Assert.Equal(ExecutionFeeComparisonStatus.WithinTolerance, baseFeeResult.FeeComparison!.Status);
-        var baseFeeReward = await store.RecordExecutionRewardAsync(baseFeeSell.ExecutionId);
+        var baseFeeReward = await store.RecordExecutionRewardAsync(baseFeeSell.ExecutionId, cancellationToken: TestContext.Current.CancellationToken);
 
         AssertSkipped(noPnl);
         AssertSkipped(driftReward);
@@ -162,7 +162,7 @@ public sealed class LearningRewardIntegrationTests
             buyContext.StrategyId, driftContext.StrategyId, noAttributionContext.StrategyId,
             incompleteFeeContext.StrategyId, baseFeeContext.StrategyId,
         };
-        Assert.DoesNotContain((await store.GetPerformancesAsync()), item => strategyIds.Contains(item.StrategyId, StringComparer.Ordinal));
+        Assert.DoesNotContain((await store.GetPerformancesAsync(cancellationToken: TestContext.Current.CancellationToken)), item => strategyIds.Contains(item.StrategyId, StringComparer.Ordinal));
     }
 
     private static string GetConnectionString()
@@ -179,7 +179,7 @@ public sealed class LearningRewardIntegrationTests
     private static async Task<PostgresTradingStore> CreateStoreAsync(string connectionString)
     {
         var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-        await store.ApplyMigrationsAsync();
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
         return store;
     }
 
@@ -210,15 +210,15 @@ public sealed class LearningRewardIntegrationTests
             Hash("feature-" + suffix), side == OrderSide.Buy ? "EnterLong" : "EnterShort",
             MarketRegime.BullTrend.ToString(), new RiskDecision(RiskDecisionStatus.Approved, 110m, 110m, "integration-learning", []),
             "DISPATCHABLE", null, "{}", outbox);
-        await store.CommitAsync(commit);
+        await store.CommitAsync(commit, cancellationToken: TestContext.Current.CancellationToken);
         await using (var connection = new NpgsqlConnection(connectionString))
         {
-            await connection.OpenAsync();
+            await connection.OpenAsync(cancellationToken: TestContext.Current.CancellationToken);
             await using var deferOutbox = new NpgsqlCommand(
                 "UPDATE trading.outbox_messages SET available_at = TIMESTAMPTZ '2099-01-01 00:00:00+00' WHERE message_id = @message_id;",
                 connection);
             deferOutbox.Parameters.AddWithValue("message_id", outbox.MessageId);
-            await deferOutbox.ExecuteNonQueryAsync();
+            await deferOutbox.ExecuteNonQueryAsync(cancellationToken: TestContext.Current.CancellationToken);
         }
 
         return new(suffix, symbol, baseAsset, quoteAsset, clientOrderId, strategyId);
@@ -234,7 +234,7 @@ public sealed class LearningRewardIntegrationTests
     {
         _ = await store.RecordExecutionAsync(CreateExecution(
             executionId, symbol, baseAsset, quoteAsset, OrderSide.Buy,
-            quantity, price: 100m, commission: 0m, clientOrderId: null, feeRate: null));
+            quantity, price: 100m, commission: 0m, clientOrderId: null, feeRate: null), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     private static ExecutionAccountingCommand CreateExecution(

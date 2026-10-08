@@ -24,7 +24,7 @@ public sealed class ReconciliationAlertPublisherTests
         Assert.True(await ReconciliationAlertPublisher.PublishAsync(
             result,
             dispatcher,
-            new DateTimeOffset(2026, 9, 19, 16, 0, 1, TimeSpan.Zero)).ConfigureAwait(true));
+            new DateTimeOffset(2026, 9, 19, 16, 0, 1, TimeSpan.Zero), cancellationToken: TestContext.Current.CancellationToken).ConfigureAwait(true));
 
         var alert = Assert.Single(sink.Alerts);
         Assert.Equal("account/reconciliation", alert.Scope);
@@ -40,7 +40,7 @@ public sealed class ReconciliationAlertPublisherTests
         using var dispatcher = new TradingAlertDispatcher(sink);
         var result = new ReconciliationRunResult(CorrelationId.New(), DateTimeOffset.UtcNow, true, [], []);
 
-        Assert.False(await ReconciliationAlertPublisher.PublishAsync(result, dispatcher, DateTimeOffset.UtcNow).ConfigureAwait(true));
+        Assert.False(await ReconciliationAlertPublisher.PublishAsync(result, dispatcher, DateTimeOffset.UtcNow, cancellationToken: TestContext.Current.CancellationToken).ConfigureAwait(true));
         Assert.Empty(sink.Alerts);
     }
 }

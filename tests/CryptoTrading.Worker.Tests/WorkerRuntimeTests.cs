@@ -122,7 +122,7 @@ public sealed class WorkerRuntimeTests
             NullLogger<TestnetOutboxMessageExecutor>.Instance,
             submissionGuard: new TestSubmissionGuard(), submissionStore: new TestSubmissionStore());
 
-        await executor.ExecuteAsync(MessageFor(command));
+        await executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exchange.SubmitCalls);
         Assert.Equal(1, exchange.QueryCalls);
@@ -159,7 +159,7 @@ public sealed class WorkerRuntimeTests
             NullLogger<TestnetOutboxMessageExecutor>.Instance,
             submissionGuard: new TestSubmissionGuard(), submissionStore: new TestSubmissionStore());
 
-        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(MessageFor(command)));
+        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, exchange.SubmitCalls);
         Assert.Equal(1, exchange.QueryCalls);
@@ -175,7 +175,7 @@ public sealed class WorkerRuntimeTests
         var store = new RecordingOpenOrderStore();
         var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), store);
 
-        await executor.ExecuteAsync(MessageFor(command));
+        await executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exchange.SubmitCalls);
         Assert.Equal(0, exchange.QueryCalls);
@@ -190,7 +190,7 @@ public sealed class WorkerRuntimeTests
         var store = new RecordingOpenOrderStore();
         var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), store);
 
-        await executor.ExecuteAsync(MessageFor(command));
+        await executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exchange.SubmitCalls);
         Assert.Equal(0, exchange.QueryCalls);
@@ -202,11 +202,11 @@ public sealed class WorkerRuntimeTests
     {
         var command = NewCancelCommand();
         var store = new RecordingOpenOrderStore();
-        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "NEW", DateTimeOffset.UtcNow, 0.01m, 0m));
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "NEW", DateTimeOffset.UtcNow, 0.01m, 0m), cancellationToken: TestContext.Current.CancellationToken);
         var exchange = new CancelRecordingTestnetClient(command, "CANCELED", queryStatus: "NEW");
         var executor = CreateTestnetCancelExecutor(exchange, store);
 
-        await executor.ExecuteAsync(CancelMessageFor(command));
+        await executor.ExecuteAsync(CancelMessageFor(command), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exchange.CancelCalls);
         Assert.Equal(1, exchange.QueryCalls);
@@ -218,11 +218,11 @@ public sealed class WorkerRuntimeTests
     {
         var command = NewCancelCommand();
         var store = new RecordingOpenOrderStore();
-        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "PARTIALLY_FILLED", DateTimeOffset.UtcNow, 0.01m, 0.004m));
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "PARTIALLY_FILLED", DateTimeOffset.UtcNow, 0.01m, 0.004m), cancellationToken: TestContext.Current.CancellationToken);
         var exchange = new CancelRecordingTestnetClient(command, "CANCELED", cancelFails: true, queryStatus: "PARTIALLY_FILLED");
         var executor = CreateTestnetCancelExecutor(exchange, store);
 
-        await executor.ExecuteAsync(CancelMessageFor(command));
+        await executor.ExecuteAsync(CancelMessageFor(command), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exchange.CancelCalls);
         Assert.Equal(2, exchange.QueryCalls);
@@ -234,11 +234,11 @@ public sealed class WorkerRuntimeTests
     {
         var command = NewCancelCommand();
         var store = new RecordingOpenOrderStore();
-        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "NEW", DateTimeOffset.UtcNow, 0.01m, 0m));
+        await store.UpsertOpenOrderAsync(new LocalOpenOrderRecord("BTCUSDT", 42, command.ClientOrderId.Value, "NEW", DateTimeOffset.UtcNow, 0.01m, 0m), cancellationToken: TestContext.Current.CancellationToken);
         var exchange = new CancelRecordingTestnetClient(command, "NEW", cancelFails: true, queryFails: true);
         var executor = CreateTestnetCancelExecutor(exchange, store);
 
-        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(CancelMessageFor(command)));
+        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(CancelMessageFor(command), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, exchange.CancelCalls);
         Assert.Equal(2, exchange.QueryCalls);
@@ -257,7 +257,7 @@ public sealed class WorkerRuntimeTests
         var exchange = new RecordingTestnetClient(command);
         var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), new RecordingOpenOrderStore());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(MessageFor(command)));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("commission snapshot", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, exchange.SubmitCalls);
@@ -278,7 +278,7 @@ public sealed class WorkerRuntimeTests
             new TestnetAccountClient(baseFree, quoteFree, canTrade, canWithdraw),
             new RecordingOpenOrderStore());
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(MessageFor(command)));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(expectedReason, exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, exchange.SubmitCalls);
@@ -613,7 +613,7 @@ public sealed class WorkerRuntimeTests
             DateTimeOffset.UtcNow.AddMinutes(1),
             "test-worker");
 
-        await executor.ExecuteAsync(message);
+        await executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -648,7 +648,7 @@ public sealed class WorkerRuntimeTests
         var options = Options.Create(new WorkerRuntimeOptions { NoTrade = false });
         var executor = new PaperOutboxMessageExecutor(exchange, options, NullLogger<PaperOutboxMessageExecutor>.Instance);
 
-        await executor.ExecuteAsync(message);
+        await executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken);
 
         var order = Assert.Single(exchange.OpenOrders);
         Assert.Equal(command.ClientOrderId, order.ClientOrderId);
@@ -665,7 +665,7 @@ public sealed class WorkerRuntimeTests
             Options.Create(new WorkerRuntimeOptions { NoTrade = false }),
             NullLogger<PaperOutboxMessageExecutor>.Instance);
 
-        await executor.ExecuteAsync(message);
+        await executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, exchange.SubmitCalls);
         var order = Assert.Single(exchange.OpenOrders);
@@ -683,7 +683,7 @@ public sealed class WorkerRuntimeTests
             Options.Create(new WorkerRuntimeOptions { NoTrade = false }),
             NullLogger<PaperOutboxMessageExecutor>.Instance);
 
-        var exception = await Assert.ThrowsAsync<TimeoutException>(() => executor.ExecuteAsync(message));
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(command.ClientOrderId.Value, exception.Message, StringComparison.Ordinal);
         Assert.Equal(1, exchange.SubmitCalls);
@@ -701,7 +701,7 @@ public sealed class WorkerRuntimeTests
             Options.Create(new WorkerRuntimeOptions { NoTrade = false }),
             NullLogger<PaperOutboxMessageExecutor>.Instance);
 
-        await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message));
+        await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -716,7 +716,7 @@ public sealed class WorkerRuntimeTests
             Options.Create(new WorkerRuntimeOptions { NoTrade = false }),
             NullLogger<PaperOutboxMessageExecutor>.Instance);
 
-        await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message));
+        await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     private static SubmitOrderCommand NewCommand() => new(

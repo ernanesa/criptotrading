@@ -46,9 +46,9 @@ public sealed class AutonomousLearningPersistenceTests
             VolatilityRate: 0.015m,
             Reason: "STRONG_BULL_TREND_DETECTED");
 
-        await store.RecordMarketRegimeAsync(snapshot);
+        await store.RecordMarketRegimeAsync(snapshot, TestContext.Current.CancellationToken);
 
-        var latest = await store.GetLatestMarketRegimeAsync(BtcUsdt);
+        var latest = await store.GetLatestMarketRegimeAsync(BtcUsdt, TestContext.Current.CancellationToken);
         Assert.NotNull(latest);
         Assert.Equal(snapshot.Symbol, latest.Symbol);
         Assert.Equal(snapshot.Regime, latest.Regime);
@@ -57,7 +57,7 @@ public sealed class AutonomousLearningPersistenceTests
         Assert.Equal(snapshot.VolatilityRate, latest.VolatilityRate);
         Assert.Equal(snapshot.Reason, latest.Reason);
 
-        var history = await store.GetMarketRegimeHistoryAsync(BtcUsdt, limit: 10);
+        var history = await store.GetMarketRegimeHistoryAsync(BtcUsdt, limit: 10, TestContext.Current.CancellationToken);
         Assert.NotEmpty(history);
         Assert.Contains(history, h => h.Reason == "STRONG_BULL_TREND_DETECTED");
     }
@@ -84,14 +84,14 @@ public sealed class AutonomousLearningPersistenceTests
             registeredBy: "quant-lead-1",
             promotionJustification: "Initial production baseline champion");
 
-        await store.RegisterModelAsync(modelV1);
+        await store.RegisterModelAsync(modelV1, TestContext.Current.CancellationToken);
 
-        var retrievedV1 = await store.GetModelAsync(modelV1Id);
+        var retrievedV1 = await store.GetModelAsync(modelV1Id, TestContext.Current.CancellationToken);
         Assert.NotNull(retrievedV1);
         Assert.Equal(ModelLifecycleStatus.Active, retrievedV1.Status);
         Assert.Equal("Initial production baseline champion", retrievedV1.PromotionJustification);
 
-        var active = await store.GetActiveModelAsync(strategyId);
+        var active = await store.GetActiveModelAsync(strategyId, TestContext.Current.CancellationToken);
         Assert.NotNull(active);
         Assert.Equal(modelV1Id, active.ModelId);
 
@@ -107,7 +107,7 @@ public sealed class AutonomousLearningPersistenceTests
             registeredAtUtc: now.AddSeconds(1),
             registeredBy: "quant-lead-2");
 
-        await store.RegisterModelAsync(modelV2);
+        await store.RegisterModelAsync(modelV2, TestContext.Current.CancellationToken);
 
         // Promote V2 to Active -> V1 automatically retired
         var promoted = await store.TransitionStatusAsync(
@@ -115,19 +115,20 @@ public sealed class AutonomousLearningPersistenceTests
             ModelLifecycleStatus.Active,
             actor: "ChampionChallengerPipeline",
             justification: "Challenger beat champion by +0.22 Sharpe with lower drawdown",
-            transitionAtUtc: now.AddSeconds(2));
+            transitionAtUtc: now.AddSeconds(2),
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ModelLifecycleStatus.Active, promoted.Status);
 
-        var newActive = await store.GetActiveModelAsync(strategyId);
+        var newActive = await store.GetActiveModelAsync(strategyId, TestContext.Current.CancellationToken);
         Assert.NotNull(newActive);
         Assert.Equal(modelV2Id, newActive.ModelId);
 
-        var oldModel = await store.GetModelAsync(modelV1Id);
+        var oldModel = await store.GetModelAsync(modelV1Id, TestContext.Current.CancellationToken);
         Assert.NotNull(oldModel);
         Assert.Equal(ModelLifecycleStatus.Retired, oldModel.Status);
 
-        var allModels = await store.ListModelsAsync(strategyId);
+        var allModels = await store.ListModelsAsync(strategyId, TestContext.Current.CancellationToken);
         Assert.Equal(2, allModels.Count);
     }
 
@@ -149,9 +150,9 @@ public sealed class AutonomousLearningPersistenceTests
 
         var evaluation = DriftMonitoringEngine.Evaluate(observation);
 
-        await store.RecordDriftObservationAsync(observation, evaluation);
+        await store.RecordDriftObservationAsync(observation, evaluation, TestContext.Current.CancellationToken);
 
-        var drifts = await store.GetRecentDriftsAsync(strategyId, limit: 10);
+        var drifts = await store.GetRecentDriftsAsync(strategyId, limit: 10, cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(drifts);
         var record = drifts[0];
         Assert.Equal(strategyId, record.StrategyId);
@@ -170,12 +171,13 @@ public sealed class AutonomousLearningPersistenceTests
         var strategyId = $"strat-alloc-{uniqueSuffix}";
 
         // Record first reward
-        await store.RecordStrategyRewardAsync(strategyId, MarketRegime.BullTrend, 0.40m, now);
+        await store.RecordStrategyRewardAsync(strategyId, MarketRegime.BullTrend, 0.40m, now, TestContext.Current.CancellationToken);
 
         // Record second reward
-        await store.RecordStrategyRewardAsync(strategyId, MarketRegime.BullTrend, 0.60m, now.AddMinutes(5));
+        await store.RecordStrategyRewardAsync(
+            strategyId, MarketRegime.BullTrend, 0.60m, now.AddMinutes(5), TestContext.Current.CancellationToken);
 
-        var performances = await store.GetPerformancesAsync();
+        var performances = await store.GetPerformancesAsync(TestContext.Current.CancellationToken);
         var entry = performances.FirstOrDefault(p => p.StrategyId == strategyId && p.Regime == MarketRegime.BullTrend);
 
         Assert.NotNull(entry);

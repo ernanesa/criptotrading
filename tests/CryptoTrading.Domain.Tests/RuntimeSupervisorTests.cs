@@ -14,14 +14,14 @@ public sealed class RuntimeSupervisorTests
         var sink = new InMemoryRuntimeTransitionSink();
         using var supervisor = new RuntimeSupervisor(sink, new FixedTimeProvider(Now));
 
-        await supervisor.BeginBootstrappingAsync("startup");
-        await supervisor.MarkReconciliationAsync(true, "reconciled");
-        await supervisor.MarkWarmupAsync(true, "warmed");
+        await supervisor.BeginBootstrappingAsync("startup", TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "reconciled", TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(true, "warmed", TestContext.Current.CancellationToken);
 
         Assert.Equal(RuntimeState.WarmingUp, supervisor.Snapshot.State);
         Assert.True(supervisor.Snapshot.BlocksNewExposure);
 
-        await supervisor.MarkAccountStreamAsync(true, "connected");
+        await supervisor.MarkAccountStreamAsync(true, "connected", TestContext.Current.CancellationToken);
 
         Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
         Assert.True(supervisor.Snapshot.CanCreateNewExposure);
@@ -33,17 +33,17 @@ public sealed class RuntimeSupervisorTests
     {
         using var supervisor = new RuntimeSupervisor(timeProvider: new FixedTimeProvider(Now));
 
-        await supervisor.BeginBootstrappingAsync("startup");
-        await supervisor.MarkReconciliationAsync(false, "balance-drift");
+        await supervisor.BeginBootstrappingAsync("startup", TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(false, "balance-drift", TestContext.Current.CancellationToken);
 
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
         Assert.True(supervisor.Snapshot.BlocksNewExposure);
 
-        await supervisor.MarkAccountStreamAsync(true, "connected");
-        await supervisor.MarkWarmupAsync(true, "warmed");
+        await supervisor.MarkAccountStreamAsync(true, "connected", TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(true, "warmed", TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
 
-        await supervisor.MarkReconciliationAsync(true, "recovered");
+        await supervisor.MarkReconciliationAsync(true, "recovered", TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
         Assert.True(supervisor.Snapshot.CanCreateNewExposure);
     }
@@ -52,18 +52,18 @@ public sealed class RuntimeSupervisorTests
     public async Task OperationalSafeModeAndKillSwitchRemainExposureBlocking()
     {
         using var supervisor = new RuntimeSupervisor(timeProvider: new FixedTimeProvider(Now));
-        await supervisor.BeginBootstrappingAsync("startup");
-        await supervisor.MarkReconciliationAsync(true, "reconciled");
-        await supervisor.MarkWarmupAsync(true, "warmed");
-        await supervisor.MarkAccountStreamAsync(true, "connected");
+        await supervisor.BeginBootstrappingAsync("startup", TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "reconciled", TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(true, "warmed", TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(true, "connected", TestContext.Current.CancellationToken);
 
         await supervisor.ObserveOperationalControlAsync(new(
-            OperationalMode.SafeMode, 1, Now, "test", "operator-stop"));
+            OperationalMode.SafeMode, 1, Now, "test", "operator-stop"), TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
         Assert.True(supervisor.Snapshot.BlocksNewExposure);
 
         await supervisor.ObserveOperationalControlAsync(new(
-            OperationalMode.KillSwitch, 2, Now, "test", "emergency-stop"));
+            OperationalMode.KillSwitch, 2, Now, "test", "emergency-stop"), TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.KillSwitch, supervisor.Snapshot.State);
         Assert.True(supervisor.Snapshot.BlocksNewExposure);
     }
@@ -72,17 +72,17 @@ public sealed class RuntimeSupervisorTests
     public async Task RecoveryRequiresFreshReconciliationAfterStreamFailure()
     {
         using var supervisor = new RuntimeSupervisor(timeProvider: new FixedTimeProvider(Now));
-        await supervisor.BeginBootstrappingAsync("startup");
-        await supervisor.MarkReconciliationAsync(true, "reconciled");
-        await supervisor.MarkWarmupAsync(true, "warmed");
-        await supervisor.MarkAccountStreamAsync(true, "connected");
+        await supervisor.BeginBootstrappingAsync("startup", TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "reconciled", TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(true, "warmed", TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(true, "connected", TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
 
-        await supervisor.MarkAccountStreamAsync(false, "disconnected");
+        await supervisor.MarkAccountStreamAsync(false, "disconnected", TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
-        await supervisor.MarkAccountStreamAsync(true, "reconnected");
+        await supervisor.MarkAccountStreamAsync(true, "reconnected", TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
-        await supervisor.MarkReconciliationAsync(true, "reconciled-after-reconnect");
+        await supervisor.MarkReconciliationAsync(true, "reconciled-after-reconnect", TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
     }
 

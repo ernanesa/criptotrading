@@ -20,7 +20,7 @@ public sealed class ExecutionFeeDriftAlertPublisherTests
             "fill-quote-asset", DateTimeOffset.UtcNow);
 
         Assert.True(await ExecutionFeeDriftAlertPublisher.PublishAsync(
-            execution, comparison, dispatcher, DateTimeOffset.UtcNow).ConfigureAwait(true));
+            execution, comparison, dispatcher, DateTimeOffset.UtcNow, cancellationToken: TestContext.Current.CancellationToken).ConfigureAwait(true));
 
         var alert = Assert.Single(sink.Alerts);
         Assert.Equal(TradingAlertSeverity.Critical, alert.Severity);

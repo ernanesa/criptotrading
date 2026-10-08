@@ -70,7 +70,9 @@ public sealed class OperationalControlTests
             asyncAuditSink: new ThrowingAsyncAuditSink());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            control.EnterSafeModeAsync(Command("async-audit-failure", "operator-1", "market data unavailable")));
+            control.EnterSafeModeAsync(
+                Command("async-audit-failure", "operator-1", "market data unavailable"),
+                TestContext.Current.CancellationToken));
 
         Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
         Assert.Equal(0, control.Snapshot.Revision);
@@ -84,9 +86,11 @@ public sealed class OperationalControlTests
             new TestResetAuthorizer { Allowed = true },
             auditSink: null,
             asyncAuditSink: audit);
-        var transition = control.EnterSafeModeAsync(Command("async-audit-order", "operator-1", "audit first"));
+        var transition = control.EnterSafeModeAsync(
+            Command("async-audit-order", "operator-1", "audit first"),
+            TestContext.Current.CancellationToken);
 
-        await audit.Started.Task.WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(true);
+        await audit.Started.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken).ConfigureAwait(true);
         Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
         Assert.False(transition.IsCompleted);
 

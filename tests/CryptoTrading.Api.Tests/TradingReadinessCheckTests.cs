@@ -13,7 +13,7 @@ public sealed class TradingReadinessCheckTests
         var options = Options.Create(ValidTradingOptions());
         var check = new TradingReadinessCheck(options);
 
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Healthy, result.Status);
     }
@@ -26,7 +26,7 @@ public sealed class TradingReadinessCheckTests
         options.Binance.ApiSecret = "";
 
         var result = await new TradingReadinessCheck(Options.Create(options))
-            .CheckHealthAsync(new HealthCheckContext());
+            .CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Healthy, result.Status);
     }
@@ -38,7 +38,7 @@ public sealed class TradingReadinessCheckTests
         options.Binance.WithdrawalsEnabled = true;
 
         var check = new TradingReadinessCheck(Options.Create(options));
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
         Assert.Contains("unsafe", result.Description, StringComparison.OrdinalIgnoreCase);
@@ -51,7 +51,7 @@ public sealed class TradingReadinessCheckTests
         options.Environment = "PRODUCTION";
 
         var check = new TradingReadinessCheck(Options.Create(options));
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
     }
@@ -66,7 +66,7 @@ public sealed class TradingReadinessCheckTests
         options.Binance.ApiSecret = apiSecret;
 
         var check = new TradingReadinessCheck(Options.Create(options));
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
     }
@@ -78,7 +78,7 @@ public sealed class TradingReadinessCheckTests
         options.Binance.AllowedSymbols = "";
 
         var check = new TradingReadinessCheck(Options.Create(options));
-        var result = await check.CheckHealthAsync(new HealthCheckContext());
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), TestContext.Current.CancellationToken);
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
     }

@@ -20,28 +20,28 @@ public sealed class ExecutionSubmissionGuardTests
     {
         var control = new InMemoryOperationalControl(new RejectReset());
         var stop = new OperationalControlCommand("test", "test stop", IdempotencyKey.New(), DateTimeOffset.UtcNow);
-        if (mode == OperationalMode.KillSwitch) _ = await control.ActivateKillSwitchAsync(stop);
-        else _ = await control.EnterSafeModeAsync(stop);
+        if (mode == OperationalMode.KillSwitch) _ = await control.ActivateKillSwitchAsync(stop, cancellationToken: TestContext.Current.CancellationToken);
+        else _ = await control.EnterSafeModeAsync(stop, cancellationToken: TestContext.Current.CancellationToken);
         await using var supervisor = new RuntimeSupervisor();
         var guard = Create(control, supervisor);
         var (command, message) = Command(DateTimeOffset.UtcNow);
-        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateAsync(command, message));
-        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateFinalAsync(command, message));
+        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateAsync(command, message, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateFinalAsync(command, message, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task ExpiredIntentBlocksBeforeMarketOrAccountIo()
     {
         await using var supervisor = new RuntimeSupervisor();
-        await supervisor.BeginBootstrappingAsync("test");
-        await supervisor.MarkReconciliationAsync(true, "test");
-        await supervisor.MarkAccountStreamAsync(true, "test");
-        await supervisor.MarkWarmupAsync(true, "test");
+        await supervisor.BeginBootstrappingAsync("test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(supervisor.Snapshot.CanCreateNewExposure);
         var guard = Create(new InMemoryOperationalControl(new RejectReset()), supervisor);
         var (command, message) = Command(DateTimeOffset.UtcNow.AddMinutes(-2));
-        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateAsync(command, message));
-        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateFinalAsync(command, message));
+        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateAsync(command, message, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateFinalAsync(command, message, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     private static ExecutionSubmissionGuard Create(IOperationalControl control, IRuntimeSupervisor supervisor) =>

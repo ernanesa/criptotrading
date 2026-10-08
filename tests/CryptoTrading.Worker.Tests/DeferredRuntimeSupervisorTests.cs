@@ -25,19 +25,19 @@ public sealed class DeferredRuntimeSupervisorTests
         var store = new CheckpointStore(new RuntimeStateCheckpoint(checkpointState, 7));
         await using var supervisor = new DeferredRuntimeSupervisor(new PostgresRuntimeTransitionSink(store), store);
 
-        await supervisor.InitializeAsync();
+        await supervisor.InitializeAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
         Assert.Equal(restoredRevision, supervisor.Snapshot.Revision);
         Assert.Equal(new RuntimeStateCheckpoint(RuntimeState.SafeMode, restoredRevision), store.Current);
         Assert.True(supervisor.Snapshot.BlocksNewExposure);
 
-        await supervisor.BeginBootstrappingAsync("restart");
+        await supervisor.BeginBootstrappingAsync("restart", cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
 
-        await supervisor.MarkReconciliationAsync(healthy: true, "reconciled-after-restart");
-        await supervisor.MarkAccountStreamAsync(connected: true, "stream-connected-after-restart");
-        await supervisor.MarkWarmupAsync(complete: true, "warmup-complete-after-restart");
+        await supervisor.MarkReconciliationAsync(healthy: true, "reconciled-after-restart", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(connected: true, "stream-connected-after-restart", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(complete: true, "warmup-complete-after-restart", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
         Assert.Equal(readyRevision, supervisor.Snapshot.Revision);
@@ -52,10 +52,10 @@ public sealed class DeferredRuntimeSupervisorTests
         var store = new CheckpointStore(new RuntimeStateCheckpoint(RuntimeState.KillSwitch, 11));
         await using var supervisor = new DeferredRuntimeSupervisor(new PostgresRuntimeTransitionSink(store), store);
 
-        await supervisor.InitializeAsync();
-        await supervisor.MarkReconciliationAsync(healthy: true, "reconciled");
-        await supervisor.MarkAccountStreamAsync(connected: true, "stream-connected");
-        await supervisor.MarkWarmupAsync(complete: true, "warmup-complete");
+        await supervisor.InitializeAsync(TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(healthy: true, "reconciled", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(connected: true, "stream-connected", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(complete: true, "warmup-complete", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(RuntimeState.KillSwitch, supervisor.Snapshot.State);
         Assert.Equal(11, supervisor.Snapshot.Revision);
@@ -70,9 +70,9 @@ public sealed class DeferredRuntimeSupervisorTests
         var store = new CheckpointStore(new RuntimeStateCheckpoint(RuntimeState.Stopped, 0));
         await using var supervisor = new DeferredRuntimeSupervisor(new PostgresRuntimeTransitionSink(store), store);
 
-        await supervisor.InitializeAsync();
-        await supervisor.InitializeAsync();
-        await supervisor.BeginBootstrappingAsync("first-start");
+        await supervisor.InitializeAsync(TestContext.Current.CancellationToken);
+        await supervisor.InitializeAsync(TestContext.Current.CancellationToken);
+        await supervisor.BeginBootstrappingAsync("first-start", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, store.ReadCount);
         Assert.Equal(RuntimeState.Bootstrapping, supervisor.Snapshot.State);

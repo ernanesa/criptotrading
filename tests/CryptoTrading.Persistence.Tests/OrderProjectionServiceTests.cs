@@ -18,13 +18,14 @@ public sealed class OrderProjectionServiceTests
         var service = new OrderProjectionService(store);
         var order = NewOrder();
 
-        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
         await service.TransitionAndProjectAsync(
             order,
             OrderStatus.Submitted,
             Key("submit"),
             Now.AddSeconds(2),
-            exchangeOrderId: "12345");
+            exchangeOrderId: "12345",
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var record = Assert.Single(store.Upserts);
         Assert.Equal("BTCUSDT", record.Symbol);
@@ -41,11 +42,11 @@ public sealed class OrderProjectionServiceTests
         var service = new OrderProjectionService(store);
         var order = NewOrder();
 
-        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
-        await service.TransitionAndProjectAsync(order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2));
-        await service.TransitionAndProjectAsync(order, OrderStatus.Acknowledged, Key("ack"), Now.AddSeconds(3));
-        await service.TransitionAndProjectAsync(order, OrderStatus.PartiallyFilled, Key("partial"), Now.AddSeconds(4));
-        await service.TransitionAndProjectAsync(order, OrderStatus.Filled, Key("fill"), Now.AddSeconds(5));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
+        await service.TransitionAndProjectAsync(order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2), cancellationToken: TestContext.Current.CancellationToken);
+        await service.TransitionAndProjectAsync(order, OrderStatus.Acknowledged, Key("ack"), Now.AddSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await service.TransitionAndProjectAsync(order, OrderStatus.PartiallyFilled, Key("partial"), Now.AddSeconds(4), cancellationToken: TestContext.Current.CancellationToken);
+        await service.TransitionAndProjectAsync(order, OrderStatus.Filled, Key("fill"), Now.AddSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(3, store.Upserts.Count);
         Assert.Equal("PARTIALLY_FILLED", store.Upserts[^1].Status);
@@ -59,13 +60,13 @@ public sealed class OrderProjectionServiceTests
         var service = new OrderProjectionService(store);
         var order = NewOrder();
 
-        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
         await service.TransitionAndProjectAsync(
-            order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2), exchangeOrderId: "98765");
+            order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2), exchangeOrderId: "98765", cancellationToken: TestContext.Current.CancellationToken);
         await service.TransitionAndProjectAsync(
-            order, OrderStatus.Acknowledged, Key("ack"), Now.AddSeconds(3));
+            order, OrderStatus.Acknowledged, Key("ack"), Now.AddSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await service.TransitionAndProjectAsync(
-            order, OrderStatus.PartiallyFilled, Key("partial"), Now.AddSeconds(4));
+            order, OrderStatus.PartiallyFilled, Key("partial"), Now.AddSeconds(4), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.All(store.Upserts, record => Assert.Equal(98765L, record.OrderId));
         Assert.Equal("PARTIALLY_FILLED", store.Upserts[^1].Status);
@@ -79,10 +80,10 @@ public sealed class OrderProjectionServiceTests
         var service = new OrderProjectionService(store);
         var order = NewOrder();
 
-        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Empty(store.Upserts);
 
-        await service.ProjectCurrentAsync(order, projectBeforeSubmission: true);
+        await service.ProjectCurrentAsync(order, projectBeforeSubmission: true, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("NEW", Assert.Single(store.Upserts).Status);
     }
 
@@ -93,17 +94,17 @@ public sealed class OrderProjectionServiceTests
         var service = new OrderProjectionService(store);
         var order = NewOrder();
 
-        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.TransitionAndProjectAsync(
-            order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2)));
+            order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(OrderStatus.Submitted, order.Status);
-        await service.ProjectCurrentAsync(order);
+        await service.ProjectCurrentAsync(order, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(store.Upserts);
         Assert.Equal("NEW", store.Upserts[0].Status);
         var replay = await service.TransitionAndProjectAsync(
-            order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(99));
+            order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(99), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(OrderStatus.Submitted, order.Status);
         Assert.Equal(OrderStatus.Submitted, replay.To);
@@ -119,8 +120,8 @@ public sealed class OrderProjectionServiceTests
         var service = new OrderProjectionService(store, lifecycle);
         var order = NewOrder();
 
-        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1));
-        await service.TransitionAndProjectAsync(order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2));
+        await service.TransitionAndProjectAsync(order, OrderStatus.Validated, Key("validate"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken);
+        await service.TransitionAndProjectAsync(order, OrderStatus.Submitted, Key("submit"), Now.AddSeconds(2), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Collection(
             lifecycle.Events,
@@ -137,9 +138,9 @@ public sealed class OrderProjectionServiceTests
         var order = NewOrder();
 
         await Assert.ThrowsAsync<InvalidOrderTransitionException>(() => service.TransitionAndProjectAsync(
-            order, OrderStatus.Filled, Key("invalid"), Now.AddSeconds(1)));
+            order, OrderStatus.Filled, Key("invalid"), Now.AddSeconds(1), cancellationToken: TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<FormatException>(() => service.TransitionAndProjectAsync(
-            order, OrderStatus.Submitted, Key("bad-id"), Now.AddSeconds(2), exchangeOrderId: "paper-1"));
+            order, OrderStatus.Submitted, Key("bad-id"), Now.AddSeconds(2), exchangeOrderId: "paper-1", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Empty(store.Upserts);
         Assert.Empty(store.Removed);
