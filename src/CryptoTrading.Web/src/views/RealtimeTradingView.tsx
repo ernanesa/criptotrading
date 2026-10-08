@@ -1,17 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import {
-  Activity,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Clock,
-  Database,
-  Layers,
-  RefreshCw,
-  ShieldCheck,
-  TrendingUp,
-  Wallet,
-} from 'lucide-react';
+import { Activity, ChevronDown, ChevronUp, Clock, Database, Layers, RefreshCw, TrendingUp, Wallet } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
 import { apiClient, formatIsoDate } from '../api/client';
@@ -55,16 +43,22 @@ export const RealtimeTradingView: React.FC = () => {
 
   const ticker = tickerQuery.data;
   const balances = balancesQuery.data;
-  const openOrders = openOrdersQuery.data || [];
-  const trades = tradesQuery.data || [];
+  const openOrders = openOrdersQuery.data;
+  const trades = tradesQuery.data;
+  const regime = regimeQuery.data;
+  const hasKnownRegime = Boolean(
+    regime &&
+      ['BullTrend', 'BearTrend', 'MeanRevertingRange', 'HighVolatilityChop', 'IlliquidOrStale'].includes(regime.regime),
+  );
+  const regimeBlocksExposure = !hasKnownRegime || regime?.prohibitsNewExposure !== false;
 
-  const currentPrice = ticker?.markPrice ?? 0;
-  const spread = ticker?.spread ?? 0;
-  const spreadBps = ticker?.spreadBps ?? 0;
-  const bidPrice = ticker?.bidPrice ?? 0;
-  const bidQty = ticker?.bidQuantity ?? 0;
-  const askPrice = ticker?.askPrice ?? 0;
-  const askQty = ticker?.askQuantity ?? 0;
+  const currentPrice = ticker?.markPrice;
+  const spread = ticker?.spread;
+  const spreadBps = ticker?.spreadBps;
+  const bidPrice = ticker?.bidPrice;
+  const bidQty = ticker?.bidQuantity;
+  const askPrice = ticker?.askPrice;
+  const askQty = ticker?.askQuantity;
 
   // Separate assets with real market value (or BTC/USDT/BNB) from zero-value testnet tokens
   const nonZeroBalances = (balances?.balances || []).filter((b) => b.total > 0);
@@ -90,22 +84,21 @@ export const RealtimeTradingView: React.FC = () => {
               <span className="px-2 py-0.5 text-xs font-semibold rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                 SPOT TESTNET
               </span>
-              {regimeQuery.data?.regime && regimeQuery.data.regime !== 'Unknown' && (
-                <span
-                  className={`px-2 py-0.5 text-xs font-semibold rounded border ${
-                    regimeQuery.data.prohibitsNewExposure
-                      ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
-                      : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
-                  }`}
-                >
-                  REGIME: {String(regimeQuery.data.regime || '').toUpperCase()} (
-                  {Math.round((regimeQuery.data.confidence ?? 0) * 100)}%)
-                </span>
-              )}
+              <span
+                className={`px-2 py-0.5 text-xs font-semibold rounded border ${
+                  regimeBlocksExposure
+                    ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                    : 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30'
+                }`}
+              >
+                {hasKnownRegime && regime
+                  ? `REGIME: ${String(regime.regime).toUpperCase()} (${Math.round((regime.confidence ?? 0) * 100)}%)${regimeBlocksExposure ? ' · NOVAS EXPOSIÇÕES BLOQUEADAS' : ''}`
+                  : 'REGIME: INDISPONÍVEL · NOVAS EXPOSIÇÕES BLOQUEADAS'}
+              </span>
               {tickerQuery.isFetching && <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Dados de mercado e custódia 100% reais conectados à Binance Spot Testnet API
+              Fonte: Binance Spot Testnet API. Dados disponíveis dependem das respostas atuais da API.
             </p>
           </div>
         </div>
@@ -113,31 +106,35 @@ export const RealtimeTradingView: React.FC = () => {
         {/* Real Ticker Badges */}
         <div className="flex flex-wrap items-center gap-6 text-sm">
           <div>
-            <div className="text-xs text-slate-400">Mark Price Real</div>
+            <div className="text-xs text-slate-400">Mark Price</div>
             <div className="text-2xl font-mono font-bold text-slate-100">
-              {currentPrice > 0
+              {currentPrice !== undefined && currentPrice > 0
                 ? `$${currentPrice.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                : 'Aguardando...'}
+                : 'Indisponível'}
             </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">Melhor Compra (Bid)</div>
             <div className="font-mono text-emerald-400 font-semibold">
-              ${bidPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-              <span className="text-[10px] text-slate-400 ml-1">({bidQty.toFixed(4)} BTC)</span>
+              {bidPrice !== undefined && bidQty !== undefined
+                ? `$${bidPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })} (${bidQty.toFixed(4)} BTC)`
+                : 'Indisponível'}
             </div>
           </div>
           <div>
             <div className="text-xs text-slate-400">Melhor Venda (Ask)</div>
             <div className="font-mono text-rose-400 font-semibold">
-              ${askPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-              <span className="text-[10px] text-slate-400 ml-1">({askQty.toFixed(4)} BTC)</span>
+              {askPrice !== undefined && askQty !== undefined
+                ? `$${askPrice.toLocaleString('en-US', { minimumFractionDigits: 2 })} (${askQty.toFixed(4)} BTC)`
+                : 'Indisponível'}
             </div>
           </div>
           <div>
-            <div className="text-xs text-slate-400">Spread Real</div>
+            <div className="text-xs text-slate-400">Spread</div>
             <div className="font-mono text-cyan-400 font-bold">
-              ${spread.toFixed(2)} ({spreadBps.toFixed(2)} bps)
+              {spread !== undefined && spreadBps !== undefined
+                ? `$${spread.toFixed(2)} (${spreadBps.toFixed(2)} bps)`
+                : 'Indisponível'}
             </div>
           </div>
         </div>
@@ -152,13 +149,16 @@ export const RealtimeTradingView: React.FC = () => {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-cyan-400" />
-                <h3 className="text-base font-semibold text-slate-200">Posições Abertas & Custódia de Ativos</h3>
+                <h3 className="text-base font-semibold text-slate-200">Saldos e Ativos da Conta</h3>
                 <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                  {primaryBalances.length} Ativos Principais
+                  {balances ? `${primaryBalances.length} Ativos Principais` : 'Saldos indisponíveis'}
                 </span>
               </div>
               <span className="text-xs text-slate-400 font-mono">
-                NAV Total: ${balances?.totalNavUsd?.toLocaleString('en-US', { minimumFractionDigits: 2 }) ?? '...'} USD
+                NAV Total:{' '}
+                {balances?.totalNavUsd !== undefined
+                  ? `$${balances.totalNavUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`
+                  : 'Indisponível'}
               </span>
             </div>
 
@@ -174,7 +174,19 @@ export const RealtimeTradingView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono">
-                  {displayedBalances.length > 0 ? (
+                  {balancesQuery.isLoading ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-slate-500">
+                        Consultando saldos...
+                      </td>
+                    </tr>
+                  ) : balancesQuery.isError ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-rose-400">
+                        Saldos indisponíveis.
+                      </td>
+                    </tr>
+                  ) : displayedBalances.length > 0 ? (
                     displayedBalances.map((b) => (
                       <tr key={b.asset} className="hover:bg-slate-800/30 transition-colors">
                         <td className="py-3 px-3 font-semibold text-slate-200 flex items-center gap-1.5">
@@ -209,7 +221,7 @@ export const RealtimeTradingView: React.FC = () => {
                   ) : (
                     <tr>
                       <td colSpan={5} className="py-6 text-center text-slate-500">
-                        Nenhum saldo encontrado na conta Testnet.
+                        Nenhum saldo retornado pela API para esta conta.
                       </td>
                     </tr>
                   )}
@@ -254,11 +266,17 @@ export const RealtimeTradingView: React.FC = () => {
                 Ordens Abertas no Livro (OMS)
               </h3>
               <span className="text-xs text-slate-400 font-mono">
-                {openOrders.length} {openOrders.length === 1 ? 'Ordem' : 'Ordens'} no Livro
+                {openOrders
+                  ? `${openOrders.length} ${openOrders.length === 1 ? 'Ordem' : 'Ordens'} no Livro`
+                  : 'Ordens indisponíveis'}
               </span>
             </div>
 
-            {openOrders.length > 0 ? (
+            {openOrdersQuery.isLoading ? (
+              <div className="py-8 text-center text-xs text-slate-400">Consultando ordens...</div>
+            ) : openOrdersQuery.isError ? (
+              <div className="py-8 text-center text-xs text-rose-400">Ordens indisponíveis.</div>
+            ) : (openOrders?.length ?? 0) > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-950/60 text-slate-400 uppercase tracking-wider border-b border-slate-800">
@@ -271,7 +289,7 @@ export const RealtimeTradingView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono">
-                    {openOrders.map((ord) => (
+                    {openOrders?.map((ord) => (
                       <tr key={ord.clientOrderId} className="hover:bg-slate-800/30 transition-colors">
                         <td className="py-3 px-3 font-mono text-cyan-400 font-medium">{ord.clientOrderId}</td>
                         <td className="py-3 px-3">
@@ -301,12 +319,8 @@ export const RealtimeTradingView: React.FC = () => {
               </div>
             ) : (
               <div className="py-8 text-center text-xs text-slate-400 border border-dashed border-slate-800 rounded-lg space-y-1">
-                <CheckCircle2 className="w-6 h-6 text-emerald-400 mx-auto mb-1 opacity-70" />
-                <div className="font-semibold text-slate-300">Nenhuma ordem pendente no livro no momento</div>
-                <p className="text-[11px] text-slate-500 max-w-md mx-auto">
-                  O motor de risco e o OMS estão com todas as regras de segurança ativas. Ordens submetidas pelo ciclo
-                  autônomo aparecerão aqui em tempo real.
-                </p>
+                <Database className="w-6 h-6 text-cyan-400 mx-auto mb-1 opacity-70" />
+                <div className="font-semibold text-slate-300">A API não retornou ordens abertas.</div>
               </div>
             )}
           </div>
@@ -316,14 +330,20 @@ export const RealtimeTradingView: React.FC = () => {
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-slate-200 flex items-center gap-2">
                 <Wallet className="w-4 h-4 text-emerald-400" />
-                Histórico de Execuções Reais (Trades)
+                Histórico de Execuções (Trades)
               </h3>
               <span className="text-xs text-slate-400 font-mono">
-                {trades.length} {trades.length === 1 ? 'Execução' : 'Execuções'}
+                {trades
+                  ? `${trades.length} ${trades.length === 1 ? 'Execução' : 'Execuções'}`
+                  : 'Execuções indisponíveis'}
               </span>
             </div>
 
-            {trades.length > 0 ? (
+            {tradesQuery.isLoading ? (
+              <div className="py-8 text-center text-xs text-slate-400">Consultando execuções...</div>
+            ) : tradesQuery.isError ? (
+              <div className="py-8 text-center text-xs text-rose-400">Execuções indisponíveis.</div>
+            ) : (trades?.length ?? 0) > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-950/60 text-slate-400 uppercase tracking-wider border-b border-slate-800">
@@ -338,7 +358,7 @@ export const RealtimeTradingView: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60 font-mono">
-                    {trades.map((tr) => (
+                    {trades?.map((tr) => (
                       <tr key={tr.id} className="hover:bg-slate-800/30 transition-colors">
                         <td className="py-3 px-3 text-cyan-400 font-medium">#{tr.id}</td>
                         <td className="py-3 px-3">
@@ -352,9 +372,13 @@ export const RealtimeTradingView: React.FC = () => {
                             {tr.isBuyer ? 'BUY' : 'SELL'}
                           </span>
                         </td>
-                        <td className="py-3 px-3 text-slate-300">${(tr.price ?? 0).toFixed(2)}</td>
+                        <td className="py-3 px-3 text-slate-300">
+                          {tr.price !== null ? `$${tr.price.toFixed(2)}` : 'Indisponível'}
+                        </td>
                         <td className="py-3 px-3 text-slate-300">{tr.qty} BTC</td>
-                        <td className="py-3 px-3 text-slate-300">${(tr.quoteQty ?? 0).toFixed(2)}</td>
+                        <td className="py-3 px-3 text-slate-300">
+                          {tr.quoteQty !== null ? `$${tr.quoteQty.toFixed(2)}` : 'Indisponível'}
+                        </td>
                         <td className="py-3 px-3 text-amber-400">
                           {tr.commission} {tr.commissionAsset}
                         </td>
@@ -367,11 +391,7 @@ export const RealtimeTradingView: React.FC = () => {
             ) : (
               <div className="py-8 text-center text-xs text-slate-400 border border-dashed border-slate-800 rounded-lg space-y-1">
                 <Database className="w-6 h-6 text-cyan-400 mx-auto mb-1 opacity-70" />
-                <div className="font-semibold text-slate-300">Nenhum trade registrado ainda nesta conta</div>
-                <p className="text-[11px] text-slate-500 max-w-md mx-auto">
-                  A conta Testnet está configurada com saldos reais (USDT $10.000,00 e BTC 1.0). Nenhuma execução
-                  fictícia é inventada pelo sistema.
-                </p>
+                <div className="font-semibold text-slate-300">A API não retornou execuções para esta consulta.</div>
               </div>
             )}
           </div>
@@ -382,14 +402,18 @@ export const RealtimeTradingView: React.FC = () => {
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
             <h3 className="text-base font-semibold text-slate-200 mb-4 flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-cyan-400" />
-              Livro de Ofertas L1 (Topo Real)
+              Livro de Ofertas L1 {ticker ? '' : '(indisponível)'}
             </h3>
 
             {/* Asks (Red) */}
             <div className="space-y-1 font-mono text-xs mb-2">
               <div className="flex justify-between text-rose-400/90 py-1.5 px-3 bg-rose-500/10 rounded border border-rose-500/20">
-                <span className="font-bold">Venda (Ask): ${askPrice.toFixed(2)}</span>
-                <span className="text-slate-300">{askQty.toFixed(4)} BTC</span>
+                <span className="font-bold">
+                  Venda (Ask): {askPrice !== undefined ? `$${askPrice.toFixed(2)}` : 'Indisponível'}
+                </span>
+                <span className="text-slate-300">
+                  {askQty !== undefined ? `${askQty.toFixed(4)} BTC` : 'Indisponível'}
+                </span>
               </div>
             </div>
 
@@ -397,48 +421,41 @@ export const RealtimeTradingView: React.FC = () => {
             <div className="py-2 px-3 bg-slate-950 border-y border-slate-800 flex justify-between items-center text-xs font-mono my-3">
               <span className="text-slate-400 text-[10px]">SPREAD PASSIVO</span>
               <span className="text-cyan-400 font-bold">
-                ${spread.toFixed(2)} ({spreadBps.toFixed(2)} bps)
+                {spread !== undefined && spreadBps !== undefined
+                  ? `$${spread.toFixed(2)} (${spreadBps.toFixed(2)} bps)`
+                  : 'Indisponível'}
               </span>
             </div>
 
             {/* Bids (Green) */}
             <div className="space-y-1 font-mono text-xs">
               <div className="flex justify-between text-emerald-400/90 py-1.5 px-3 bg-emerald-500/10 rounded border border-emerald-500/20">
-                <span className="font-bold">Compra (Bid): ${bidPrice.toFixed(2)}</span>
-                <span className="text-slate-300">{bidQty.toFixed(4)} BTC</span>
+                <span className="font-bold">
+                  Compra (Bid): {bidPrice !== undefined ? `$${bidPrice.toFixed(2)}` : 'Indisponível'}
+                </span>
+                <span className="text-slate-300">
+                  {bidQty !== undefined ? `${bidQty.toFixed(4)} BTC` : 'Indisponível'}
+                </span>
               </div>
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-400 flex items-center justify-between">
               <span>Obs: {ticker?.observedAtUtc ? new Date(ticker.observedAtUtc).toLocaleTimeString() : '...'}</span>
-              <span className="text-emerald-400 font-mono">Conexão WebSocket/REST ativa</span>
+              <span className={ticker ? 'text-emerald-400 font-mono' : 'text-amber-400 font-mono'}>
+                {ticker ? 'Ticker recebido' : 'Ticker indisponível'}
+              </span>
             </div>
           </div>
 
-          {/* Execution Safety Guard */}
+          {/* Read-only boundary */}
           <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
             <h3 className="text-base font-semibold text-slate-200 mb-3 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              Garantia de Execução Segura
+              <Database className="w-4 h-4 text-cyan-400" />
+              Escopo desta tela
             </h3>
-            <ul className="space-y-2 text-xs text-slate-400">
-              <li className="flex items-start gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                <span>Modo de execução com travas rígidas de spread e notional.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 shrink-0" />
-                <span>Zero risco de liquidação em conta Spot sem margem.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-1.5 shrink-0" />
-                <span>Reserva determinística de taxas (25 bps) aplicada antes de cada BUY.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0" />
-                <span>Retiradas desativadas (canWithdraw == false) verificado por contrato.</span>
-              </li>
-            </ul>
+            <p className="text-xs text-slate-400">
+              Visualizador somente leitura. Esta tela não comprova limites de risco nem autoriza execução.
+            </p>
           </div>
         </div>
       </div>

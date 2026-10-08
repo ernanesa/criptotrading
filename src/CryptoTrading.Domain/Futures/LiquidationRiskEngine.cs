@@ -37,7 +37,7 @@ public static class LiquidationRiskEngine
         }
 
         var liqPrice = position.CalculateLiquidationPrice(spec.MaintenanceMarginRatio);
-        
+
         var distanceRate = position.Side switch
         {
             PositionSide.LongSide => (position.MarkPrice - liqPrice) / position.MarkPrice,

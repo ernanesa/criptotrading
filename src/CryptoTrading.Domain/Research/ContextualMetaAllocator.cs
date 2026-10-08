@@ -56,6 +56,32 @@ public sealed class ContextualMetaAllocator
         }
     }
 
+    /// <summary>Hydrates durable aggregate performance before making contextual allocations.</summary>
+    public void LoadPerformances(IEnumerable<StrategyRegimePerformance> performances)
+    {
+        ArgumentNullException.ThrowIfNull(performances);
+        var snapshot = performances.ToArray();
+        if (snapshot.Any(performance => performance is null ||
+                                        string.IsNullOrWhiteSpace(performance.StrategyId) ||
+                                        performance.ObservationCount < 0))
+        {
+            throw new ArgumentException("Durable strategy performances must have a strategy id and non-negative count.", nameof(performances));
+        }
+
+        if (snapshot.Select(performance => (performance.StrategyId, performance.Regime)).Distinct().Count() != snapshot.Length)
+        {
+            throw new ArgumentException("Durable strategy performances must not contain duplicate strategy and regime keys.", nameof(performances));
+        }
+
+        lock (_lock)
+        {
+            foreach (var performance in snapshot)
+            {
+                _performances[(performance.StrategyId, performance.Regime)] = performance;
+            }
+        }
+    }
+
     public IReadOnlyList<StrategyMetaWeight> ComputeWeights(
         MarketRegime regime,
         IReadOnlyList<string> candidateStrategies,
@@ -101,7 +127,7 @@ public sealed class ContextualMetaAllocator
             {
                 var exploitedWeight = score / sumScores;
                 var blendedWeight = ((1.0m - explorationFactor) * exploitedWeight) + (explorationFactor * uniformWeight);
-                
+
                 // Enforce single-strategy cap of 75% for diversification safety
                 var cappedWeight = Math.Min(0.75m, blendedWeight);
                 weights.Add(new StrategyMetaWeight(strategy, Math.Round(cappedWeight, 4), Math.Round(cappedWeight * totalCapital, 2)));

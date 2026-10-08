@@ -142,11 +142,12 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
             VALUES
                 (@model_id, @strategy_id, @version, @code_commit_sha, @dataset_hash, @configuration_fingerprint,
                  @status, @registered_at, @registered_by, @promotion_justification, @canonical_hash)
-            ON CONFLICT (model_id) DO NOTHING;
+            ON CONFLICT (model_id) DO NOTHING
+            RETURNING model_id;
             """;
-
-        await ExecuteAsync(connection, transaction, sql,
-        [
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        command.Parameters.AddRange(new NpgsqlParameter[]
+        {
             Parameter("model_id", NpgsqlDbType.Varchar, record.ModelId),
             Parameter("strategy_id", NpgsqlDbType.Varchar, record.StrategyId),
             Parameter("version", NpgsqlDbType.Varchar, record.Version),
@@ -158,9 +159,56 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
             Parameter("registered_by", NpgsqlDbType.Varchar, record.RegisteredBy),
             Parameter("promotion_justification", NpgsqlDbType.Varchar, record.PromotionJustification),
             Parameter("canonical_hash", NpgsqlDbType.Char, record.CanonicalHash),
-        ], cancellationToken).ConfigureAwait(false);
+        });
+        var inserted = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
+        if (!inserted)
+        {
+            if (!await MatchesModelPayloadForUpdateAsync(connection, transaction, record, cancellationToken).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException($"Model identity collision for {record.ModelId}: existing provenance differs from the replay payload.");
+            }
+        }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> MatchesModelPayloadForUpdateAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        StrategyModelRecord record,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            SELECT canonical_hash = @canonical_hash
+               AND strategy_id = @strategy_id
+               AND version = @version
+               AND code_commit_sha = @code_commit_sha
+               AND dataset_hash = @dataset_hash
+               AND configuration_fingerprint = @configuration_fingerprint
+               AND status = @status
+               AND registered_at = @registered_at
+               AND registered_by = @registered_by
+               AND promotion_justification IS NOT DISTINCT FROM @promotion_justification
+            FROM trading.strategy_models
+            WHERE model_id = @model_id
+            FOR UPDATE;
+            """;
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        command.Parameters.AddRange(new NpgsqlParameter[]
+        {
+            Parameter("model_id", NpgsqlDbType.Varchar, record.ModelId),
+            Parameter("strategy_id", NpgsqlDbType.Varchar, record.StrategyId),
+            Parameter("version", NpgsqlDbType.Varchar, record.Version),
+            Parameter("code_commit_sha", NpgsqlDbType.Varchar, record.CodeCommitSha),
+            Parameter("dataset_hash", NpgsqlDbType.Char, record.DatasetHash),
+            Parameter("configuration_fingerprint", NpgsqlDbType.Varchar, record.ConfigurationFingerprint),
+            Parameter("status", NpgsqlDbType.Varchar, record.Status.ToString()),
+            Parameter("registered_at", NpgsqlDbType.TimestampTz, record.RegisteredAtUtc),
+            Parameter("registered_by", NpgsqlDbType.Varchar, record.RegisteredBy),
+            Parameter("promotion_justification", NpgsqlDbType.Varchar, record.PromotionJustification),
+            Parameter("canonical_hash", NpgsqlDbType.Char, record.CanonicalHash),
+        });
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 
     public async Task<StrategyModelRecord?> GetModelAsync(string modelId, CancellationToken cancellationToken = default)

@@ -154,27 +154,36 @@ export interface TradeHistoryResponse {
 }
 
 export interface PortfolioPerformanceResponse {
+  feesAreComplete: boolean;
+  unvaluedFeeAmounts: Array<{ asset: string; amount: number }>;
+  scopeSymbol: string;
+  quoteAsset: string;
+  asOfUtc: string;
   totalNavUsd: number;
-  initialCapitalUsd: number;
-  cashBalanceUsd: number;
-  positionsValueUsd: number;
+  initialCapitalUsd: number | null;
+  initialCapitalAvailabilityReason: string;
+  cashBalanceUsd: number | null;
+  positionsValueUsd: number | null;
   totalProfitUsd: number;
-  totalProfitPct: number;
+  totalProfitPct: number | null;
+  totalProfitPctAvailabilityReason: string;
   totalRealizedPnlUsd: number;
   totalUnrealizedPnlUsd: number;
   totalFeesPaidUsd: number;
   totalTradesCount: number;
   winRatePercentage: number;
-  profitFactor: number;
+  profitFactor: number | null;
+  profitFactorAvailabilityReason: string | null;
   periods: Array<{
     periodName: string;
-    profitUsd: number;
-    profitPercentage: number;
+    profitUsd: number | null;
+    profitPercentage: number | null;
     realizedProfitUsd: number;
     unrealizedProfitUsd: number;
     feesPaidUsd: number;
     tradesCount: number;
     winRatePercentage: number;
+    snapshotAvailability?: string;
   }>;
 }
 

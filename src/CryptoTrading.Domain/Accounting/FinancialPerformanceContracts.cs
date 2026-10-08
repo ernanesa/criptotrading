@@ -1,5 +1,3 @@
-using CryptoTrading.Domain.Primitives;
-
 namespace CryptoTrading.Domain.Accounting;
 
 /// <summary>

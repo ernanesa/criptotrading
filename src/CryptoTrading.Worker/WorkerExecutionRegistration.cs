@@ -27,7 +27,9 @@ internal static class WorkerExecutionRegistration
                     serviceProvider.GetRequiredService<IOptions<TradingOptions>>(),
                     serviceProvider.GetRequiredService<OrderProjectionService>(),
                     serviceProvider.GetRequiredService<ILogger<TestnetOutboxMessageExecutor>>(),
-                    serviceProvider.GetService<IOptions<BinanceAuthenticatedClientOptions>>());
+                    serviceProvider.GetService<IOptions<BinanceAuthenticatedClientOptions>>(),
+                    serviceProvider.GetRequiredService<IExecutionSubmissionGuard>(),
+                    serviceProvider.GetRequiredService<IDurableSubmissionStore>());
             }
 
             return new PaperOutboxMessageExecutor(
@@ -56,6 +58,7 @@ internal static class WorkerExecutionRegistration
         // PAPER intentionally does not require credentials. TESTNET does:
         // validate TradingOptions before the adapter can be resolved.
         _ = services.AddOptions<TradingOptions>().ValidateOnStart();
+        _ = services.AddSingleton<IExecutionSubmissionGuard, ExecutionSubmissionGuard>();
         _ = services.AddSingleton<IBinanceClockDriftEstimator, BinanceClockDriftEstimator>();
         _ = services.AddHttpClient("BinanceSpotOrder", client =>
         {

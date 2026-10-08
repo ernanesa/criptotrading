@@ -1,8 +1,6 @@
 #pragma warning disable CA1031 // Diagnostic endpoints catch general exceptions to return 502/503 responses.
 
 using CryptoTrading.Configuration;
-using CryptoTrading.Domain.Regimes;
-using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Observability;
@@ -11,6 +9,8 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using System.Security.Cryptography;
+using System.Text;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -18,9 +18,12 @@ using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
+// Emit sanitized error type and stack in our handler; framework exception messages may contain upstream payloads.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Diagnostics.ExceptionHandlerMiddleware", LogLevel.None);
 builder.Logging.AddJsonConsole(options =>
 {
     options.IncludeScopes = true;
+    options.UseUtcTimestamp = true;
     options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
     options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
 });
@@ -45,12 +48,23 @@ if (!string.IsNullOrWhiteSpace(resolvedApiKey) && !string.IsNullOrWhiteSpace(res
 }
 builder.Services.AddSingleton<IOperationalControl>(_ =>
     new InMemoryOperationalControl(new DenyApiOperationalControlResetAuthorizer()));
-builder.Services.AddOptions<TradingOptions>().ValidateOnStart();
-builder.Services.AddHealthChecks().AddCheck<TradingReadinessCheck>("trading-configuration", tags: ["ready"]);
+builder.Services.AddHealthChecks()
+    .AddCheck<TradingReadinessCheck>("trading-configuration", tags: ["ready"])
+    .AddCheck<PersistenceConfigurationReadinessCheck>("persistence-configuration", tags: ["ready"]);
 var postgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"];
 if (!string.IsNullOrWhiteSpace(postgresConnectionString))
 {
     _ = builder.Services.AddPostgresTradingStore(postgresConnectionString);
+}
+
+var internalAccessTokenFileConfigured = !string.IsNullOrWhiteSpace(builder.Configuration["API_INTERNAL_ACCESS_TOKEN_FILE"]);
+var internalAccessToken = TradingConfigurationExtensions.ResolveCredential(
+    builder.Configuration,
+    "__API_INTERNAL_ACCESS_TOKEN_DIRECT_VALUE_IS_NOT_SUPPORTED__",
+    "API_INTERNAL_ACCESS_TOKEN_FILE");
+if (internalAccessTokenFileConfigured && string.IsNullOrWhiteSpace(internalAccessToken))
+{
+    throw new InvalidOperationException("The internal API access-token file could not be loaded safely.");
 }
 
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -89,10 +103,26 @@ app.Use(async (context, next) =>
         TradingTelemetry.RecordApiRequest(context.Response.StatusCode, stopwatch.Elapsed.TotalMilliseconds);
         ApiLog.RequestCompleted(
             app.Logger,
+            context.Request.Method,
+            context.Request.Path,
             context.Response.StatusCode,
             Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2));
     }
 });
+
+app.UseExceptionHandler(errorApp => errorApp.Run(context =>
+{
+    var correlationId = context.Response.Headers["X-Correlation-Id"].ToString();
+    var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+    var errorType = error?.GetType().Name ?? "UNKNOWN";
+    using var errorScope = app.Logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = error?.StackTrace });
+    ApiLog.UnhandledRequestFailure(app.Logger, context.Request.Method, context.Request.Path, correlationId, errorType);
+    return ApiProblem.WriteAsync(
+        context,
+        StatusCodes.Status500InternalServerError,
+        "INTERNAL_ERROR",
+        "The request could not be completed.");
+}));
 
 if (app.Environment.IsDevelopment())
 {
@@ -122,29 +152,95 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 var localDiagnostics = app.MapGroup(string.Empty)
     .AddEndpointFilter(async (context, next) =>
     {
-        if (!LocalDiagnosticsAccessPolicy.IsLoopback(context.HttpContext.Connection.RemoteIpAddress))
+        var isLoopback = LocalDiagnosticsAccessPolicy.IsLoopback(context.HttpContext.Connection.RemoteIpAddress);
+        var suppliedToken = context.HttpContext.Request.Headers["X-Internal-Access-Token"];
+        var hasValidInternalToken = !string.IsNullOrWhiteSpace(internalAccessToken) &&
+                                    suppliedToken.Count == 1 &&
+                                    FixedTimeEquals(internalAccessToken, suppliedToken[0]);
+        if (!isLoopback && !hasValidInternalToken)
         {
-            return Results.StatusCode(StatusCodes.Status403Forbidden);
+            return ApiProblem.Forbidden();
         }
 
         return await next(context).ConfigureAwait(false);
     });
 
+static bool FixedTimeEquals(string expected, string? supplied)
+{
+    if (supplied is null)
+    {
+        return false;
+    }
+
+    return CryptographicOperations.FixedTimeEquals(
+        Encoding.UTF8.GetBytes(expected),
+        Encoding.UTF8.GetBytes(supplied));
+}
+
+static bool TryParseExchangeDecimal(string? value, out decimal parsed) =>
+    decimal.TryParse(
+        value,
+        System.Globalization.NumberStyles.Number,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out parsed);
+
+static decimal ParseExchangeDecimal(string value) =>
+    TryParseExchangeDecimal(value, out var parsed)
+        ? parsed
+        : throw new FormatException("The exchange response contained an invalid numeric value.");
+
 localDiagnostics.MapGet("/metrics", () => Results.Ok(TradingTelemetry.Snapshot()))
     .WithName("GetMetrics");
 
-localDiagnostics.MapGet("/operational/status", (IOperationalControl operationalControl) =>
-    Results.Ok(new
+localDiagnostics.MapGet("/operational/status", async (
+    IServiceProvider services,
+    CancellationToken cancellationToken) =>
+{
+    var currentStateStore = services.GetService<IOperationalControlCurrentStateStore>();
+    if (currentStateStore is null)
     {
-        source = "api-process",
-        mode = operationalControl.Snapshot.Mode.ToString(),
-        blocksNewEntries = operationalControl.Snapshot.BlocksNewEntries,
-        revision = operationalControl.Snapshot.Revision,
-        changedAtUtc = operationalControl.Snapshot.ChangedAtUtc,
-        changedBy = operationalControl.Snapshot.ChangedBy,
-        reason = operationalControl.Snapshot.Reason,
+        return ApiProblem.ServiceUnavailable("OPERATIONAL_STATE_UNAVAILABLE", "The durable Worker operational state is unavailable.");
+    }
+
+    OperationalControlAuditEvent? latest;
+    try
+    {
+        latest = await currentStateStore.ReadLatestOperationalControlAuditEventAsync(cancellationToken).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception exception)
+    {
+        ApiLog.UnhandledRequestFailure(app.Logger, "GET", "/operational/status",
+            Activity.Current?.TraceId.ToString() ?? string.Empty, exception.GetType().Name);
+        return ApiProblem.ServiceUnavailable("OPERATIONAL_STATE_UNAVAILABLE", "The durable Worker operational state is unavailable.");
+    }
+    if (latest is null)
+    {
+        return ApiProblem.ServiceUnavailable("OPERATIONAL_STATE_UNAVAILABLE", "No durable Worker operational state has been recorded.");
+    }
+
+    var snapshot = new OperationalControlSnapshot(
+        latest.To,
+        0,
+        latest.OccurredAtUtc,
+        latest.Actor,
+        latest.Reason);
+
+    return Results.Ok(new
+    {
+        source = "worker-durable-audit",
+        mode = snapshot.Mode.ToString(),
+        blocksNewEntries = snapshot.BlocksNewEntries,
+        revision = snapshot.Revision,
+        changedAtUtc = snapshot.ChangedAtUtc,
+        changedBy = snapshot.ChangedBy,
+        reason = snapshot.Reason,
         mutatingEndpointsEnabled = false
-    }))
+    });
+})
     .WithName("GetOperationalStatus");
 
 localDiagnostics.MapGet("/operational/decisions/{decisionId}", async (
@@ -155,12 +251,12 @@ localDiagnostics.MapGet("/operational/decisions/{decisionId}", async (
     var commitStore = services.GetService<IAutonomyDecisionCommitStore>();
     if (commitStore is null)
     {
-        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        return ApiProblem.ServiceUnavailable("DECISION_STORE_UNAVAILABLE", "The durable decision store is unavailable.");
     }
 
     if (string.IsNullOrWhiteSpace(decisionId))
     {
-        return Results.BadRequest(new { error = "decisionId is required." });
+        return ApiProblem.BadRequest("INVALID_DECISION_ID", "A decision identifier is required.");
     }
 
     var feeStore = services.GetService<IExpectedExecutionFeeStore>();
@@ -177,7 +273,7 @@ localDiagnostics.MapGet("/operational/decisions/{decisionId}", async (
 
     return report is not null
         ? Results.Ok(report)
-        : Results.NotFound(new { error = $"Decision '{decisionId}' was not found." });
+        : ApiProblem.NotFound("DECISION_NOT_FOUND", "The requested decision was not found.");
 })
 .WithName("GetOperationalDecision");
 
@@ -189,12 +285,12 @@ localDiagnostics.MapGet("/operational/checkpoints/{scope}", async (
     var commitStore = services.GetService<IAutonomyDecisionCommitStore>();
     if (commitStore is null)
     {
-        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        return ApiProblem.ServiceUnavailable("CHECKPOINT_STORE_UNAVAILABLE", "The durable checkpoint store is unavailable.");
     }
 
     if (string.IsNullOrWhiteSpace(scope))
     {
-        return Results.BadRequest(new { error = "scope is required." });
+        return ApiProblem.BadRequest("INVALID_SCOPE", "A checkpoint scope is required.");
     }
 
     var lastProcessedClose = await commitStore.GetLastProcessedCloseAsync(scope.Trim(), cancellationToken).ConfigureAwait(false);
@@ -213,7 +309,7 @@ localDiagnostics.MapGet("/operational/risk-policy", async (
     var policyStore = services.GetService<IRiskPolicyStore>();
     if (policyStore is null)
     {
-        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        return ApiProblem.ServiceUnavailable("RISK_POLICY_STORE_UNAVAILABLE", "The durable risk-policy store is unavailable.");
     }
 
     var policy = await policyStore.GetActiveRiskPolicyAsync(DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
@@ -230,7 +326,7 @@ localDiagnostics.MapGet("/operational/risk-policy", async (
             approvalId = policy.ApprovalId,
             approvedAtUtc = policy.ApprovedAtUtc
         })
-        : Results.NotFound(new { error = "No active RiskPolicy found." });
+        : ApiProblem.NotFound("RISK_POLICY_NOT_FOUND", "No active risk policy was found.");
 })
 .WithName("GetActiveRiskPolicy");
 
@@ -260,9 +356,13 @@ localDiagnostics.MapGet("/market/ticker/{symbol}", async (
             observedAtUtc = ticker.ObservedAtUtc
         });
     }
-    catch (Exception ex)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
-        return Results.Problem(detail: ex.Message, statusCode: StatusCodes.Status502BadGateway);
+        throw;
+    }
+    catch (Exception)
+    {
+        return ApiProblem.BadGateway("MARKET_DATA_UNAVAILABLE", "Market data could not be retrieved.");
     }
 })
 .WithName("GetMarketTicker");
@@ -276,29 +376,53 @@ localDiagnostics.MapGet("/portfolio/balances", async (
 
     if (accountClient is null)
     {
-        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+        return ApiProblem.ServiceUnavailable("ACCOUNT_DATA_UNAVAILABLE", "Account data is unavailable because credentials are not configured.");
     }
 
     try
     {
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
 
+        var hasBtcBalance = account.Balances.Any(balance =>
+            string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase) &&
+            TryParseExchangeDecimal(balance.Free, out var free) &&
+            TryParseExchangeDecimal(balance.Locked, out var locked) &&
+            free + locked > 0m);
         decimal btcPrice = 0m;
-        if (marketClient is not null)
+        if (hasBtcBalance)
         {
+            if (marketClient is null)
+            {
+                return ApiProblem.ServiceUnavailable("MARKET_DATA_UNAVAILABLE", "BTC valuation is unavailable because market data is not configured.");
+            }
+
             try
             {
                 var btcTicker = await marketClient.GetBookTickerAsync("BTCUSDT", cancellationToken).ConfigureAwait(false);
                 btcPrice = (btcTicker.BidPrice + btcTicker.AskPrice) / 2m;
             }
-            catch { }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return ApiProblem.BadGateway("MARKET_DATA_UNAVAILABLE", "BTC valuation could not be retrieved.");
+            }
+        }
+
+        if (account.Balances.Any(balance =>
+                !TryParseExchangeDecimal(balance.Free, out _) ||
+                !TryParseExchangeDecimal(balance.Locked, out _)))
+        {
+            return ApiProblem.BadGateway("ACCOUNT_DATA_INVALID", "Account balances contained an invalid numeric value.");
         }
 
         var parsedBalances = account.Balances
             .Select(b =>
             {
-                _ = decimal.TryParse(b.Free, System.Globalization.CultureInfo.InvariantCulture, out var free);
-                _ = decimal.TryParse(b.Locked, System.Globalization.CultureInfo.InvariantCulture, out var locked);
+                _ = TryParseExchangeDecimal(b.Free, out var free);
+                _ = TryParseExchangeDecimal(b.Locked, out var locked);
                 var total = free + locked;
                 decimal valueUsd = 0m;
                 if (string.Equals(b.Asset, "USDT", StringComparison.OrdinalIgnoreCase))
@@ -338,9 +462,13 @@ localDiagnostics.MapGet("/portfolio/balances", async (
             observedAtUtc = DateTimeOffset.UtcNow
         });
     }
-    catch (Exception ex)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
-        return Results.Problem(detail: ex.Message, statusCode: StatusCodes.Status502BadGateway);
+        throw;
+    }
+    catch (Exception)
+    {
+        return ApiProblem.BadGateway("ACCOUNT_DATA_UNAVAILABLE", "Account balances could not be retrieved.");
     }
 })
 .WithName("GetPortfolioBalances");
@@ -353,29 +481,41 @@ localDiagnostics.MapGet("/trading/open-orders", async (
     var accountClient = services.GetService<IBinanceSpotAccountClient>();
     if (accountClient is null)
     {
-        return Results.Ok(Array.Empty<object>());
+        return ApiProblem.ServiceUnavailable("OPEN_ORDERS_UNAVAILABLE", "Open orders are unavailable because credentials are not configured.");
     }
 
     try
     {
         var openOrders = await accountClient.GetOpenOrdersAsync(symbol?.Trim().ToUpperInvariant(), cancellationToken).ConfigureAwait(false);
+        if (openOrders.Any(order =>
+                !TryParseExchangeDecimal(order.Price, out _) ||
+                !TryParseExchangeDecimal(order.OriginalQuantity, out _) ||
+                !TryParseExchangeDecimal(order.ExecutedQuantity, out _)))
+        {
+            return ApiProblem.BadGateway("OPEN_ORDERS_INVALID", "Open orders contained an invalid numeric value.");
+        }
+
         return Results.Ok(openOrders.Select(o => new
         {
             symbol = o.Symbol,
             orderId = o.OrderId,
             clientOrderId = o.ClientOrderId,
-            price = decimal.TryParse(o.Price, System.Globalization.CultureInfo.InvariantCulture, out var p) ? p : 0m,
-            origQty = decimal.TryParse(o.OriginalQuantity, System.Globalization.CultureInfo.InvariantCulture, out var q) ? q : 0m,
-            executedQty = decimal.TryParse(o.ExecutedQuantity, System.Globalization.CultureInfo.InvariantCulture, out var eq) ? eq : 0m,
+            price = ParseExchangeDecimal(o.Price),
+            origQty = ParseExchangeDecimal(o.OriginalQuantity),
+            executedQty = ParseExchangeDecimal(o.ExecutedQuantity),
             status = o.Status,
             type = o.Type,
             side = o.Side,
             timeUtc = DateTimeOffset.FromUnixTimeMilliseconds(o.Time)
         }));
     }
-    catch (Exception ex)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
-        return Results.Problem(detail: ex.Message, statusCode: StatusCodes.Status502BadGateway);
+        throw;
+    }
+    catch (Exception)
+    {
+        return ApiProblem.BadGateway("OPEN_ORDERS_UNAVAILABLE", "Open orders could not be retrieved.");
     }
 })
 .WithName("GetOpenOrders");
@@ -388,31 +528,44 @@ localDiagnostics.MapGet("/trading/trades", async (
     var accountClient = services.GetService<IBinanceSpotAccountClient>();
     if (accountClient is null)
     {
-        return Results.Ok(Array.Empty<object>());
+        return ApiProblem.ServiceUnavailable("TRADE_HISTORY_UNAVAILABLE", "Trade history is unavailable because credentials are not configured.");
     }
 
     try
     {
         var normalizedSymbol = string.IsNullOrWhiteSpace(symbol) ? "BTCUSDT" : symbol.Trim().ToUpperInvariant();
         var trades = await accountClient.GetMyTradesAsync(normalizedSymbol, null, cancellationToken).ConfigureAwait(false);
+        if (trades.Any(trade =>
+                !TryParseExchangeDecimal(trade.Price, out _) ||
+                !TryParseExchangeDecimal(trade.Quantity, out _) ||
+                !TryParseExchangeDecimal(trade.QuoteQuantity, out _) ||
+                !TryParseExchangeDecimal(trade.Commission, out _)))
+        {
+            return ApiProblem.BadGateway("TRADE_HISTORY_INVALID", "Trade history contained an invalid numeric value.");
+        }
+
         return Results.Ok(trades.Select(t => new
         {
             symbol = t.Symbol,
             id = t.Id,
             orderId = t.OrderId,
-            price = decimal.TryParse(t.Price, System.Globalization.CultureInfo.InvariantCulture, out var p) ? p : 0m,
-            qty = decimal.TryParse(t.Quantity, System.Globalization.CultureInfo.InvariantCulture, out var q) ? q : 0m,
-            quoteQty = decimal.TryParse(t.QuoteQuantity, System.Globalization.CultureInfo.InvariantCulture, out var qq) ? qq : 0m,
-            commission = decimal.TryParse(t.Commission, System.Globalization.CultureInfo.InvariantCulture, out var c) ? c : 0m,
+            price = ParseExchangeDecimal(t.Price),
+            qty = ParseExchangeDecimal(t.Quantity),
+            quoteQty = ParseExchangeDecimal(t.QuoteQuantity),
+            commission = ParseExchangeDecimal(t.Commission),
             commissionAsset = t.CommissionAsset,
             timeUtc = DateTimeOffset.FromUnixTimeMilliseconds(t.Time),
             isBuyer = t.IsBuyer,
             isMaker = t.IsMaker
         }));
     }
-    catch (Exception ex)
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
-        return Results.Problem(detail: ex.Message, statusCode: StatusCodes.Status502BadGateway);
+        throw;
+    }
+    catch (Exception)
+    {
+        return ApiProblem.BadGateway("TRADE_HISTORY_UNAVAILABLE", "Trade history could not be retrieved.");
     }
 })
 .WithName("GetMyTrades");
@@ -421,147 +574,94 @@ localDiagnostics.MapGet("/portfolio/performance", async (
     IServiceProvider services,
     CancellationToken cancellationToken) =>
 {
-    var accountClient = services.GetService<IBinanceSpotAccountClient>();
-    var marketClient = services.GetService<IBinanceSpotMarketClient>();
-    var performanceStore = services.GetService<IPortfolioPerformanceStore>();
-
-    decimal totalNavUsd = 0m;
-    decimal cashUsdt = 0m;
-    decimal btcTotal = 0m;
-    decimal btcPrice = 0m;
-
-    if (accountClient is not null)
+    var snapshotStore = services.GetService<IPortfolioNavSnapshotStore>();
+    if (snapshotStore is null)
     {
-        try
-        {
-            var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-            if (marketClient is not null)
-            {
-                try
-                {
-                    var btcTicker = await marketClient.GetBookTickerAsync("BTCUSDT", cancellationToken).ConfigureAwait(false);
-                    btcPrice = (btcTicker.BidPrice + btcTicker.AskPrice) / 2m;
-                }
-                catch { }
-            }
-
-            foreach (var b in account.Balances)
-            {
-                _ = decimal.TryParse(b.Free, System.Globalization.CultureInfo.InvariantCulture, out var free);
-                _ = decimal.TryParse(b.Locked, System.Globalization.CultureInfo.InvariantCulture, out var locked);
-                var total = free + locked;
-                if (string.Equals(b.Asset, "USDT", StringComparison.OrdinalIgnoreCase))
-                {
-                    totalNavUsd += total;
-                    cashUsdt += total;
-                }
-                else if (string.Equals(b.Asset, "BTC", StringComparison.OrdinalIgnoreCase))
-                {
-                    btcTotal += total;
-                    totalNavUsd += total * btcPrice;
-                }
-            }
-        }
-        catch { }
+        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", "Durable portfolio snapshots are unavailable.");
     }
 
-    AggregatedPortfolioPerformanceMetrics? metrics = null;
-    if (performanceStore is not null)
+    var asOfUtc = DateTimeOffset.UtcNow;
+    AggregatedPortfolioPerformanceMetrics metrics;
+    try
     {
-        try
-        {
-            metrics = await performanceStore.GetPerformanceMetricsAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch { }
+        metrics = await snapshotStore.GetPerformanceMetricsAsync(asOfUtc, cancellationToken).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+    {
+        throw;
+    }
+    catch (Exception)
+    {
+        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", "Durable portfolio snapshots could not be read.");
     }
 
-    var positionsValueUsd = Math.Round(btcTotal * btcPrice, 2);
-    totalNavUsd = Math.Round(cashUsdt + positionsValueUsd, 2);
+    var responseTimeUtc = DateTimeOffset.UtcNow;
+    if (metrics.CurrentSnapshotObservedAtUtc is not { } observedAtUtc ||
+        observedAtUtc > responseTimeUtc ||
+        responseTimeUtc - observedAtUtc > TimeSpan.FromMinutes(2))
+    {
+        return ApiProblem.ServiceUnavailable("PORTFOLIO_SNAPSHOT_STALE", "The current portfolio snapshot is missing or older than two minutes.");
+    }
 
-    var positionCost = metrics?.BtcPositionBasis?.CostQuote ?? 0m;
-    var totalRealizedPnlUsd = metrics is not null ? Math.Round(metrics.TotalRealizedPnlQuote, 2) : 0m;
-    var totalUnrealizedPnlUsd = metrics?.BtcPositionBasis is { Quantity: > 0m }
-        ? Math.Round(positionsValueUsd - positionCost, 2)
-        : 0m;
+    if (metrics.CurrentNetAssetValueQuote is not { } totalNavUsd ||
+        metrics.CurrentUnrealizedPnlQuote is not { } totalUnrealizedPnlUsd)
+    {
+        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_INSUFFICIENT", "Portfolio history is insufficient for an auditable P&L calculation.");
+    }
 
+    var totalRealizedPnlUsd = metrics.TotalRealizedPnlQuote;
     var totalProfitUsd = totalRealizedPnlUsd + totalUnrealizedPnlUsd;
-    var initialCapitalUsd = Math.Round(totalNavUsd - totalProfitUsd, 2);
-    if (initialCapitalUsd <= 0m)
-    {
-        initialCapitalUsd = totalNavUsd;
-    }
-
-    var totalProfitPct = initialCapitalUsd > 0m
-        ? Math.Round((totalProfitUsd / initialCapitalUsd) * 100m, 2)
-        : 0m;
-
-    var totalTradesCount = metrics?.TotalTradesCount ?? 0;
+    var totalTradesCount = metrics.TotalTradesCount;
     var winRatePercentage = totalTradesCount > 0
-        ? Math.Round(((decimal)metrics!.TotalWinningCount / totalTradesCount) * 100m, 2)
+        ? Math.Round((decimal)metrics.TotalWinningCount / totalTradesCount * 100m, 2)
         : 0m;
-
-    var profitFactor = 0m;
-    if (metrics is not null)
-    {
-        if (metrics.TotalGrossLossQuote > 0m)
-        {
-            profitFactor = Math.Round(metrics.TotalGrossProfitQuote / metrics.TotalGrossLossQuote, 2);
-        }
-        else if (metrics.TotalGrossProfitQuote > 0m)
-        {
-            profitFactor = Math.Round(metrics.TotalGrossProfitQuote, 2);
-        }
-    }
-
-    var totalFeesPaidUsd = metrics is not null ? Math.Round(metrics.TotalFeesPaidQuote, 2) : 0m;
-
-    var periods = metrics?.Periods.Select(p =>
-    {
-        var realized = Math.Round(p.RealizedPnlQuote, 2);
-        var unrealized = totalUnrealizedPnlUsd;
-        var profit = realized + unrealized;
-        var profitPct = initialCapitalUsd > 0m ? Math.Round((profit / initialCapitalUsd) * 100m, 2) : 0m;
-        var winRate = p.TradesCount > 0 ? Math.Round(((decimal)p.WinningCount / p.TradesCount) * 100m, 2) : 0m;
-
-        return new
-        {
-            periodName = p.PeriodName,
-            profitUsd = profit,
-            profitPercentage = profitPct,
-            realizedProfitUsd = realized,
-            unrealizedProfitUsd = unrealized,
-            feesPaidUsd = Math.Round(p.FeesPaidQuote, 2),
-            tradesCount = p.TradesCount,
-            winRatePercentage = winRate
-        };
-    }).ToArray() ?? new[]
-    {
-        new { periodName = "Hoje (Dia / 24 Horas)", profitUsd = 0m, profitPercentage = 0m, realizedProfitUsd = 0m, unrealizedProfitUsd = 0m, feesPaidUsd = 0m, tradesCount = 0, winRatePercentage = 0m },
-        new { periodName = "Semana (Últimos 7 Dias)", profitUsd = 0m, profitPercentage = 0m, realizedProfitUsd = 0m, unrealizedProfitUsd = 0m, feesPaidUsd = 0m, tradesCount = 0, winRatePercentage = 0m },
-        new { periodName = "Mês (Últimos 30 Dias)", profitUsd = 0m, profitPercentage = 0m, realizedProfitUsd = 0m, unrealizedProfitUsd = 0m, feesPaidUsd = 0m, tradesCount = 0, winRatePercentage = 0m },
-        new { periodName = "Ano (Acumulado / YTD)", profitUsd = 0m, profitPercentage = 0m, realizedProfitUsd = 0m, unrealizedProfitUsd = 0m, feesPaidUsd = 0m, tradesCount = 0, winRatePercentage = 0m }
-    };
+    var profitFactor = metrics.TotalGrossLossQuote > 0m
+        ? Math.Round(metrics.TotalGrossProfitQuote / metrics.TotalGrossLossQuote, 2)
+        : (decimal?)null;
 
     return Results.Ok(new
     {
-        totalNavUsd = totalNavUsd,
-        initialCapitalUsd = initialCapitalUsd,
-        cashBalanceUsd = Math.Round(cashUsdt, 2),
-        positionsValueUsd = positionsValueUsd,
-        totalProfitUsd = totalProfitUsd,
-        totalProfitPct = totalProfitPct,
-        totalRealizedPnlUsd = totalRealizedPnlUsd,
-        totalUnrealizedPnlUsd = totalUnrealizedPnlUsd,
-        totalFeesPaidUsd = totalFeesPaidUsd,
-        totalTradesCount = totalTradesCount,
-        winRatePercentage = winRatePercentage,
-        profitFactor = profitFactor,
-        periods = periods
+        totalNavUsd,
+        initialCapitalUsd = (decimal?)null,
+        initialCapitalAvailabilityReason = "UNKNOWN_UNTIL_BASELINE_AND_EXTERNAL_CASH_FLOWS_ARE_DURABLE",
+        cashBalanceUsd = (decimal?)null,
+        positionsValueUsd = (decimal?)null,
+        totalProfitUsd,
+        totalProfitPct = (decimal?)null,
+        totalProfitPctAvailabilityReason = "UNKNOWN_UNTIL_BASELINE_AND_EXTERNAL_CASH_FLOWS_ARE_DURABLE",
+        totalRealizedPnlUsd,
+        totalUnrealizedPnlUsd,
+        totalFeesPaidUsd = metrics.TotalFeesPaidQuote,
+        totalTradesCount,
+        winRatePercentage,
+        profitFactor,
+        profitFactorAvailabilityReason = profitFactor is null ? "UNKNOWN_WITHOUT_REALIZED_LOSSES" : null,
+        scopeSymbol = metrics.ScopeSymbol,
+        quoteAsset = metrics.QuoteAsset,
+        asOfUtc = metrics.AsOfUtc,
+        feesAreComplete = metrics.FeesAreComplete,
+        unvaluedFeeAmounts = metrics.UnvaluedFeeAmounts,
+        periods = metrics.Periods.Select(period => new
+        {
+            periodName = period.PeriodName,
+            profitUsd = period.NetAssetValueDeltaQuote,
+            profitPercentage = period.NetAssetValueDeltaQuote is { } periodProfit && totalNavUsd > 0m
+                ? Math.Round(periodProfit / totalNavUsd * 100m, 2)
+                : (decimal?)null,
+            realizedProfitUsd = period.RealizedPnlQuote,
+            unrealizedProfitUsd = period.UnrealizedPnlDeltaQuote,
+            feesPaidUsd = period.FeesPaidQuote,
+            tradesCount = period.TradesCount,
+            winRatePercentage = period.TradesCount > 0
+                ? Math.Round((decimal)period.WinningCount / period.TradesCount * 100m, 2)
+                : 0m,
+            snapshotAvailability = period.SnapshotAvailability.ToString()
+        })
     });
 })
 .WithName("GetPortfolioPerformance");
 
-app.MapGet("/operational/regimes/current", async (
+localDiagnostics.MapGet("/operational/regimes/current", async (
     IServiceProvider services,
     [FromQuery] string symbol = "BTCUSDT",
     CancellationToken cancellationToken = default) =>
@@ -569,19 +669,7 @@ app.MapGet("/operational/regimes/current", async (
     var regimeStore = services.GetService<IMarketRegimeStore>();
     if (regimeStore is null)
     {
-        return Results.Ok(new
-        {
-            symbol,
-            regime = "Unknown",
-            confidence = 0m,
-            trendSlopeRate = 0m,
-            volatilityRate = 0m,
-            reason = "REGIME_STORE_UNAVAILABLE",
-            observedAtUtc = DateTimeOffset.UtcNow,
-            favorsTrendFollowing = false,
-            favorsMeanReversion = false,
-            prohibitsNewExposure = false
-        });
+        return ApiProblem.ServiceUnavailable("REGIME_STORE_UNAVAILABLE", "The durable market-regime store is unavailable.");
     }
 
     var latest = await regimeStore.GetLatestMarketRegimeAsync(new CryptoTrading.Domain.Primitives.Symbol(symbol), cancellationToken).ConfigureAwait(false);
@@ -618,7 +706,7 @@ app.MapGet("/operational/regimes/current", async (
 })
 .WithName("GetCurrentMarketRegime");
 
-app.MapGet("/operational/regimes/history", async (
+localDiagnostics.MapGet("/operational/regimes/history", async (
     IServiceProvider services,
     [FromQuery] string symbol = "BTCUSDT",
     [FromQuery] int limit = 20,
@@ -627,7 +715,7 @@ app.MapGet("/operational/regimes/history", async (
     var regimeStore = services.GetService<IMarketRegimeStore>();
     if (regimeStore is null)
     {
-        return Results.Ok(Array.Empty<object>());
+        return ApiProblem.ServiceUnavailable("REGIME_STORE_UNAVAILABLE", "The durable market-regime store is unavailable.");
     }
 
     var history = await regimeStore.GetMarketRegimeHistoryAsync(new CryptoTrading.Domain.Primitives.Symbol(symbol), Math.Clamp(limit, 1, 100), cancellationToken).ConfigureAwait(false);
@@ -644,7 +732,7 @@ app.MapGet("/operational/regimes/history", async (
 })
 .WithName("GetMarketRegimeHistory");
 
-app.MapGet("/operational/models", async (
+localDiagnostics.MapGet("/operational/models", async (
     IServiceProvider services,
     [FromQuery] string strategyId = "trend-following",
     CancellationToken cancellationToken = default) =>
@@ -652,7 +740,7 @@ app.MapGet("/operational/models", async (
     var modelStore = services.GetService<IModelStrategyRegistryStore>();
     if (modelStore is null)
     {
-        return Results.Ok(Array.Empty<object>());
+        return ApiProblem.ServiceUnavailable("MODEL_REGISTRY_UNAVAILABLE", "The durable model registry is unavailable.");
     }
 
     var models = await modelStore.ListModelsAsync(strategyId, cancellationToken).ConfigureAwait(false);
@@ -672,7 +760,7 @@ app.MapGet("/operational/models", async (
 })
 .WithName("GetRegisteredModels");
 
-app.MapGet("/operational/drift", async (
+localDiagnostics.MapGet("/operational/drift", async (
     IServiceProvider services,
     [FromQuery] string? strategyId = null,
     [FromQuery] int limit = 30,
@@ -681,7 +769,7 @@ app.MapGet("/operational/drift", async (
     var driftStore = services.GetService<IDriftObservationStore>();
     if (driftStore is null)
     {
-        return Results.Ok(Array.Empty<object>());
+        return ApiProblem.ServiceUnavailable("DRIFT_STORE_UNAVAILABLE", "The durable drift store is unavailable.");
     }
 
     var drifts = await driftStore.GetRecentDriftsAsync(strategyId, Math.Clamp(limit, 1, 100), cancellationToken).ConfigureAwait(false);
@@ -703,14 +791,14 @@ app.MapGet("/operational/drift", async (
 })
 .WithName("GetRecentDrifts");
 
-app.MapGet("/operational/allocations", async (
+localDiagnostics.MapGet("/operational/allocations", async (
     IServiceProvider services,
     CancellationToken cancellationToken = default) =>
 {
     var performanceStore = services.GetService<IStrategyRegimePerformanceStore>();
     if (performanceStore is null)
     {
-        return Results.Ok(Array.Empty<object>());
+        return ApiProblem.ServiceUnavailable("ALLOCATION_STORE_UNAVAILABLE", "The durable allocation store is unavailable.");
     }
 
     var performances = await performanceStore.GetPerformancesAsync(cancellationToken).ConfigureAwait(false);
@@ -733,13 +821,14 @@ internal sealed class TradingReadinessCheck(IOptions<TradingOptions> options) : 
     public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
         var trading = options.Value;
+        var hasApiKey = !string.IsNullOrWhiteSpace(trading.Binance.ApiKey);
+        var hasApiSecret = !string.IsNullOrWhiteSpace(trading.Binance.ApiSecret);
         var valid = string.Equals(trading.Environment, "TESTNET", StringComparison.OrdinalIgnoreCase) &&
                     trading.Binance.RestBaseUrl is { IsAbsoluteUri: true } &&
                     trading.Binance.WebSocketBaseUrl is { IsAbsoluteUri: true } &&
-                    trading.Binance.ApiKey.Length > 0 &&
-                    trading.Binance.ApiSecret.Length > 0 &&
                     !trading.Binance.WithdrawalsEnabled &&
-                    trading.Binance.ParsedAllowedSymbols.Count > 0;
+                    trading.Binance.ParsedAllowedSymbols.Count > 0 &&
+                    hasApiKey == hasApiSecret;
 
         var result = valid
             ? HealthCheckResult.Healthy("Trading configuration is loaded for the local testnet runtime.")
@@ -749,10 +838,68 @@ internal sealed class TradingReadinessCheck(IOptions<TradingOptions> options) : 
     }
 }
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The health check is created through dependency injection.")]
+internal sealed class PersistenceConfigurationReadinessCheck(IConfiguration configuration) : IHealthCheck
+{
+    public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    {
+        var configured = !string.IsNullOrWhiteSpace(configuration["POSTGRES_CONNECTION_STRING"]);
+        return Task.FromResult(configured
+            ? HealthCheckResult.Healthy("A PostgreSQL connection string is configured; connectivity and migration checks run separately.")
+            : HealthCheckResult.Unhealthy("PostgreSQL configuration is required for readiness."));
+    }
+}
+
 internal static partial class ApiLog
 {
-    [LoggerMessage(LogLevel.Information, "HTTP request completed with status {StatusCode} in {DurationMilliseconds} ms")]
-    public static partial void RequestCompleted(ILogger logger, int statusCode, double durationMilliseconds);
+    [LoggerMessage(LogLevel.Information, "HTTP request {Method} {Path} completed with status {StatusCode} in {DurationMilliseconds} ms")]
+    public static partial void RequestCompleted(
+        ILogger logger,
+        string method,
+        string path,
+        int statusCode,
+        double durationMilliseconds);
+
+    [LoggerMessage(LogLevel.Error, "HTTP request {Method} {Path} failed with an unhandled error type {ErrorType}. CorrelationId: {CorrelationId}")]
+    public static partial void UnhandledRequestFailure(
+        ILogger logger,
+        string method,
+        string path,
+        string correlationId,
+        string errorType);
+}
+
+internal static class ApiProblem
+{
+    public static IResult BadRequest(string code, string title) =>
+        Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: title, type: $"urn:cryptotrading:error:{code}");
+
+    public static IResult Forbidden() =>
+        Results.Problem(
+            statusCode: StatusCodes.Status403Forbidden,
+            title: "This endpoint requires a local connection or authenticated private proxy.",
+            type: "urn:cryptotrading:error:PRIVATE_ACCESS_REQUIRED");
+
+    public static IResult NotFound(string code, string title) =>
+        Results.Problem(statusCode: StatusCodes.Status404NotFound, title: title, type: $"urn:cryptotrading:error:{code}");
+
+    public static IResult BadGateway(string code, string title) =>
+        Results.Problem(statusCode: StatusCodes.Status502BadGateway, title: title, type: $"urn:cryptotrading:error:{code}");
+
+    public static IResult ServiceUnavailable(string code, string title) =>
+        Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: title, type: $"urn:cryptotrading:error:{code}");
+
+    public static Task WriteAsync(HttpContext context, int statusCode, string code, string title)
+    {
+        context.Response.StatusCode = statusCode;
+        context.Response.ContentType = "application/problem+json";
+        return context.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Type = $"urn:cryptotrading:error:{code}"
+        });
+    }
 }
 
 internal sealed class DenyApiOperationalControlResetAuthorizer : IOperationalControlResetAuthorizer
@@ -764,4 +911,3 @@ internal sealed class DenyApiOperationalControlResetAuthorizer : IOperationalCon
 }
 
 internal partial class Program { }
-

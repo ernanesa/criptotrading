@@ -25,6 +25,9 @@ interface BenchmarkMetric {
   badgeColor: string;
 }
 
+const formatReturn = (value: number | null): string =>
+  value === null ? 'Indisponível' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`;
+
 export const BenchmarkDashboardView: React.FC = () => {
   const [selectedPeriodDays, setSelectedPeriodDays] = useState<number>(252); // 1 ano (252 dias úteis)
   const [initialInvestmentBrl, setInitialInvestmentBrl] = useState<number>(100000);
@@ -53,12 +56,12 @@ export const BenchmarkDashboardView: React.FC = () => {
   const usdPeriodVariation = (1 + usdVariationAnnual) ** yearFraction - 1;
 
   // Performance REAL auditada das estratégias do robô no mesmo período
-  const totalProfitPct = performanceQuery.data?.totalProfitPct ?? 0;
-  const botUsdReturn = (totalProfitPct / 100) * yearFraction;
-  const botBrlReturn = (1 + botUsdReturn) * (1 + usdPeriodVariation) - 1; // Conversão em BRL
-  const botAlphaOverCdiBrl = botBrlReturn - cdiPeriodReturn;
-  const botPercentOfCdi = cdiPeriodReturn > 0 ? (botBrlReturn / cdiPeriodReturn) * 100 : 0;
-  const botRealReturnOverIpca = (1 + botBrlReturn) / (1 + ipcaPeriodReturn) - 1;
+  const totalProfitPct = performanceQuery.data?.totalProfitPct ?? null;
+  const botUsdReturn = totalProfitPct === null ? null : (totalProfitPct / 100) * yearFraction;
+  const botBrlReturn = botUsdReturn === null ? null : (1 + botUsdReturn) * (1 + usdPeriodVariation) - 1;
+  const botAlphaOverCdiBrl = botBrlReturn === null ? null : botBrlReturn - cdiPeriodReturn;
+  const botPercentOfCdi = botBrlReturn === null || cdiPeriodReturn <= 0 ? null : (botBrlReturn / cdiPeriodReturn) * 100;
+  const botRealReturnOverIpca = botBrlReturn === null ? null : (1 + botBrlReturn) / (1 + ipcaPeriodReturn) - 1;
 
   const benchmarks: BenchmarkMetric[] = [
     {
@@ -192,11 +195,10 @@ export const BenchmarkDashboardView: React.FC = () => {
           <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
             <span>Alpha s/ CDI (em BRL)</span>
             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              +{botAlphaOverCdiBrl >= 0 ? (botAlphaOverCdiBrl * 100).toFixed(2) : (botAlphaOverCdiBrl * 100).toFixed(2)}
-              %
+              {formatReturn(botAlphaOverCdiBrl)}
             </span>
           </div>
-          <div className="text-2xl font-bold text-emerald-400 font-mono">+{(botAlphaOverCdiBrl * 100).toFixed(2)}%</div>
+          <div className="text-2xl font-bold text-emerald-400 font-mono">{formatReturn(botAlphaOverCdiBrl)}</div>
           <div className="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
             <TrendingUp className="w-3 h-3 text-emerald-400" />
             <span>Excesso líquido sobre taxa livre de risco</span>
@@ -210,7 +212,8 @@ export const BenchmarkDashboardView: React.FC = () => {
             <Percent className="w-3.5 h-3.5 text-cyan-400" />
           </div>
           <div className="text-2xl font-bold text-cyan-400 font-mono">
-            {botPercentOfCdi.toFixed(0)}% <span className="text-sm font-normal text-slate-400">do CDI</span>
+            {botPercentOfCdi === null ? 'Indisponível' : `${botPercentOfCdi.toFixed(0)}%`}{' '}
+            {botPercentOfCdi !== null && <span className="text-sm font-normal text-slate-400">do CDI</span>}
           </div>
           <div className="text-[11px] text-slate-400 mt-2">
             Supera o CDI de {(cdiPeriodReturn * 100).toFixed(2)}% no horizonte
@@ -223,9 +226,7 @@ export const BenchmarkDashboardView: React.FC = () => {
             <span>Retorno Real (IPCA descontado)</span>
             <ArrowUpRight className="w-3.5 h-3.5 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-amber-400 font-mono">
-            +{(botRealReturnOverIpca * 100).toFixed(2)}%
-          </div>
+          <div className="text-2xl font-bold text-amber-400 font-mono">{formatReturn(botRealReturnOverIpca)}</div>
           <div className="text-[11px] text-slate-400 mt-2">Poder de compra preservado frente à inflação oficial</div>
         </div>
 
@@ -236,10 +237,13 @@ export const BenchmarkDashboardView: React.FC = () => {
             <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
           </div>
           <div className="text-2xl font-bold text-slate-100 font-mono">
-            +{(botBrlReturn * 100).toFixed(1)}% <span className="text-xs text-indigo-400">(BRL)</span>
+            {botBrlReturn === null ? 'Indisponível' : `${(botBrlReturn * 100).toFixed(1)}%`}{' '}
+            {botBrlReturn !== null && <span className="text-xs text-indigo-400">(BRL)</span>}
           </div>
           <div className="text-[11px] text-slate-400 mt-2 font-mono">
-            +{(botUsdReturn * 100).toFixed(1)}% USD • Câmbio R$ {usdRate.toFixed(2)}
+            {botUsdReturn === null
+              ? 'Indisponível'
+              : `${(botUsdReturn * 100).toFixed(1)}% USD • Câmbio R$ ${usdRate.toFixed(2)}`}
           </div>
         </div>
       </div>
@@ -261,7 +265,7 @@ export const BenchmarkDashboardView: React.FC = () => {
           <div className="flex flex-wrap items-center gap-3 text-xs">
             <span className="flex items-center gap-1.5 text-emerald-400">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
-              Robô Cripto (BRL)
+              {botBrlReturn === null ? 'Robô Cripto (BRL) — indisponível' : 'Robô Cripto (BRL)'}
             </span>
             <span className="flex items-center gap-1.5 text-cyan-400">
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 inline-block" />
@@ -318,16 +322,8 @@ export const BenchmarkDashboardView: React.FC = () => {
               strokeWidth="1.8"
             />
 
-            {/* Robô Cripto BRL (Verde esmeralda - forte crescimento composto com volatilidade controlada) */}
-            <path
-              d="M 0 130 C 80 118, 150 105, 220 85 C 300 95, 390 60, 500 24"
-              fill="none"
-              stroke="#10b981"
-              strokeWidth="3"
-            />
-
+            {/* Robô Cripto: no auditable trajectory is available for this display. */}
             {/* Pontos terminais */}
-            <circle cx="500" cy="24" r="4" fill="#10b981" />
             <circle cx="500" cy="102" r="3" fill="#f43f5e" />
             <circle cx="500" cy="105" r="3" fill="#06b6d4" />
             <circle cx="500" cy="110" r="3" fill="#6366f1" />
@@ -382,19 +378,23 @@ export const BenchmarkDashboardView: React.FC = () => {
                     Ativo Alternativo
                   </span>
                 </td>
-                <td className="py-3 px-3 text-right text-emerald-400">+{(botBrlReturn * 100).toFixed(2)}%</td>
-                <td className="py-3 px-3 text-right text-emerald-400">+{(botBrlReturn * 100).toFixed(2)}%</td>
-                <td className="py-3 px-3 text-right text-emerald-400">+{(botAlphaOverCdiBrl * 100).toFixed(2)}%</td>
-                <td className="py-3 px-3 text-right text-emerald-400">{botPercentOfCdi.toFixed(0)}%</td>
+                <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(botBrlReturn)}</td>
+                <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(botBrlReturn)}</td>
+                <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(botAlphaOverCdiBrl)}</td>
+                <td className="py-3 px-3 text-right text-emerald-400">
+                  {botPercentOfCdi === null ? 'Indisponível' : `${botPercentOfCdi.toFixed(0)}%`}
+                </td>
                 <td className="py-3 px-4 text-right text-emerald-300">
-                  R$ {(initialInvestmentBrl * (1 + botBrlReturn)).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
+                  {botBrlReturn === null
+                    ? 'Indisponível'
+                    : `R$ ${(initialInvestmentBrl * (1 + botBrlReturn)).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`}
                 </td>
               </tr>
 
               {/* Linhas dos Benchmarks */}
               {benchmarks.map((b) => {
                 const finalBrl = initialInvestmentBrl * (1 + b.returnInPeriod);
-                const alphaOverThis = botBrlReturn - b.returnInPeriod;
+                const alphaOverThis = botBrlReturn === null ? null : botBrlReturn - b.returnInPeriod;
                 const pctOfCdi = cdiPeriodReturn > 0 ? (b.returnInPeriod / cdiPeriodReturn) * 100 : 0;
 
                 return (
@@ -408,9 +408,7 @@ export const BenchmarkDashboardView: React.FC = () => {
                     </td>
                     <td className="py-3 px-3 text-right">{(b.currentRateAnnual * 100).toFixed(2)}%</td>
                     <td className="py-3 px-3 text-right">{(b.returnInPeriod * 100).toFixed(2)}%</td>
-                    <td className="py-3 px-3 text-right text-emerald-400">
-                      +{alphaOverThis >= 0 ? (alphaOverThis * 100).toFixed(2) : (alphaOverThis * 100).toFixed(2)}%
-                    </td>
+                    <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(alphaOverThis)}</td>
                     <td className="py-3 px-3 text-right text-cyan-400">{pctOfCdi.toFixed(0)}%</td>
                     <td className="py-3 px-4 text-right text-slate-200">
                       R$ {finalBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}

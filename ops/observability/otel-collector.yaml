@@ -5,9 +5,28 @@ receivers:
         endpoint: 0.0.0.0:4317
       http:
         endpoint: 0.0.0.0:4318
+  filelog/docker:
+    include:
+      - ${env:DOCKER_LOG_ROOT}/containers/${env:CRYPTO_API_CONTAINER_ID}/*-json.log
+      - ${env:DOCKER_LOG_ROOT}/containers/${env:CRYPTO_WORKER_CONTAINER_ID}/*-json.log
+      - ${env:DOCKER_LOG_ROOT}/containers/${env:CRYPTO_WEB_CONTAINER_ID}/*-json.log
+    start_at: beginning
+    storage: file_storage
+    operators:
+      - type: json_parser
+        parse_from: body
+        parse_to: attributes
+      - type: move
+        from: attributes.log
+        to: body
 
 processors:
   batch:
+  resource/docker_logs:
+    attributes:
+      - key: service.name
+        value: cryptotrading-docker
+        action: upsert
 
 exporters:
   prometheus:
@@ -16,15 +35,20 @@ exporters:
     endpoint: tempo:4317
     tls:
       insecure: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
   debug:
     verbosity: basic
 
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
 
 service:
-  extensions: [health_check]
+  extensions: [health_check, file_storage]
   pipelines:
     metrics:
       receivers: [otlp]
@@ -34,3 +58,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlp/tempo, debug]
+    logs/docker:
+      receivers: [filelog/docker]
+      processors: [resource/docker_logs, batch]
+      exporters: [otlphttp/loki]

@@ -19,6 +19,19 @@ public sealed class TradingReadinessCheckTests
     }
 
     [Fact]
+    public async Task HealthyWhenBothCredentialsAreAbsentForReadOnlyRuntime()
+    {
+        var options = ValidTradingOptions();
+        options.Binance.ApiKey = "";
+        options.Binance.ApiSecret = "";
+
+        var result = await new TradingReadinessCheck(Options.Create(options))
+            .CheckHealthAsync(new HealthCheckContext());
+
+        Assert.Equal(HealthStatus.Healthy, result.Status);
+    }
+
+    [Fact]
     public async Task UnhealthyWhenWithdrawalsAreEnabled()
     {
         var options = ValidTradingOptions();

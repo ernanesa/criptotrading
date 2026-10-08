@@ -2,7 +2,7 @@ name: cryptotrading
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cryptotrading}
@@ -23,28 +23,57 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    logging: &json-logs
+      driver: json-file
+      options:
+        max-size: ${CONTAINER_LOG_MAX_SIZE:-10m}
+        max-file: ${CONTAINER_LOG_MAX_FILES:-5}
+        # Do not select environment variables: credentials must never enter
+        # the Docker JSON log attributes collected by observability.
+        labels: com.docker.compose.project,com.docker.compose.service
 
   cryptotrading-api:
     build:
       context: .
       dockerfile: src/CryptoTrading.Api/Dockerfile
+      args:
+        CRYPTO_UID: ${LOCAL_UID:-1000}
+        CRYPTO_GID: ${LOCAL_GID:-1000}
     profiles: ["app", "api", "all"]
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:${API_PORT:-5000}:5000"
     environment:
       ASPNETCORE_ENVIRONMENT: ${APP_ENVIRONMENT:-Development}
       POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-cryptotrading};Username=${POSTGRES_USER:-cryptotrading};Password=${POSTGRES_PASSWORD:-}"
+      TRADING_ENVIRONMENT: ${TRADING_ENVIRONMENT:-TESTNET}
+      BINANCE_REST_BASE_URL: ${BINANCE_REST_BASE_URL:-https://testnet.binance.vision/api}
+      BINANCE_WS_BASE_URL: ${BINANCE_WS_BASE_URL:-wss://testnet.binance.vision/ws}
+      BINANCE_WITHDRAWALS_ENABLED: "false"
+      BINANCE_ALLOWED_SYMBOLS: ${BINANCE_ALLOWED_SYMBOLS:-BTCUSDT}
+      API_INTERNAL_ACCESS_TOKEN_FILE: /run/secrets/api_internal_access_token
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_ALLOWED_HOSTS: otel-collector
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     depends_on:
       postgres:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    secrets:
+      - api_internal_access_token
+    networks:
+      default:
+      observability:
+    logging: *json-logs
 
   cryptotrading-worker:
     build:
       context: .
       dockerfile: src/CryptoTrading.Worker/Dockerfile
+      args:
+        CRYPTO_UID: ${LOCAL_UID:-1000}
+        CRYPTO_GID: ${LOCAL_GID:-1000}
     profiles: ["app", "worker", "all"]
     restart: unless-stopped
     environment:
@@ -63,28 +92,61 @@ services:
       WORKER_ACCOUNT_STREAM_ENABLED: ${WORKER_ACCOUNT_STREAM_ENABLED:-false}
       WORKER_AUTONOMY_SYMBOL: ${WORKER_AUTONOMY_SYMBOL:-BTCUSDT}
       WORKER_AUTONOMY_INTERVAL: ${WORKER_AUTONOMY_INTERVAL:-1m}
+      WORKER_RUNTIME_AUDIT_PATH: /var/lib/cryptotrading/audit/runtime-transitions.jsonl
+      WORKER_ALERT_FILE_DIRECTORY: /var/lib/cryptotrading/audit/alerts
       BINANCE_API_KEY: ${BINANCE_API_KEY:-}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET:-}
       BINANCE_REST_BASE_URL: ${BINANCE_REST_BASE_URL:-https://testnet.binance.vision/api}
       BINANCE_WS_BASE_URL: ${BINANCE_WS_BASE_URL:-wss://testnet.binance.vision/ws}
       BINANCE_USER_STREAM_WS_API_BASE_URL: ${BINANCE_USER_STREAM_WS_API_BASE_URL:-wss://ws-api.testnet.binance.vision/ws-api/v3}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_ALLOWED_HOSTS: otel-collector
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
     depends_on:
       postgres:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
+    networks:
+      default:
+      observability:
+    logging: *json-logs
+    volumes:
+      - cryptotrading-worker-audit:/var/lib/cryptotrading/audit
 
   cryptotrading-web:
     build:
       context: src/CryptoTrading.Web
       dockerfile: Dockerfile
+      args:
+        CRYPTO_UID: ${LOCAL_UID:-1000}
+        CRYPTO_GID: ${LOCAL_GID:-1000}
     profiles: ["app", "web", "all"]
     restart: unless-stopped
     ports:
       - "127.0.0.1:${WEB_PORT:-8082}:8080"
     security_opt:
       - no-new-privileges:true
+    secrets:
+      - api_internal_access_token
+    depends_on:
+      cryptotrading-api:
+        condition: service_started
+    logging: *json-logs
+
+secrets:
+  # Initialize this local, untracked source with
+  # scripts/init-proxy-secret.sh before starting the API/Web profile.
+  api_internal_access_token:
+    file: ${API_INTERNAL_ACCESS_TOKEN_SOURCE:?Run scripts/init-proxy-secret.sh and export API_INTERNAL_ACCESS_TOKEN_SOURCE.}
+
+networks:
+  observability:
+    external: true
+    name: ${OBSERVABILITY_NETWORK_NAME:-cryptotrading-observability}
 
 volumes:
   cryptotrading-postgres-data:
     name: ${POSTGRES_VOLUME_NAME:-cryptotrading-postgres-data}
+  cryptotrading-worker-audit:
+    name: ${WORKER_AUDIT_VOLUME_NAME:-cryptotrading-worker-audit}

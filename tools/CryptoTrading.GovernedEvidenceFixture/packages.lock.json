@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net11.0": {
+      "Microsoft.Extensions.Diagnostics.HealthChecks": {
+        "type": "Transitive",
+        "resolved": "11.0.0-rc.1.26425.128",
+        "contentHash": "hKmiCr68+QuYnBgJCg7qgV6PdevD0kpujPmRuRxj0UnfQKxZImmCKEZSqY1Ezu4jxQVxEZsdOBXw7rUsZzMxqg==",
+        "dependencies": {
+          "Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions": "11.0.0-rc.1.26425.128"
+        }
+      },
+      "Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions": {
+        "type": "Transitive",
+        "resolved": "11.0.0-rc.1.26425.128",
+        "contentHash": "7I1lyFDMftIPBBf18/mlnvOW2/T/VCGbDxPjacw7zLkHuU95viIpLYH72V0stzAcoDi1BJL0GqkenxqVAVaAyg=="
+      },
+      "Npgsql": {
+        "type": "Transitive",
+        "resolved": "10.0.0",
+        "contentHash": "xZAYhPOU2rUIFpV48xsqhCx9vXs6Y+0jX2LCoSEfDFYMw9jtAOUk3iQsCnDLrFIv9NT3JGMihn7nnuZsPKqJmA=="
+      },
+      "cryptotrading.backtesting": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )"
+        }
+      },
+      "cryptotrading.domain": {
+        "type": "Project"
+      },
+      "cryptotrading.persistence": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )",
+          "Microsoft.Extensions.Diagnostics.HealthChecks": "[11.0.0-rc.1.26425.128, )",
+          "Npgsql": "[10.0.0, )"
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,3 @@
-using System.Globalization;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;

@@ -486,7 +486,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         foreach (var migration in PersistenceMigrations.ReadAll().Where(static migration => migration.Direction == "up"))
         {
-            await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+            await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             await ExecuteAsync(connection, transaction,
                 "SELECT pg_advisory_xact_lock(hashtextextended(@lock_name, 0));",
                 [Parameter("lock_name", NpgsqlDbType.Text, MigrationLockKey)], cancellationToken).ConfigureAwait(false);
@@ -510,8 +510,17 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
     public async Task CheckConnectivityAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = new NpgsqlCommand("SELECT 1;", connection);
-        _ = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand("SELECT version FROM trading.schema_migrations;", connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var applied = new HashSet<string>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            _ = applied.Add(reader.GetString(0));
+        }
+        if (PersistenceMigrations.ReadAll().Any(migration => migration.Direction == "up" && !applied.Contains(migration.Version)))
+        {
+            throw new InvalidOperationException("PostgreSQL schema is behind the running release.");
+        }
     }
 
     public async Task SaveRiskPolicyAsync(
@@ -3631,7 +3640,19 @@ public static class PostgresServiceCollectionExtensions
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddSingleton<IStrategyRegimePerformanceStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IExecutionLearningRewardStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddSingleton<IPortfolioPerformanceStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IPortfolioNavSnapshotStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IOperationalControlAuditStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IOperationalControlCurrentStateStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IDurableSubmissionStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddHealthChecks().AddCheck<PostgresHealthCheck>(
             "postgres",

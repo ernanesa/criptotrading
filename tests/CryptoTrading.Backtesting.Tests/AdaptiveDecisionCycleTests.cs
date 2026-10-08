@@ -2,11 +2,9 @@ using System.Globalization;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
-using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Regimes;
-using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using Xunit;
 

@@ -8,7 +8,8 @@
     {"title": "Reconciliation mismatches", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "targets": [{"expr": "sum(rate(cryptotrading_reconciliation_mismatches_total[5m]))", "legendFormat": "mismatches"}]},
     {"title": "Outbox dispatch outcomes", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "targets": [{"expr": "sum by (outcome) (rate(cryptotrading_outbox_dispatches_total[5m]))", "legendFormat": "{{outcome}}"}]},
     {"title": "Worker heartbeats", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}, "targets": [{"expr": "sum(rate(cryptotrading_worker_heartbeats_total[5m]))", "legendFormat": "heartbeats"}]},
-    {"title": "Invalid market-data payloads", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}, "targets": [{"expr": "sum(rate(cryptotrading_market_data_invalid_payloads_total[5m]))", "legendFormat": "invalid"}]}
+    {"title": "Invalid market-data payloads", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}, "targets": [{"expr": "sum(rate(cryptotrading_market_data_invalid_payloads_total[5m]))", "legendFormat": "invalid"}]},
+    {"title": "Container logs", "type": "logs", "datasource": {"type": "loki", "uid": "trading-loki"}, "gridPos": {"h": 10, "w": 24, "x": 0, "y": 24}, "targets": [{"expr": "{service_name=\"cryptotrading-docker\"}", "refId": "A"}], "options": {"showTime": true, "wrapLogMessage": true, "sortOrder": "Descending"}}
   ],
   "schemaVersion": 39,
   "style": "dark",

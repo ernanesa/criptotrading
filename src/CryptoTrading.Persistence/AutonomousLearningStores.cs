@@ -44,9 +44,27 @@ public interface IDriftObservationStore
     Task<IReadOnlyList<DriftObservationRecord>> GetRecentDriftsAsync(string? strategyId = null, int limit = 50, CancellationToken cancellationToken = default);
 }
 
-/// <summary>Durable store for strategy performance and contextual bandit reward weights across regimes.</summary>
+/// <summary>Durable store for normalized realized returns and contextual bandit weights across regimes.</summary>
 public interface IStrategyRegimePerformanceStore
 {
     Task RecordStrategyRewardAsync(string strategyId, MarketRegime regime, decimal reward, DateTimeOffset updatedAtUtc, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<StrategyRegimePerformance>> GetPerformancesAsync(CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Durable normalized-return attribution from a realized USDT fill to its committed
+/// decision. Rewards require a known within-tolerance quote-asset fee comparison.
+/// </summary>
+public interface IExecutionLearningRewardStore
+{
+    Task<ExecutionLearningRewardResult> RecordExecutionRewardAsync(string executionId, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Outcome of attempting to learn from one immutable execution fill; reward is realized P&amp;L divided by fill notional.</summary>
+public sealed record ExecutionLearningRewardResult(
+    bool Recorded,
+    bool Replayed,
+    string? SkippedReason,
+    string? StrategyId = null,
+    MarketRegime? Regime = null,
+    decimal? Reward = null);

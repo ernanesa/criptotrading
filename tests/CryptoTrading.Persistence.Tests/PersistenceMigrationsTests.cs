@@ -37,11 +37,14 @@ public sealed class PersistenceMigrationsTests
                 "024_runtime_state_persistence.down.sql", "024_runtime_state_persistence.up.sql",
                 "025_autonomy_decision_commits.down.sql", "025_autonomy_decision_commits.up.sql",
                 "026_autonomous_regimes_models_and_drift.down.sql", "026_autonomous_regimes_models_and_drift.up.sql",
+                "027_submission_side_effect_fence.down.sql", "027_submission_side_effect_fence.up.sql",
+                "028_portfolio_performance_snapshots.down.sql", "028_portfolio_performance_snapshots.up.sql",
+                "029_execution_learning_rewards.down.sql", "029_execution_learning_rewards.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026"],
+            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -102,5 +105,8 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("drift_observations", upMigrations[25].Sql, StringComparison.Ordinal);
         Assert.Contains("strategy_regime_performances", upMigrations[25].Sql, StringComparison.Ordinal);
         Assert.Contains("append_only", upMigrations[25].Sql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("execution_submission_starts", upMigrations[26].Sql, StringComparison.Ordinal);
+        Assert.Contains("portfolio_nav_snapshots", upMigrations[27].Sql, StringComparison.Ordinal);
+        Assert.Contains("external_cash_flow_quote", upMigrations[27].Sql, StringComparison.Ordinal);
     }
 }

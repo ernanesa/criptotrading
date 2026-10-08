@@ -3,7 +3,6 @@ import { Calendar, CheckCircle2, Clock, DollarSign, Layers, Percent, TrendingUp,
 import type React from 'react';
 import { useState } from 'react';
 import { apiClient } from '../api/client';
-import type { PeriodPerformance } from '../types/api';
 
 export const FinancialPerformanceView: React.FC = () => {
   const [usdBrl, setUsdBrl] = useState<number>(5.65);
@@ -14,87 +13,62 @@ export const FinancialPerformanceView: React.FC = () => {
     refetchInterval: 5000,
   });
 
-  const balancesQuery = useQuery({
-    queryKey: ['portfolioBalances'],
-    queryFn: apiClient.getPortfolioBalances,
-    refetchInterval: 5000,
-  });
-
   const perf = performanceQuery.data;
-  const balances = balancesQuery.data;
 
-  // Real financial metrics from exchange and accounting engine
-  const currentNavUsd = perf?.totalNavUsd ?? balances?.totalNavUsd ?? 0;
-  const initialCapitalUsd = perf?.initialCapitalUsd ?? currentNavUsd;
-  const cashBalanceUsd = perf?.cashBalanceUsd ?? balances?.cashUsdt ?? 0;
-  const positionsValueUsd = perf?.positionsValueUsd ?? balances?.positionsUsd ?? 0;
+  if (!perf) {
+    const availabilityMessage = performanceQuery.isError
+      ? 'Dados de P&L indisponíveis. A API não forneceu snapshots históricos suficientes para calcular o período com segurança.'
+      : 'Carregando snapshots de P&L auditáveis...';
 
-  const totalProfitUsd = perf?.totalProfitUsd ?? 0;
+    return (
+      <div className="space-y-6" data-testid="financial-performance-view">
+        <div className="border-b border-slate-800 pb-5">
+          <div className="flex items-center gap-2">
+            <Wallet className="w-5 h-5 text-emerald-400" />
+            <h1 className="text-xl font-bold text-slate-100">Patrimônio, Capital Investido & Lucro (P&L)</h1>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            Valores são exibidos somente quando há snapshots e contexto contábil suficientes.
+          </p>
+        </div>
+        <div
+          className="rounded-xl border border-amber-700/60 bg-amber-950/30 p-5 text-sm text-amber-200"
+          data-testid="performance-unavailable"
+        >
+          {availabilityMessage}
+        </div>
+      </div>
+    );
+  }
+
+  const currentNavUsd = perf.totalNavUsd;
+  const initialCapitalUsd = perf.initialCapitalUsd;
+  const cashBalanceUsd = perf.cashBalanceUsd;
+  const positionsValueUsd = perf.positionsValueUsd;
+
+  const totalProfitUsd = perf.totalProfitUsd;
   const totalProfitBrl = totalProfitUsd * usdBrl;
-  const totalProfitPct = perf?.totalProfitPct ?? 0;
-  const totalFeesPaidUsd = perf?.totalFeesPaidUsd ?? 0;
-  const totalTradesCount = perf?.totalTradesCount ?? 0;
-  const winRatePercentage = perf?.winRatePercentage ?? 0;
-  const profitFactor = perf?.profitFactor ?? 0;
+  const totalProfitPct = perf.totalProfitPct;
+  const totalFeesPaidUsd = perf.totalFeesPaidUsd;
+  const totalTradesCount = perf.totalTradesCount;
+  const winRatePercentage = perf.winRatePercentage;
+  const profitFactor = perf.profitFactor;
 
   const currentNavBrl = currentNavUsd * usdBrl;
-  const initialCapitalBrl = initialCapitalUsd * usdBrl;
+  const initialCapitalBrl = initialCapitalUsd === null ? null : initialCapitalUsd * usdBrl;
+  const cashAndPositions =
+    cashBalanceUsd !== null && positionsValueUsd !== null
+      ? `Caixa USDT: $${cashBalanceUsd.toFixed(2)} • Cripto: $${positionsValueUsd.toFixed(2)}`
+      : 'Composição de caixa e posições indisponível para este snapshot.';
 
-  // Real accounting periods
-  const defaultPeriods: PeriodPerformance[] = [
-    {
-      periodName: 'Hoje (Dia / 24 Horas)',
-      profitUsd: 0,
-      profitBrl: 0,
-      profitPercentage: 0,
-      realizedProfitUsd: 0,
-      unrealizedProfitUsd: 0,
-      feesPaidUsd: 0,
-      tradesCount: 0,
-      winRatePercentage: 0,
-    },
-    {
-      periodName: 'Semana (Últimos 7 Dias)',
-      profitUsd: 0,
-      profitBrl: 0,
-      profitPercentage: 0,
-      realizedProfitUsd: 0,
-      unrealizedProfitUsd: 0,
-      feesPaidUsd: 0,
-      tradesCount: 0,
-      winRatePercentage: 0,
-    },
-    {
-      periodName: 'Mês (Últimos 30 Dias)',
-      profitUsd: 0,
-      profitBrl: 0,
-      profitPercentage: 0,
-      realizedProfitUsd: 0,
-      unrealizedProfitUsd: 0,
-      feesPaidUsd: 0,
-      tradesCount: 0,
-      winRatePercentage: 0,
-    },
-    {
-      periodName: 'Ano (Acumulado / YTD)',
-      profitUsd: 0,
-      profitBrl: 0,
-      profitPercentage: 0,
-      realizedProfitUsd: 0,
-      unrealizedProfitUsd: 0,
-      feesPaidUsd: 0,
-      tradesCount: 0,
-      winRatePercentage: 0,
-    },
-  ];
-
-  const periods: PeriodPerformance[] =
-    perf?.periods && perf.periods.length > 0
-      ? perf.periods.map((p) => ({
-          ...p,
-          profitBrl: p.profitUsd * usdBrl,
-        }))
-      : defaultPeriods;
+  const periods = perf.periods
+    .filter((period) => period.snapshotAvailability === undefined || period.snapshotAvailability === 'Available')
+    .map((period) => ({
+      ...period,
+      profitBrl: period.profitUsd === null ? null : period.profitUsd * usdBrl,
+    }));
+  const hasUnavailableHistory = periods.length !== perf.periods.length;
+  const hasPartialPerformance = !perf.feesAreComplete || initialCapitalUsd === null || totalProfitPct === null;
 
   return (
     <div className="space-y-6" data-testid="financial-performance-view">
@@ -136,14 +110,14 @@ export const FinancialPerformanceView: React.FC = () => {
             <DollarSign className="w-4 h-4 text-cyan-400" />
           </div>
           <div className="text-2xl font-bold text-slate-100 font-mono">
-            R${' '}
-            {initialCapitalBrl.toLocaleString('pt-BR', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+            {initialCapitalBrl === null
+              ? 'Indisponível'
+              : `R$ ${initialCapitalBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           </div>
           <div className="text-xs text-cyan-400 font-mono mt-1">
-            $ {initialCapitalUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD
+            {initialCapitalUsd === null
+              ? 'Baseline e fluxos externos ainda não auditáveis'
+              : `$ ${initialCapitalUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD`}
           </div>
           <p className="text-[11px] text-slate-400 mt-2">Base de custo líquido aportada no fundo operacional.</p>
         </div>
@@ -160,15 +134,13 @@ export const FinancialPerformanceView: React.FC = () => {
           <div className="text-xs text-emerald-400/90 font-mono mt-1">
             $ {currentNavUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD
           </div>
-          <p className="text-[11px] text-slate-400 mt-2">
-            Caixa USDT: ${cashBalanceUsd.toFixed(2)} • Cripto: ${positionsValueUsd.toFixed(2)}
-          </p>
+          <p className="text-[11px] text-slate-400 mt-2">{cashAndPositions}</p>
         </div>
 
         {/* Card 3: Lucro Total Acumulado */}
         <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-5 relative overflow-hidden shadow-sm">
           <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span className="font-semibold uppercase tracking-wider text-[11px]">Lucro Total Acumulado</span>
+            <span className="font-semibold uppercase tracking-wider text-[11px]">P&L conhecido</span>
             <span
               className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
                 totalProfitUsd >= 0
@@ -176,7 +148,11 @@ export const FinancialPerformanceView: React.FC = () => {
                   : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'
               }`}
             >
-              {totalProfitPct >= 0 ? `+${totalProfitPct.toFixed(2)}%` : `${totalProfitPct.toFixed(2)}%`}
+              {totalProfitPct === null
+                ? 'Rentabilidade indisponível'
+                : totalProfitPct >= 0
+                  ? `+${totalProfitPct.toFixed(2)}%`
+                  : `${totalProfitPct.toFixed(2)}%`}
             </span>
           </div>
           <div className={`text-2xl font-bold font-mono ${totalProfitBrl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -187,7 +163,9 @@ export const FinancialPerformanceView: React.FC = () => {
             {totalProfitUsd >= 0 ? '+$' : '-$'}
             {Math.abs(totalProfitUsd).toLocaleString('en-US', { minimumFractionDigits: 2 })} USD
           </div>
-          <p className="text-[11px] text-slate-400 mt-2">Lucro líquido contábil auditado pós taxas de corretagem.</p>
+          <p className="text-[11px] text-slate-400 mt-2">
+            Valores conhecidos de P&L; consulte o aviso de completude abaixo.
+          </p>
         </div>
 
         {/* Card 4: Taxa de Câmbio & Eficiência */}
@@ -201,7 +179,10 @@ export const FinancialPerformanceView: React.FC = () => {
             <span className="text-xs font-normal text-slate-400">({totalTradesCount} trades)</span>
           </div>
           <div className="text-xs text-slate-400 font-mono mt-1">
-            Profit Factor: <strong className="text-purple-300">{profitFactor.toFixed(2)}</strong>
+            Profit Factor:{' '}
+            <strong className="text-purple-300">
+              {profitFactor === null ? 'Indisponível' : profitFactor.toFixed(2)}
+            </strong>
           </div>
           <p className="text-[11px] text-slate-400 mt-2">
             Taxas de corretagem pagas: ${totalFeesPaidUsd.toFixed(2)} USD.
@@ -223,7 +204,7 @@ export const FinancialPerformanceView: React.FC = () => {
           {periods.map((p, idx) => {
             const icons = [Clock, Calendar, Calendar, TrendingUp];
             const Icon = icons[idx] || TrendingUp;
-            const isPositive = p.profitUsd >= 0;
+            const isPositive = p.profitUsd !== null && p.profitUsd >= 0;
             return (
               <div
                 key={p.periodName}
@@ -236,25 +217,28 @@ export const FinancialPerformanceView: React.FC = () => {
 
                 {/* Lucro em Reais */}
                 <div className={`text-xl font-bold font-mono ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {isPositive ? '+R$ ' : '-R$ '}
-                  {Math.abs(p.profitBrl).toLocaleString('pt-BR', {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
+                  {p.profitBrl === null
+                    ? 'Indisponível'
+                    : `${isPositive ? '+R$ ' : '-R$ '}${Math.abs(p.profitBrl).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                 </div>
 
                 {/* Lucro em Dólares e Percentual */}
                 <div className="flex items-center justify-between mt-1 text-xs font-mono">
                   <span className="text-slate-300">
-                    {isPositive ? '+$' : '-$'}
-                    {Math.abs(p.profitUsd).toFixed(2)} USD
+                    {p.profitUsd === null
+                      ? 'Indisponível'
+                      : `${isPositive ? '+$' : '-$'}${Math.abs(p.profitUsd).toFixed(2)} USD`}
                   </span>
                   <span
                     className={`font-bold px-1.5 py-0.5 rounded ${
                       isPositive ? 'text-emerald-400 bg-emerald-500/10' : 'text-rose-400 bg-rose-500/10'
                     }`}
                   >
-                    {isPositive ? `+${p.profitPercentage.toFixed(2)}%` : `${p.profitPercentage.toFixed(2)}%`}
+                    {p.profitPercentage === null
+                      ? 'Indisponível'
+                      : isPositive
+                        ? `+${p.profitPercentage.toFixed(2)}%`
+                        : `${p.profitPercentage.toFixed(2)}%`}
                   </span>
                 </div>
 
@@ -293,6 +277,17 @@ export const FinancialPerformanceView: React.FC = () => {
         </div>
       </div>
 
+      {(hasUnavailableHistory || hasPartialPerformance) && (
+        <div
+          className="rounded-xl border border-amber-700/60 bg-amber-950/30 p-4 text-xs text-amber-200"
+          data-testid="performance-history-partial"
+        >
+          P&L parcial: somente valores com fonte conhecida são exibidos. Capital inicial e rentabilidade acumulada
+          dependem de baseline e fluxos externos duráveis; profit factor depende de perdas realizadas. Taxas:{' '}
+          {perf.feesAreComplete ? 'completas.' : 'incompletas.'}
+        </div>
+      )}
+
       {/* Tabela Analítica de P&L Consolidado */}
       <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden">
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
@@ -320,7 +315,7 @@ export const FinancialPerformanceView: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
               {periods.map((p) => {
-                const isPositive = p.profitUsd >= 0;
+                const isPositive = p.profitUsd !== null && p.profitUsd >= 0;
                 return (
                   <tr key={p.periodName} className="hover:bg-slate-800/30 text-slate-300 transition-colors">
                     <td className="py-3 px-4 font-sans font-medium text-slate-200 flex items-center gap-2">
@@ -330,22 +325,25 @@ export const FinancialPerformanceView: React.FC = () => {
                     <td
                       className={`py-3 px-3 text-right font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}
                     >
-                      {isPositive ? '+R$ ' : '-R$ '}
-                      {Math.abs(p.profitBrl).toLocaleString('pt-BR', {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
+                      {p.profitBrl === null
+                        ? 'Indisponível'
+                        : `${isPositive ? '+R$ ' : '-R$ '}${Math.abs(p.profitBrl).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
                     </td>
                     <td
                       className={`py-3 px-3 text-right font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}
                     >
-                      {isPositive ? '+$' : '-$'}
-                      {Math.abs(p.profitUsd).toFixed(2)}
+                      {p.profitUsd === null
+                        ? 'Indisponível'
+                        : `${isPositive ? '+$' : '-$'}${Math.abs(p.profitUsd).toFixed(2)}`}
                     </td>
                     <td
                       className={`py-3 px-3 text-right font-bold ${isPositive ? 'text-emerald-400' : 'text-rose-400'}`}
                     >
-                      {isPositive ? `+${p.profitPercentage.toFixed(2)}%` : `${p.profitPercentage.toFixed(2)}%`}
+                      {p.profitPercentage === null
+                        ? 'Indisponível'
+                        : isPositive
+                          ? `+${p.profitPercentage.toFixed(2)}%`
+                          : `${p.profitPercentage.toFixed(2)}%`}
                     </td>
                     <td className="py-3 px-3 text-right text-slate-200">
                       {p.realizedProfitUsd >= 0

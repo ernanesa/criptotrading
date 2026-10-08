@@ -7,6 +7,13 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 port="${API_TEST_PORT:-58081}"
 [[ "$port" =~ ^[0-9]+$ ]] || { echo 'API_TEST_PORT must be numeric.' >&2; exit 2; }
 
+# Run outside the repository and clear inherited persistence configuration so
+# AddLocalDotEnv cannot make this isolated smoke use a developer's .env file.
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-api-smoke-work.XXXXXX")"
+unset POSTGRES_CONNECTION_STRING
+unset API_INTERNAL_ACCESS_TOKEN API_INTERNAL_ACCESS_TOKEN_FILE
+cd "$work_dir"
+
 dotnet_command="dotnet"
 if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
     dotnet_command="$repo_root/.tools/dotnet/dotnet"
@@ -23,6 +30,7 @@ cleanup() {
         wait "$api_pid" >/dev/null 2>&1 || true
     fi
     rm -f -- "$log_file"
+    rm -rf -- "$work_dir"
 }
 trap cleanup EXIT
 

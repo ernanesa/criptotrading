@@ -128,8 +128,8 @@ public static class ExecutionAccounting
 
     /// <summary>
     /// Updates average-cost inventory and computes quote-denominated realized PnL.
-    /// A non-quote commission is recorded in the ledger but is intentionally not
-    /// converted without a trusted mark price.
+    /// A commission in a third asset requires fresh, non-future conversion evidence
+    /// into the fill quote asset before the quote cost or realized PnL is computed.
     /// </summary>
     public static (decimal Quantity, decimal CostQuote, decimal? RealizedPnlQuote) ApplyAverageCost(
         ExecutionAccountingCommand command,
@@ -141,6 +141,18 @@ public static class ExecutionAccounting
         var notional = command.Quantity.Value * command.Price.Value;
         var commissionInBase = command.Commission.Asset == command.BaseAsset ? command.Commission.Amount : 0m;
         var commissionInQuote = command.Commission.Asset == command.QuoteAsset ? command.Commission.Amount : 0m;
+        if (command.Commission.Amount != 0m && commissionInBase == 0m && commissionInQuote == 0m)
+        {
+            var valuation = command.FeeAssetValuation;
+            if (valuation is null || valuation.Asset != command.Commission.Asset ||
+                valuation.QuoteAsset != command.QuoteAsset || valuation.ObservedAtUtc > command.OccurredAtUtc ||
+                command.OccurredAtUtc - valuation.ObservedAtUtc > TimeSpan.FromMinutes(2))
+            {
+                throw new InvalidOperationException("A third-asset commission requires a matching, fresh quote valuation at or before the fill.");
+            }
+
+            commissionInQuote = checked(command.Commission.Amount * valuation.QuotePerAsset);
+        }
 
         if (command.Side == OrderSide.Buy)
         {
@@ -152,7 +164,7 @@ public static class ExecutionAccounting
         var disposed = command.Quantity.Value + commissionInBase;
         if (disposed > currentQuantity) throw new InvalidOperationException("Sell execution exceeds tracked inventory.");
         var averageCost = currentQuantity == 0m ? 0m : currentCostQuote / currentQuantity;
-        var realized = (command.Quantity.Value * command.Price.Value) - (command.Quantity.Value * averageCost) - commissionInQuote;
+        var realized = notional - (disposed * averageCost) - commissionInQuote;
         return (currentQuantity - disposed, currentCostQuote - disposed * averageCost, realized);
     }
 }

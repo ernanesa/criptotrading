@@ -12,16 +12,18 @@ volume_name="cryptotrading-backup-$$"
 backup_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.dump")"
 checksum_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.sha256")"
 corrupt_backup_file="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.corrupt")"
+source_manifest="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.source")"
+restored_manifest="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.restored")"
 report_dir="$repo_root/artifacts/recovery"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_file="$report_dir/postgres-rpo-rto-$run_stamp-$$.md"
 password="$(openssl rand -hex 32)"
-compose=(docker compose --project-name "$compose_project" --file "$repo_root/compose.yaml")
+compose=(docker compose --env-file /dev/null --project-name "$compose_project" --file "$repo_root/compose.yaml")
 
 cleanup() {
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -f -- "$backup_file"
-    rm -f -- "$checksum_file" "$corrupt_backup_file"
+    rm -f -- "$checksum_file" "$corrupt_backup_file" "$source_manifest" "$restored_manifest"
 }
 trap cleanup EXIT
 
@@ -36,6 +38,8 @@ export POSTGRES_USER="$postgres_user"
 export POSTGRES_PASSWORD="$password"
 export POSTGRES_PORT="$postgres_port"
 export POSTGRES_VOLUME_NAME="$volume_name"
+# This harness starts PostgreSQL only; it never starts API/Web.
+export API_INTERNAL_ACCESS_TOKEN_SOURCE="${API_INTERNAL_ACCESS_TOKEN_SOURCE:-/dev/null}"
 
 "${compose[@]}" up -d postgres >/dev/null
 for attempt in {1..30}; do
@@ -49,12 +53,48 @@ for attempt in {1..30}; do
     sleep 1
 done
 
-# Create a non-sensitive marker, dump it, restore into a second database and
-# verify the row. The generated password never appears in command arguments.
+# Apply the repository's complete migration chain and seed deterministic,
+# non-sensitive financial state. The fixture models a committed journal entry,
+# balanced ledger postings, its projection, and an outbox event; no exchange or
+# worker is started. The generated password never appears in command arguments.
+for migration in "$repo_root"/src/CryptoTrading.Persistence/Migrations/*.up.sql; do
+    "${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" < "$migration" >/dev/null
+done
 drill_started_ns="$(now_ns)"
-"${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" \
-    -c 'CREATE TABLE backup_drill_marker (id integer PRIMARY KEY, status text NOT NULL);' \
-    -c "INSERT INTO backup_drill_marker VALUES (1, 'ok');" >/dev/null
+"${compose[@]}" exec -T postgres psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" >/dev/null <<'SQL'
+BEGIN;
+INSERT INTO trading.journal_entries (entry_id, correlation_id, occurred_at, reason, idempotency_key)
+VALUES ('74190000-0000-4000-8000-000000000001', '74190000-0000-4000-8000-000000000002', transaction_timestamp(), 'backup restore deterministic fixture', 'backup-drill-7419');
+INSERT INTO trading.ledger_postings (entry_id, posting_index, account_id, asset, amount)
+VALUES ('74190000-0000-4000-8000-000000000001', 0, 'backup-drill:cash', 'USDT', 1000.000000000000000000),
+       ('74190000-0000-4000-8000-000000000001', 1, 'backup-drill:counterparty', 'USDT', -1000.000000000000000000);
+INSERT INTO trading.ledger_balances (account_id, asset, balance, projection_version)
+VALUES ('backup-drill:cash', 'USDT', 1000.000000000000000000, 1),
+       ('backup-drill:counterparty', 'USDT', -1000.000000000000000000, 1);
+INSERT INTO trading.outbox_messages (message_id, aggregate_type, aggregate_id, event_type, payload, correlation_id, idempotency_key, occurred_at)
+VALUES ('74190000-0000-4000-8000-000000000003', 'LedgerEntry', '74190000-0000-4000-8000-000000000001', 'BackupDrillFixtureRecorded', '{"fixture":true,"environment":"local"}'::jsonb, '74190000-0000-4000-8000-000000000002', 'backup-drill-event-7419', transaction_timestamp());
+COMMIT;
+SQL
+
+# Hash every table in the financial schema independently so failures identify
+# the affected relation without copying financial row contents into evidence.
+table_manifest() {
+    local database="$1" output_file="$2" table
+    : > "$output_file"
+    while IFS= read -r table; do
+        [[ -n "$table" ]] || continue
+        local result
+        result="$("${compose[@]}" exec -T postgres psql -At -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$database" \
+            -c "SELECT count(*) || ' ' || md5(coalesce(string_agg(to_jsonb(t)::text, E'\\n' ORDER BY to_jsonb(t)::text), '')) FROM trading.$table AS t;" </dev/null)"
+        printf '%s %s\n' "$table" "${result//$'\r'/}" >> "$output_file"
+    done < <("${compose[@]}" exec -T postgres psql -At -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$database" \
+        -c "SELECT tablename FROM pg_tables WHERE schemaname = 'trading' ORDER BY tablename;")
+}
+table_manifest "$postgres_db" "$source_manifest"
+if (( $(wc -l < "$source_manifest") < 20 )) || ! awk '$1 == "journal_entries" && $2 > 0 { journal=1 } $1 == "ledger_postings" && $2 >= 2 { postings=1 } $1 == "outbox_messages" && $2 > 0 { outbox=1 } END { exit !(journal && postings && outbox) }' "$source_manifest"; then
+    echo "Backup/restore manifest is incomplete or financial fixture is absent." >&2
+    exit 1
+fi
 backup_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_dump -U "$postgres_user" -d "$postgres_db" --format=custom > "$backup_file"
 backup_finished_ns="$(now_ns)"
@@ -75,10 +115,11 @@ restore_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_restore -U "$postgres_user" --dbname=cryptotrading_restore < "$backup_file"
 restore_finished_ns="$(now_ns)"
 verify_started_ns="$(now_ns)"
-restored_status="$("${compose[@]}" exec -T postgres psql -At -U "$postgres_user" -d cryptotrading_restore -c 'SELECT status FROM backup_drill_marker WHERE id = 1;')"
+table_manifest cryptotrading_restore "$restored_manifest"
 verify_finished_ns="$(now_ns)"
-if [[ "${restored_status//$'\r'/}" != "ok" ]]; then
-    echo "Backup/restore verification failed." >&2
+if ! cmp -s "$source_manifest" "$restored_manifest"; then
+    diff -u "$source_manifest" "$restored_manifest" >&2 || true
+    echo "Backup/restore verification failed: trading table row counts or hashes differ." >&2
     exit 1
 fi
 
@@ -88,6 +129,8 @@ restore_ms="$(elapsed_ms "$restore_started_ns" "$restore_finished_ns")"
 verify_ms="$(elapsed_ms "$verify_started_ns" "$verify_finished_ns")"
 total_ms="$(elapsed_ms "$drill_started_ns" "$drill_finished_ns")"
 backup_bytes="$(wc -c < "$backup_file" | tr -d '[:space:]')"
+table_count="$(wc -l < "$source_manifest" | tr -d '[:space:]')"
+financial_rows="$(awk '{ total += $2 } END { print total + 0 }' "$source_manifest")"
 
 cat > "$report_file" <<EOF
 # PostgreSQL RPO/RTO drill — $run_stamp
@@ -101,8 +144,9 @@ cat > "$report_file" <<EOF
 - Restore duration (RTO probe): ${restore_ms} ms.
 - Verification duration: ${verify_ms} ms.
 - Total drill duration: ${total_ms} ms.
-- RPO probe: 0 rows lost for the committed marker transaction; this is a deterministic drill result, not a production RPO guarantee.
-- Verification: restored marker status was \`ok\`.
+- Financial state verification: ${financial_rows} rows across ${table_count} trading tables; per-table row counts and canonical row hashes matched before and after restore.
+- RPO probe: 0 seeded financial rows lost in the restored snapshot; this is a deterministic local result, not a production RPO guarantee.
+- Verification: complete trading schema data manifest matched.
 - Cleanup: ephemeral containers, volume, restore database, and dump file were removed.
 EOF
 chmod 600 "$report_file"

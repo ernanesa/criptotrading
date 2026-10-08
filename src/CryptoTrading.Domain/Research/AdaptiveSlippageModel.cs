@@ -54,7 +54,7 @@ public static class AdaptiveSlippageModel
 
         // Expected slippage: base spread + impact factor * depthRatio * volMultiplier
         var expectedSlippageBps = baseSpreadBps + (impactFactor * depthRatio * volMultiplier);
-        
+
         // Conservative worst-case bound (99th percentile proxy: 2x expected)
         var maxExpectedSlippageBps = expectedSlippageBps * 2.0m;
 

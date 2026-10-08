@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net11.0": {
+      "cryptotrading.backtesting": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )"
+        }
+      },
+      "cryptotrading.domain": {
+        "type": "Project"
+      }
+    }
+  }
+}

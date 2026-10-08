@@ -39,6 +39,10 @@ public sealed class OrderProjectionService
         return transition;
     }
 
+    public Task<IReadOnlyList<OrderLifecycleEvent>> ReadLifecycleAsync(string clientOrderId, CancellationToken cancellationToken = default) =>
+        lifecycleStore?.ReadOrderLifecycleEventsAsync(clientOrderId, cancellationToken)
+        ?? Task.FromResult<IReadOnlyList<OrderLifecycleEvent>>([]);
+
     /// <summary>Retries projection of the aggregate's current state after a persistence failure.</summary>
     public async Task ProjectCurrentAsync(
         Order order,

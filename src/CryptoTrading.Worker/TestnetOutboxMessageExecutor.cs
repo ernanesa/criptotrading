@@ -1,6 +1,7 @@
 #pragma warning disable CA1515 // Executor is a host composition boundary and is covered by contract tests.
 
 using System.Globalization;
+using System.Diagnostics;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
@@ -22,7 +23,9 @@ public sealed class TestnetOutboxMessageExecutor(
     IOptions<TradingOptions> tradingOptions,
     OrderProjectionService projection,
     ILogger<TestnetOutboxMessageExecutor> logger,
-    IOptions<BinanceAuthenticatedClientOptions>? authenticatedOptions = null) : IOutboxMessageExecutor
+    IOptions<BinanceAuthenticatedClientOptions>? authenticatedOptions = null,
+    IExecutionSubmissionGuard? submissionGuard = null,
+    IDurableSubmissionStore? submissionStore = null) : IOutboxMessageExecutor
 {
     public string MessageType => OrderExecutionPipeline.SubmitOrderMessageType;
 
@@ -53,8 +56,22 @@ public sealed class TestnetOutboxMessageExecutor(
             throw new InvalidOperationException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
         }
 
-        ValidateCurrentCommission(command, DateTimeOffset.UtcNow);
-        await ValidateAvailableBalanceAsync(command, runtime, cancellationToken).ConfigureAwait(false);
+        if (submissionGuard is null || submissionStore is null)
+        {
+            throw new ExecutionDispatchBlockedException("DURABLE_SUBMISSION_GUARD_REQUIRED");
+        }
+        using var scope = logger.BeginScope(new Dictionary<string, object?>
+        {
+            ["event_name"] = "execution.submit",
+            ["message_id"] = message.MessageId,
+            ["correlation_id"] = message.CorrelationId.Value,
+            ["client_order_id"] = command.ClientOrderId.Value,
+            ["symbol"] = command.Symbol.Value,
+            ["policy_version"] = command.PolicyVersion,
+            ["attempt"] = message.Attempts,
+            ["lease_owner"] = message.LeaseOwner,
+            ["trace_id"] = Activity.Current?.TraceId.ToString()
+        });
 
         var request = new BinanceSpotOrderRequest(
             command.Symbol.Value,
@@ -74,25 +91,65 @@ public sealed class TestnetOutboxMessageExecutor(
             command.Type == OrderType.Limit ? command.ReferencePrice : null,
             command.IdempotencyKey,
             command.CreatedAtUtc);
-        var transitionTime = command.CreatedAtUtc;
-        await projection.TransitionAndProjectAsync(
-            order,
-            OrderStatus.Validated,
-            new IdempotencyKey($"validated:{message.MessageId:N}"),
-            transitionTime,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        await projection.TransitionAndProjectAsync(
-            order,
-            OrderStatus.Submitted,
-            new IdempotencyKey($"submitted:{message.MessageId:N}"),
-            transitionTime,
-            projectBeforeSubmission: true,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        // Attempts count deliveries, not venue side effects. A retry without
+        // the durable fence still follows normal pre-submit validation.
+        if (await submissionStore.HasSubmissionStartedAsync(message, cancellationToken).ConfigureAwait(false))
+        {
+            await ProjectSubmittedAsync(order, message, command, cancellationToken).ConfigureAwait(false);
+            await RecoverAsync(order, message, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
+        ValidateCurrentCommission(command, DateTimeOffset.UtcNow);
+        await ValidateAvailableBalanceAsync(command, runtime, cancellationToken).ConfigureAwait(false);
+        await submissionGuard.ValidateAsync(command, message, cancellationToken).ConfigureAwait(false);
+        // WorkerExecutionRegistration configures the authenticated order HTTP client for ten seconds.
+        var submitTimeout = TimeSpan.FromSeconds(10);
+        var submitLeaseMargin = TimeSpan.FromSeconds(2);
+        if (!await submissionStore.TryBeginSubmissionAsync(message,
+                submitTimeout + submitLeaseMargin, cancellationToken).ConfigureAwait(false))
+        {
+            if (await submissionStore.HasSubmissionStartedAsync(message, cancellationToken).ConfigureAwait(false))
+            {
+                await ProjectSubmittedAsync(order, message, command, cancellationToken).ConfigureAwait(false);
+                await RecoverAsync(order, message, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            throw new ExecutionDispatchBlockedException("OUTBOX_LEASE_TOO_SHORT_OR_LOST");
+        }
         try
         {
+            await ProjectSubmittedAsync(order, message, command, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await submissionGuard.ValidateFinalAsync(command, message, cancellationToken).ConfigureAwait(false);
+            }
+            catch (ExecutionDispatchBlockedException)
+            {
+                await projection.TransitionAndProjectAsync(
+                    order,
+                    OrderStatus.Unknown,
+                    new IdempotencyKey($"unknown:{message.MessageId:N}"),
+                    DateTimeOffset.UtcNow,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                throw new OrderOutcomeUnknownException(command.ClientOrderId.Value);
+            }
             var result = await client.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
-            await ProjectExchangeResultAsync(order, result, projection, message.MessageId, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await ProjectExchangeResultAsync(order, result, projection, message.MessageId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+#pragma warning disable CA1031 // Any local projection failure after a venue response requires a read-only identity lookup.
+            catch (Exception)
+            {
+                await RecoverAsync(order, message, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+#pragma warning restore CA1031
             TestnetExecutorLog.Submitted(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, recovered: false);
         }
         catch (BinanceOrderRejectedException rejected)
@@ -150,6 +207,57 @@ public sealed class TestnetOutboxMessageExecutor(
                 throw new OrderOutcomeUnknownException(command.ClientOrderId.Value, new AggregateException(ambiguous, queryFailure));
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The start marker survives shutdown; the next owner must query.
+            throw;
+        }
+        catch (Exception exception)
+        {
+            // Includes a failed database projection after a confirmed venue
+            // response. Never reinterpret that as permission to resubmit.
+            TestnetExecutorLog.Uncertain(logger, message.MessageId, command.ClientOrderId.Value, exception.GetType().Name);
+            throw new OrderOutcomeUnknownException(command.ClientOrderId.Value);
+        }
+    }
+
+    private async Task RecoverAsync(Order order, LeasedOutboxMessage message, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await client.QueryByClientOrderIdAsync(order.Symbol.Value, order.ClientOrderId.Value, cancellationToken).ConfigureAwait(false);
+            await ProjectExchangeResultAsync(order, result, projection, message.MessageId, cancellationToken).ConfigureAwait(false);
+            TestnetExecutorLog.Submitted(logger, message.MessageId, order.Symbol.Value, order.ClientOrderId.Value, recovered: true);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            TestnetExecutorLog.Uncertain(logger, message.MessageId, order.ClientOrderId.Value, exception.GetType().Name);
+            await projection.TransitionAndProjectAsync(order, OrderStatus.Unknown,
+                new IdempotencyKey($"unknown:{message.MessageId:N}"), order.CreatedAtUtc,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            throw new OrderOutcomeUnknownException(order.ClientOrderId.Value);
+        }
+    }
+
+    private async Task ProjectSubmittedAsync(Order order, LeasedOutboxMessage message, SubmitOrderCommand command, CancellationToken cancellationToken)
+    {
+        await projection.TransitionAndProjectAsync(
+            order,
+            OrderStatus.Validated,
+            new IdempotencyKey($"validated:{message.MessageId:N}"),
+            command.CreatedAtUtc,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        await projection.TransitionAndProjectAsync(
+            order,
+            OrderStatus.Submitted,
+            new IdempotencyKey($"submitted:{message.MessageId:N}"),
+            command.CreatedAtUtc,
+            projectBeforeSubmission: true,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private async Task ValidateAvailableBalanceAsync(
@@ -236,11 +344,14 @@ public sealed class TestnetOutboxMessageExecutor(
             : DateTimeOffset.FromUnixTimeMilliseconds(result.TransactTimeMilliseconds);
         var exchangeOrderId = result.OrderId.ToString(CultureInfo.InvariantCulture);
         var status = result.Status.Trim().ToUpperInvariant();
+        var existingTransitions = await projection.ReadLifecycleAsync(order.ClientOrderId.Value, cancellationToken).ConfigureAwait(false);
+        var ackKey = new IdempotencyKey($"ack:{messageId:N}:{exchangeOrderId}");
+        var ackTime = existingTransitions.FirstOrDefault(item => item.Transition.IdempotencyKey == ackKey)?.Transition.OccurredAtUtc ?? occurredAtUtc;
         await projection.TransitionAndProjectAsync(
             order,
             OrderStatus.Acknowledged,
-            new IdempotencyKey($"ack:{messageId:N}:{exchangeOrderId}"),
-            occurredAtUtc,
+            ackKey,
+            ackTime,
             exchangeOrderId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -263,11 +374,13 @@ public sealed class TestnetOutboxMessageExecutor(
             return;
         }
 
+        var statusKey = new IdempotencyKey($"status:{messageId:N}:{status}");
+        var statusTime = existingTransitions.FirstOrDefault(item => item.Transition.IdempotencyKey == statusKey)?.Transition.OccurredAtUtc ?? occurredAtUtc;
         await projection.TransitionAndProjectAsync(
             order,
             finalStatus,
-            new IdempotencyKey($"status:{messageId:N}:{status}"),
-            occurredAtUtc,
+            statusKey,
+            statusTime,
             exchangeOrderId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
@@ -275,6 +388,8 @@ public sealed class TestnetOutboxMessageExecutor(
 
 internal static partial class TestnetExecutorLog
 {
+    [LoggerMessage(LogLevel.Error, "Submission requires reconciliation. MessageId={MessageId} ClientOrderId={ClientOrderId} ErrorType={ErrorType}")]
+    public static partial void Uncertain(ILogger logger, Guid messageId, string clientOrderId, string errorType);
     [LoggerMessage(LogLevel.Information, "Testnet order command accepted. MessageId={MessageId} Symbol={Symbol} ClientOrderId={ClientOrderId} Recovered={Recovered}")]
     public static partial void Submitted(ILogger logger, Guid messageId, string symbol, string clientOrderId, bool recovered);
 

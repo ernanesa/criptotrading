@@ -3,9 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using CryptoTrading.Domain.Accounting;
-using CryptoTrading.Domain.Execution;
-using CryptoTrading.Domain.Orders;
-using CryptoTrading.Domain.Risk;
 
 namespace CryptoTrading.Persistence;
 
