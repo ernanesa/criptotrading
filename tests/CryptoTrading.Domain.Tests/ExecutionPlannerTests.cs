@@ -177,6 +177,120 @@ public sealed class ExecutionPlannerTests
         Assert.Equal(1_000m, ExecutionPlanner.Plan(conservative).Plan!.AuthorizedNotional);
     }
 
+    [Theory]
+    [InlineData(OrderSide.Buy, OrderType.Market, 0.0088)]
+    [InlineData(OrderSide.Buy, OrderType.Limit, 0.0088)]
+    [InlineData(OrderSide.Sell, OrderType.Market, 0.01)]
+    [InlineData(OrderSide.Sell, OrderType.Limit, 0.01)]
+    public void ConservativeCommissionReserveUsesUndiscountedWorstCaseAndPreservesSnapshot(
+        OrderSide side,
+        OrderType orderType,
+        decimal expectedRate)
+    {
+        var baseline = Request(side);
+        var original = baseline.Intent;
+        var intent = new OrderIntent(
+            original.OrderId,
+            original.ClientOrderId,
+            original.Symbol,
+            original.Side,
+            orderType,
+            original.Quantity,
+            original.ReferencePrice,
+            original.CorrelationId,
+            original.IdempotencyKey,
+            original.RiskEvaluation,
+            original.CreatedAtUtc);
+        var commission = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(.001m, .003m, .004m, .005m),
+            new CommissionRateSet(.0001m, .0002m, .0003m, .0004m),
+            new CommissionRateSet(.0005m, .0006m, .0007m, .0008m),
+            true, true, "BNB", .25m, false, Now,
+            source: "test:commission",
+            discountAssetQuotePrice: null,
+            discountAssetValuationAtUtc: null,
+            discountAssetValuationSource: null);
+        var request = new ExecutionPlanRequest(
+            intent,
+            baseline.Decision,
+            baseline.Market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            availableAccountLiquidityNotional: 2_000m,
+            effectiveCommission: commission,
+            commissionMaximumAge: TimeSpan.FromMinutes(1),
+            useConservativeCommissionReserve: true);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+
+        Assert.NotNull(plan);
+        Assert.Equal(expectedRate, plan!.EstimatedCommissionRate);
+        Assert.Equal(commission.CanonicalPayloadHash, plan.CommissionSnapshotHash);
+        Assert.Equal("test:commission", plan.CommissionSource);
+        Assert.Equal(commission.ObservedAtUtc, plan.CommissionObservedAtUtc);
+        Assert.Equal(commission.ObservedAtUtc.AddMinutes(1), plan.CommissionValidUntilUtc);
+    }
+
+    [Fact]
+    public void ConservativeCommissionReserveDoesNotChangeDefaultDiscountValidation()
+    {
+        var baseline = Request(OrderSide.Buy);
+        var commission = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(.001m, .003m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            true, true, "BNB", .25m, false, Now);
+
+        var defaultResult = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            baseline.Intent, baseline.Decision, baseline.Market, Now, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2),
+            effectiveCommission: commission));
+        var conservativeResult = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            baseline.Intent, baseline.Decision, baseline.Market, Now, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2),
+            effectiveCommission: commission, useConservativeCommissionReserve: true));
+
+        Assert.Equal(ExecutionPlanner.CommissionUnavailable, defaultResult.NoTradeReason);
+        Assert.Equal(.003m, conservativeResult.Plan!.EstimatedCommissionRate);
+    }
+
+    [Fact]
+    public void ConservativeCommissionReserveFailsClosedForRateAboveBound()
+    {
+        var baseline = Request(OrderSide.Buy);
+        var commission = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(1_000_001m, 1_000_001m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            false, false, null, null, false, Now);
+
+        var result = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            baseline.Intent, baseline.Decision, baseline.Market, Now, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2),
+            effectiveCommission: commission, useConservativeCommissionReserve: true));
+
+        Assert.Equal(ExecutionPlanner.CommissionUnavailable, result.NoTradeReason);
+    }
+
+    [Fact]
+    public void ConservativeCommissionReserveFailsClosedWhenRateArithmeticOverflows()
+    {
+        var baseline = Request(OrderSide.Buy);
+        var commission = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(decimal.MaxValue, decimal.MaxValue, decimal.MaxValue, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            false, false, null, null, false, Now);
+
+        var result = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            baseline.Intent, baseline.Decision, baseline.Market, Now, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2),
+            effectiveCommission: commission, useConservativeCommissionReserve: true));
+
+        Assert.Equal(ExecutionPlanner.CommissionUnavailable, result.NoTradeReason);
+    }
+
     [Fact]
     public void ExecutionPlanAlignsQuantityAndPriceToStepAndTickSize()
     {

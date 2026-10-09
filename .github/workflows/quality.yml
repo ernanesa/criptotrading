@@ -53,6 +53,9 @@ jobs:
       - name: Start API smoke test
         run: ./scripts/test-api-smoke.sh
 
+      - name: Test recovery failure diagnostics redaction
+        run: bash scripts/test-full-recovery-diagnostics.sh
+
       - name: Run composite local recovery drill
         run: ./scripts/test-full-recovery-drill.sh
 
@@ -67,8 +70,20 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      - name: Install required secret-scan tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ripgrep
+          command -v rg
+
       - name: Scan repository files without printing matches
         run: ./scripts/scan-secrets.sh
+
+      - name: Verify secret scanner fails closed without ripgrep
+        run: bash scripts/test-secret-scan-tooling.sh
+
+      - name: Verify Binance preflight failure diagnostics are redacted
+        run: bash scripts/test-binance-readonly-preflight-diagnostics.sh
 
       - name: Validate traceability manifest
         run: ./scripts/validate-traceability.sh
@@ -187,6 +202,7 @@ jobs:
       - name: Record all API image High/Critical findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-api:${{ github.sha }}
           format: json
           output: artifacts/security/api-vulnerabilities.json
@@ -196,13 +212,14 @@ jobs:
           vuln-type: os,library
           scanners: vuln
 
-      - name: Block fixable API image High/Critical vulnerabilities
+      - name: Block all API image High/Critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-api:${{ github.sha }}
           format: table
           exit-code: '1'
-          ignore-unfixed: true
+          ignore-unfixed: false
           severity: CRITICAL,HIGH
           vuln-type: os,library
           scanners: vuln
@@ -210,6 +227,7 @@ jobs:
       - name: Record all Worker image High/Critical findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-worker:${{ github.sha }}
           format: json
           output: artifacts/security/worker-vulnerabilities.json
@@ -219,13 +237,14 @@ jobs:
           vuln-type: os,library
           scanners: vuln
 
-      - name: Block fixable Worker image High/Critical vulnerabilities
+      - name: Block all Worker image High/Critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-worker:${{ github.sha }}
           format: table
           exit-code: '1'
-          ignore-unfixed: true
+          ignore-unfixed: false
           severity: CRITICAL,HIGH
           vuln-type: os,library
           scanners: vuln
@@ -233,6 +252,7 @@ jobs:
       - name: Record all Web image High/Critical findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-web:${{ github.sha }}
           format: json
           output: artifacts/security/web-vulnerabilities.json
@@ -242,13 +262,14 @@ jobs:
           vuln-type: os,library
           scanners: vuln
 
-      - name: Block fixable Web image High/Critical vulnerabilities
+      - name: Block all Web image High/Critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-web:${{ github.sha }}
           format: table
           exit-code: '1'
-          ignore-unfixed: true
+          ignore-unfixed: false
           severity: CRITICAL,HIGH
           vuln-type: os,library
           scanners: vuln
@@ -256,6 +277,7 @@ jobs:
       - name: Generate API SPDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-api:${{ github.sha }}
           format: spdx-json
           output: artifacts/sbom/api.spdx.json
@@ -263,6 +285,7 @@ jobs:
       - name: Generate Worker SPDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-worker:${{ github.sha }}
           format: spdx-json
           output: artifacts/sbom/worker.spdx.json
@@ -270,6 +293,7 @@ jobs:
       - name: Generate Web SPDX SBOM
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: cryptotrading-web:${{ github.sha }}
           format: spdx-json
           output: artifacts/sbom/web.spdx.json
@@ -328,10 +352,13 @@ jobs:
             image: grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7
           - name: tempo
             image: grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3
+          - name: alertmanager
+            image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
     steps:
       - name: Record all infrastructure High/Critical findings
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: ${{ matrix.image }}
           format: json
           output: trivy-infrastructure-${{ matrix.name }}.json
@@ -341,13 +368,14 @@ jobs:
           vuln-type: os,library
           scanners: vuln
 
-      - name: Block fixable infrastructure High/Critical vulnerabilities
+      - name: Block all infrastructure High/Critical vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
+          version: v0.70.0
           image-ref: ${{ matrix.image }}
           format: table
           exit-code: '1'
-          ignore-unfixed: true
+          ignore-unfixed: false
           severity: CRITICAL,HIGH
           vuln-type: os,library
           scanners: vuln

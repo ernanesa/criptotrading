@@ -34,7 +34,7 @@ internal sealed class ReconciliationStartupHostedService(
             result.IsHealthy,
             result.Events.Count,
             result.MismatchCount,
-            result.UnknownTradeIds.Count,
+            result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count,
             result.OpenOrderCount), cancellationToken).ConfigureAwait(false);
         _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
         await runtimeSupervisor.MarkReconciliationAsync(
@@ -51,7 +51,7 @@ internal sealed class ReconciliationStartupHostedService(
             return;
         }
 
-        ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTradeIds.Count, reportPath);
+        ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count, reportPath);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -68,8 +68,11 @@ internal sealed class PostgresLocalBalanceReader(PostgresTradingStore store) : I
 
 internal sealed class PostgresKnownTradeReader(PostgresTradingStore store) : IKnownTradeReader
 {
-    public Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default) =>
-        store.GetKnownTradeIdsAsync(cancellationToken);
+    public async Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
+    {
+        var knownTrades = await store.GetKnownTradeIdsAsync(cancellationToken).ConfigureAwait(false);
+        return knownTrades.Select(trade => new KnownTradeIdentity(trade.Symbol, trade.TradeId)).ToHashSet();
+    }
 }
 
 internal sealed class PostgresLocalOpenOrderReader(PostgresTradingStore store) : ILocalOpenOrderReader

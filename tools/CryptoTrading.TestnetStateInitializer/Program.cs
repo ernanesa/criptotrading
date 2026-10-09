@@ -173,7 +173,7 @@ if (btcBalance.Amount > 0)
 
 // Check if trade 1787584 is already known
 var knownTrades = await store.GetKnownTradeIdsAsync();
-if (!knownTrades.Contains(1787584))
+if (!knownTrades.Contains(new KnownReconciliationTrade("BTCUSDT", 1787584)))
 {
     Console.WriteLine("Trade 1787584 not yet recorded in execution fills. Recording now...");
     var executionId = "trade:1787584";

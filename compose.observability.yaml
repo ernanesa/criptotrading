@@ -62,6 +62,21 @@ services:
       - no-new-privileges:true
     logging: *json-logs
 
+  alertmanager:
+    # Official Prometheus image; version and multi-platform digest verified
+    # against the prom/alertmanager:v0.34.1 Docker Hub page on 2026-10-08.
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a}
+    restart: unless-stopped
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    volumes:
+      - ./ops/observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - cryptotrading-alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    security_opt:
+      - no-new-privileges:true
+    logging: *json-logs
+
   grafana:
     image: ${GRAFANA_IMAGE:-grafana/grafana:11.5.2@sha256:8b37a2f028f164ce7b9889e1765b9d6ee23fec80f871d156fbf436d6198d32b7}
     restart: unless-stopped
@@ -103,3 +118,4 @@ volumes:
   cryptotrading-grafana-data:
   cryptotrading-tempo-data:
   cryptotrading-loki-data:
+  cryptotrading-alertmanager-data:

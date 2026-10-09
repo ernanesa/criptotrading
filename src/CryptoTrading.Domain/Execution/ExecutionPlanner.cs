@@ -64,7 +64,8 @@ public sealed record ExecutionPlanRequest
         FeeReservePolicy? feeReservePolicy = null,
         EffectiveCommissionSnapshot? effectiveCommission = null,
         TimeSpan? commissionMaximumAge = null,
-        bool makerFeeEligible = false)
+        bool makerFeeEligible = false,
+        bool useConservativeCommissionReserve = false)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -105,6 +106,7 @@ public sealed record ExecutionPlanRequest
         CommissionMaximumAge = commissionMaximumAge ?? TimeSpan.FromMinutes(15);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(CommissionMaximumAge, TimeSpan.Zero);
         MakerFeeEligible = makerFeeEligible;
+        UseConservativeCommissionReserve = useConservativeCommissionReserve;
     }
 
     public OrderIntent Intent { get; }
@@ -120,6 +122,7 @@ public sealed record ExecutionPlanRequest
     public TimeSpan CommissionMaximumAge { get; }
     /// <summary>True only when policy and venue semantics prove a maker fee is applicable.</summary>
     public bool MakerFeeEligible { get; }
+    public bool UseConservativeCommissionReserve { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -193,13 +196,21 @@ public static class ExecutionPlanner
         decimal? effectiveCommissionRate = null;
         if (request.EffectiveCommission is { } effectiveCommission)
         {
-            if (!effectiveCommission.TryGetEffectiveRate(
+            var rateAvailable = request.UseConservativeCommissionReserve
+                ? effectiveCommission.TryGetConservativeRate(
+                    intent.Side,
+                    request.EvaluatedAtUtc,
+                    request.CommissionMaximumAge,
+                    out var rate,
+                    out _)
+                : effectiveCommission.TryGetEffectiveRate(
                     intent.Side,
                     makerEligible: request.MakerFeeEligible,
                     request.EvaluatedAtUtc,
                     request.CommissionMaximumAge,
-                    out var rate,
-                    out _))
+                    out rate,
+                    out _);
+            if (!rateAvailable)
             {
                 return new(null, CommissionUnavailable);
             }

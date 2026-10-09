@@ -150,6 +150,43 @@ public sealed record EffectiveCommissionSnapshot
         return true;
     }
 
+    /// <summary>Returns a fresh, undiscounted rate that is safe when maker eligibility cannot be proven.</summary>
+    public bool TryGetConservativeRate(OrderSide side, DateTimeOffset nowUtc, TimeSpan maximumAge, out decimal rate, out string reason)
+    {
+        rate = 0m;
+        reason = string.Empty;
+        if (!IsFresh(nowUtc, maximumAge))
+        {
+            reason = "COMMISSION_SNAPSHOT_STALE";
+            return false;
+        }
+
+        try
+        {
+            // Without fresh third-asset conversion evidence, do not apply a BNB discount.
+            rate = Math.Max(Standard.Maker, Standard.Taker) +
+                (side == OrderSide.Buy ? Standard.Buyer : Standard.Seller) +
+                Math.Max(Special.Maker, Special.Taker) +
+                (side == OrderSide.Buy ? Special.Buyer : Special.Seller) +
+                Math.Max(Tax.Maker, Tax.Taker) +
+                (side == OrderSide.Buy ? Tax.Buyer : Tax.Seller);
+        }
+        catch (OverflowException)
+        {
+            reason = "COMMISSION_RATE_INVALID";
+            return false;
+        }
+
+        if (rate < 0m || rate > 1_000_000m)
+        {
+            rate = 0m;
+            reason = "COMMISSION_RATE_INVALID";
+            return false;
+        }
+
+        return true;
+    }
+
     private string ComputeHash()
     {
         var canonical = string.Join('|', Symbol.Value, Environment, AccountScope,

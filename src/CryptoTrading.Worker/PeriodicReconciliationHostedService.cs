@@ -35,7 +35,7 @@ internal sealed class PeriodicReconciliationHostedService(
                     result.IsHealthy,
                     result.Events.Count,
                     result.MismatchCount,
-                    result.UnknownTradeIds.Count,
+            result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count,
                     result.OpenOrderCount), stoppingToken).ConfigureAwait(false);
                 _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, stoppingToken).ConfigureAwait(false);
                 await runtimeSupervisor.MarkReconciliationAsync(

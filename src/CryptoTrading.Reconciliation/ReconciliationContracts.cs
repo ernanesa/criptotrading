@@ -122,6 +122,31 @@ public sealed record ReconciliationOpenOrder(string Symbol, long OrderId, string
     }
 }
 
+/// <summary>
+/// Identifies an exchange trade within the namespace of its market symbol.
+/// </summary>
+public readonly record struct KnownTradeIdentity(string Symbol, long TradeId)
+{
+    public static KnownTradeIdentity From(ReconciliationFill fill)
+    {
+        ArgumentNullException.ThrowIfNull(fill);
+        ArgumentException.ThrowIfNullOrWhiteSpace(fill.Symbol);
+        if (fill.TradeId < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(fill), "Trade IDs cannot be negative.");
+        }
+
+        var normalizedSymbol = fill.Symbol.Trim().ToUpperInvariant();
+        if (normalizedSymbol.Length is < 2 or > 20 ||
+            normalizedSymbol.Any(static character => !char.IsAsciiLetterOrDigit(character)))
+        {
+            throw new ArgumentException("Trade symbols must contain only ASCII letters and digits and be between 2 and 20 characters.", nameof(fill));
+        }
+
+        return new(normalizedSymbol, fill.TradeId);
+    }
+}
+
 public sealed record ReconciliationSnapshot(
     DateTimeOffset ObservedAtUtc,
     IReadOnlyList<ReconciliationBalance> Balances,
@@ -184,7 +209,7 @@ public interface ILocalBalanceReader
 
 public interface IKnownTradeReader
 {
-    Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default);
+ Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default);
 }
 
 public interface ILocalOpenOrderReader
@@ -271,7 +296,8 @@ public sealed record ReconciliationRunResult(
     bool IsHealthy,
     IReadOnlyList<ReconciliationEvent> Events,
     IReadOnlyList<long> UnknownTradeIds,
-    int OpenOrderCount = 0)
+    int OpenOrderCount = 0,
+    IReadOnlyList<KnownTradeIdentity>? UnknownTrades = null)
 {
     public int MismatchCount => Events.Count(static item => item is ReconciliationMismatch or OpenOrderReconciliationMismatch);
 }
@@ -347,12 +373,18 @@ public sealed class AccountReconciliationService
         var snapshotIsFresh = snapshot.ObservedAtUtc <= now
             && now - snapshot.ObservedAtUtc <= options.MaxSnapshotAge;
         var snapshotReason = snapshotIsFresh ? "BALANCE_DRIFT" : "STALE_SNAPSHOT";
-        var unknownTradeIds = snapshot.Fills
-            .Select(static fill => fill.TradeId)
-            .Where(tradeId => !knownTradeIds.Contains(tradeId))
-            .Distinct()
-            .Order()
-            .ToArray();
+    var unknownTrades = snapshot.Fills
+        .Select(KnownTradeIdentity.From)
+        .Where(trade => !knownTradeIds.Contains(trade))
+        .Distinct()
+        .OrderBy(static trade => trade.Symbol, StringComparer.Ordinal)
+        .ThenBy(static trade => trade.TradeId)
+        .ToArray();
+    var unknownTradeIds = unknownTrades
+        .Select(static trade => trade.TradeId)
+        .Distinct()
+        .Order()
+        .ToArray();
         var events = new List<ReconciliationEvent>();
 
         var externalOpenOrders = snapshot.OpenOrders.ToDictionary(static order => order.ClientOrderId, StringComparer.Ordinal);
@@ -481,7 +513,7 @@ public sealed class AccountReconciliationService
         }
 
         TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
-        return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count);
+return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count, unknownTrades);
     }
 
     private static bool IsAmbiguousLocalStatus(string status) =>
@@ -514,7 +546,7 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
     public async Task<ReconciliationSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
     {
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-        var trades = new Dictionary<long, ReconciliationFill>();
+  var trades = new Dictionary<KnownTradeIdentity, ReconciliationFill>();
         var openOrders = new Dictionary<long, ReconciliationOpenOrder>();
         foreach (var symbol in options.Symbols)
         {
@@ -535,7 +567,8 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
                     .ConfigureAwait(false);
                 foreach (var trade in symbolTrades)
                 {
-                    trades.TryAdd(trade.Id, ReconciliationFill.FromBinance(trade));
+    var fill = ReconciliationFill.FromBinance(trade);
+    trades.TryAdd(KnownTradeIdentity.From(fill), fill);
                 }
 
                 if (symbolTrades.Count < 1_000)
@@ -589,10 +622,10 @@ public sealed class LedgerBalanceReader : ILocalBalanceReader
 
 public sealed class NoKnownTradesReader : IKnownTradeReader
 {
-    public Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
+ public Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult<IReadOnlySet<long>>(new HashSet<long>());
+  return Task.FromResult<IReadOnlySet<KnownTradeIdentity>>(new HashSet<KnownTradeIdentity>());
     }
 }
 

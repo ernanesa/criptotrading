@@ -25,7 +25,8 @@ public sealed record BaselineDecisionCycleRequest(
     FeeReservePolicy? FeeReservePolicy = null,
     EffectiveCommissionSnapshot? EffectiveCommission = null,
     TimeSpan? CommissionMaximumAge = null,
-    BaselineFeatureSnapshot? FeatureSnapshot = null)
+    BaselineFeatureSnapshot? FeatureSnapshot = null,
+    bool UseConservativeCommissionReserve = false)
 {
     public void Validate()
     {
@@ -176,7 +177,8 @@ public sealed class BaselineDecisionCycle
                     availableAccountLiquidityNotional: request.AvailableAccountLiquidityNotional,
                     feeReservePolicy: request.FeeReservePolicy,
                     effectiveCommission: request.EffectiveCommission,
-                    commissionMaximumAge: request.CommissionMaximumAge));
+                    commissionMaximumAge: request.CommissionMaximumAge,
+                    useConservativeCommissionReserve: request.UseConservativeCommissionReserve));
             if (plan.Plan is null)
             {
                 return new(

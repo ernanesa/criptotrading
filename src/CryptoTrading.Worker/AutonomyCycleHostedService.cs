@@ -350,7 +350,8 @@ internal sealed class AutonomyCycleHostedService(
                 new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
                 commissionSnapshot,
                 policyDocument.Policy.MaxMarketDataAge,
-                featureSnapshot);
+                featureSnapshot,
+                UseConservativeCommissionReserve: true);
 
             if (durablePerformances is not null)
             {
@@ -419,7 +420,8 @@ internal sealed class AutonomyCycleHostedService(
             new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
             commissionSnapshot,
             policyDocument.Policy.MaxMarketDataAge,
-            featureSnapshot);
+            featureSnapshot,
+            UseConservativeCommissionReserve: true);
         var result = cycle.Evaluate(request);
         var outbox = GetDispatchableOutbox(result);
         var outcome = result.IsNoTrade ? "NO_TRADE" : outbox is not null ? "DISPATCHABLE" : "BLOCKED";
