@@ -82,6 +82,15 @@ public sealed class BaselineDecisionCycleTests
                 Start.AddMinutes(3).AddSeconds(1)),
             ExecutionMarketMaxAge = TimeSpan.FromSeconds(5),
             ExecutionTimeToLive = TimeSpan.FromMinutes(1),
+            AvailableAccountLiquidityNotional = 10_000m,
+            EffectiveCommission = new EffectiveCommissionSnapshot(
+                BtcUsdt, "testnet", "account",
+                new CommissionRateSet(.004m, .002m, 0m, 0m),
+                new CommissionRateSet(0m, 0m, 0m, 0m),
+                new CommissionRateSet(0m, 0m, 0m, 0m),
+                false, false, null, null, false, Start.AddMinutes(3).AddSeconds(1)),
+            CommissionMaximumAge = TimeSpan.FromMinutes(1),
+            UseConservativeCommissionReserve = true,
         };
 
         var result = new BaselineDecisionCycle(
@@ -96,6 +105,7 @@ public sealed class BaselineDecisionCycleTests
         Assert.Equal(
             result.Intent.Quantity.Value * result.Intent.ReferencePrice.Value,
             result.Execution.Command!.AuthorizedNotional);
+        Assert.Equal(.004m, result.Execution.Command.EstimatedCommissionRate);
     }
 
     [Fact]

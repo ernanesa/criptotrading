@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations/**/*.sql" />
+    <EmbeddedResource Include="Migrations/migration-integrity.sha256" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.0" />

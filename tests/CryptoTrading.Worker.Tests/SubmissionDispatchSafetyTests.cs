@@ -49,7 +49,7 @@ public sealed class SubmissionDispatchSafetyTests
     }
 
     [Fact]
-    public async Task FinalGuardFailureProjectsUnknownAndNeverSubmits()
+    public async Task FinalGuardFailureRejectsBeforeVenueAndNeverSubmits()
     {
         var command = CreateCommand();
         var message = CreateMessage(command, attempts: 1);
@@ -58,11 +58,11 @@ public sealed class SubmissionDispatchSafetyTests
         var guard = new TestSubmissionGuard { RejectFinal = true };
         var executor = CreateExecutor(command, client, new TestSubmissionStore(), guard, projection);
 
-        await Assert.ThrowsAsync<OrderOutcomeUnknownException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(0, client.SubmitCalls);
         Assert.Equal(0, client.QueryCalls);
-        Assert.Equal("UNKNOWN", Assert.Single(projection.OpenOrders).Status);
+        Assert.Empty(projection.OpenOrders);
     }
 
     [Fact]

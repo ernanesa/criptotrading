@@ -10,15 +10,14 @@
 - PostgreSQL local está disponível em `compose.yaml`; observabilidade será
   adicionada em uma etapa seguinte.
 
-Use o SDK pinado sem alterar o SDK global:
+Use o launcher local para selecionar o SDK pinado sem alterar o SDK global ou
+baixar uma versão automaticamente:
 
 ```bash
-export DOTNET_ROOT="$PWD/.tools/dotnet"
-export PATH="$DOTNET_ROOT:$PATH"
-dotnet --info
-dotnet restore CryptoTrading.slnx --locked-mode
-dotnet build CryptoTrading.slnx --no-restore
-dotnet test CryptoTrading.slnx --no-restore
+bash scripts/dotnet-local.sh --info
+bash scripts/dotnet-local.sh restore CryptoTrading.slnx --locked-mode
+bash scripts/dotnet-local.sh build CryptoTrading.slnx --no-restore
+bash scripts/dotnet-local.sh test CryptoTrading.slnx --no-restore
 ```
 
 O SDK instalado é `11.0.100-rc.1.26425.128`; o build registra a mensagem de

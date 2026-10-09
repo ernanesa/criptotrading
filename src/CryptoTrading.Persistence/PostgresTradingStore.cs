@@ -23,6 +23,11 @@ using NpgsqlTypes;
 
 namespace CryptoTrading.Persistence;
 
+/// <summary>
+/// Immutable exchange trade identity persisted for reconciliation.
+/// </summary>
+public readonly record struct KnownReconciliationTrade(string Symbol, long TradeId);
+
 /// <summary>Connection settings for the local PostgreSQL persistence adapter.</summary>
 public sealed record PostgresPersistenceOptions
 {
@@ -484,7 +489,9 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
     public async Task ApplyMigrationsAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        foreach (var migration in PersistenceMigrations.ReadAll().Where(static migration => migration.Direction == "up"))
+        var migrations = PersistenceMigrations.ReadAll();
+        PersistenceMigrations.ValidateInventory(migrations);
+        foreach (var migration in migrations.Where(static migration => migration.Direction == "up"))
         {
             await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
             await ExecuteAsync(connection, transaction,
@@ -493,6 +500,19 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
 
             var schemaMigrationsExists = await ExistsAsync(connection, transaction,
                 "SELECT to_regclass('trading.schema_migrations') IS NOT NULL;", [], cancellationToken).ConfigureAwait(false);
+            if (schemaMigrationsExists)
+            {
+                var appliedVersions = new List<string>();
+                await using var appliedCommand = new NpgsqlCommand(
+                    "SELECT version FROM trading.schema_migrations ORDER BY version;", connection, transaction);
+                await using var appliedReader = await appliedCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+                while (await appliedReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                {
+                    appliedVersions.Add(appliedReader.GetString(0));
+                }
+
+                PersistenceMigrations.ValidateAppliedVersions(appliedVersions, migrations);
+            }
             var alreadyApplied = schemaMigrationsExists && await ExistsAsync(connection, transaction,
                 "SELECT EXISTS (SELECT 1 FROM trading.schema_migrations WHERE version = @version);",
                 [Parameter("version", NpgsqlDbType.Varchar, migration.Version)], cancellationToken).ConfigureAwait(false);
@@ -517,7 +537,9 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         {
             _ = applied.Add(reader.GetString(0));
         }
-        if (PersistenceMigrations.ReadAll().Any(migration => migration.Direction == "up" && !applied.Contains(migration.Version)))
+        var migrations = PersistenceMigrations.ReadAll();
+        PersistenceMigrations.ValidateAppliedVersions(applied, migrations);
+        if (migrations.Any(migration => migration.Direction == "up" && !applied.Contains(migration.Version)))
         {
             throw new InvalidOperationException("PostgreSQL schema is behind the running release.");
         }
@@ -1724,40 +1746,28 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         var normalizedSymbol = symbol.Trim().ToUpperInvariant();
         await using var command = new NpgsqlCommand(
-            """
-            INSERT INTO trading.reconciliation_known_trades (trade_id, symbol)
-            VALUES (@trade_id, @symbol)
-            ON CONFLICT (trade_id) DO NOTHING;
-            """, connection);
+            "INSERT INTO trading.reconciliation_known_trades (trade_id, symbol) " +
+            "VALUES (@trade_id, @symbol) ON CONFLICT (symbol, trade_id) DO NOTHING;", connection);
         command.Parameters.Add(Parameter("trade_id", NpgsqlDbType.Bigint, tradeId));
         command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, normalizedSymbol));
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
-        await using var existingCommand = new NpgsqlCommand(
-            "SELECT symbol FROM trading.reconciliation_known_trades WHERE trade_id = @trade_id;", connection);
-        existingCommand.Parameters.Add(Parameter("trade_id", NpgsqlDbType.Bigint, tradeId));
-        var existingSymbol = (string?)await existingCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        if (!string.Equals(existingSymbol, normalizedSymbol, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Trade ID {tradeId} is already associated with symbol '{existingSymbol}', not '{normalizedSymbol}'.");
-        }
-    }
+}
 
-    /// <summary>Reads immutable trade IDs used by account reconciliation.</summary>
-    public async Task<IReadOnlySet<long>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
+/// <summary>Reads immutable trade identities used by account reconciliation.</summary>
+public async Task<IReadOnlySet<KnownReconciliationTrade>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "SELECT trade_id FROM trading.reconciliation_known_trades ORDER BY trade_id;", connection);
+        "SELECT symbol, trade_id FROM trading.reconciliation_known_trades ORDER BY symbol, trade_id;", connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        var ids = new HashSet<long>();
+    var identities = new HashSet<KnownReconciliationTrade>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            ids.Add(reader.GetInt64(0));
+        identities.Add(new(reader.GetString(0), reader.GetInt64(1)));
         }
 
-        return ids;
+    return identities;
     }
 
     public async Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default)
@@ -1855,25 +1865,14 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
     {
         var normalizedSymbol = symbol.Trim().ToUpperInvariant();
         await ExecuteAsync(connection, transaction,
-            """
-            INSERT INTO trading.reconciliation_known_trades (trade_id, symbol)
-            VALUES (@trade_id, @symbol)
-            ON CONFLICT (trade_id) DO NOTHING;
-            """,
+            "INSERT INTO trading.reconciliation_known_trades (trade_id, symbol) " +
+            "VALUES (@trade_id, @symbol) ON CONFLICT (symbol, trade_id) DO NOTHING;",
             [
                 Parameter("trade_id", NpgsqlDbType.Bigint, tradeId),
                 Parameter("symbol", NpgsqlDbType.Varchar, normalizedSymbol),
             ], cancellationToken).ConfigureAwait(false);
 
-        var existingSymbol = await ExecuteScalarAsync(connection, transaction,
-            "SELECT symbol FROM trading.reconciliation_known_trades WHERE trade_id = @trade_id;",
-            [Parameter("trade_id", NpgsqlDbType.Bigint, tradeId)], cancellationToken).ConfigureAwait(false) as string;
-        if (!string.Equals(existingSymbol, normalizedSymbol, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"Trade ID {tradeId} is already associated with symbol '{existingSymbol}', not '{normalizedSymbol}'.");
-        }
-    }
+}
 
     public async Task<bool> AppendOrderLifecycleEventAsync(
         OrderLifecycleEvent lifecycleEvent,

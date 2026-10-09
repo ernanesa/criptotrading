@@ -525,9 +525,10 @@ public sealed class PostgresTradingStoreIntegrationTests
         await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
         await store.RecordKnownTradeAsync(9_000_001, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
-        var ids = await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains(9_000_001, ids);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordKnownTradeAsync(9_000_001, "ETHUSDT", cancellationToken: TestContext.Current.CancellationToken));
+    await store.RecordKnownTradeAsync(9_000_001, "ETHUSDT", cancellationToken: TestContext.Current.CancellationToken);
+    var identities = await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken);
+    Assert.Contains(new KnownReconciliationTrade("BTCUSDT", 9_000_001), identities);
+    Assert.Contains(new KnownReconciliationTrade("ETHUSDT", 9_000_001), identities);
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => store.RecordKnownTradeAsync(-1, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken));
     }
 
@@ -558,11 +559,11 @@ public sealed class PostgresTradingStoreIntegrationTests
         await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
         await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Contains(9_000_002, await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken));
+    Assert.Contains(new KnownReconciliationTrade("BTCUSDT", 9_000_002), await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(7m, (await store.GetBalanceAsync(new AccountId("atomic-cash"), new Asset("USDT"), cancellationToken: TestContext.Current.CancellationToken)).Amount);
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "ETHUSDT", cancellationToken: TestContext.Current.CancellationToken));
-    }
+    await store.AppendJournalEntryWithKnownTradeAsync(entry, 9_000_002, "ETHUSDT", cancellationToken: TestContext.Current.CancellationToken);
+    Assert.Contains(new KnownReconciliationTrade("ETHUSDT", 9_000_002), await store.GetKnownTradeIdsAsync(cancellationToken: TestContext.Current.CancellationToken));
+}
 
     [Fact]
     public async Task PersistsApprovalGatedRiskPolicyRegistryAndSupersedesPreviousActiveVersion()

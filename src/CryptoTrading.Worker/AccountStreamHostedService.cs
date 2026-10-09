@@ -161,7 +161,7 @@ internal sealed class AccountStreamHostedService(
             result.IsHealthy,
             result.Events.Count,
             result.MismatchCount,
-            result.UnknownTradeIds.Count,
+                result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count,
             result.OpenOrderCount), cancellationToken).ConfigureAwait(false);
         _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
         if (result.IsHealthy)
@@ -170,7 +170,7 @@ internal sealed class AccountStreamHostedService(
         }
         else
         {
-            ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTradeIds.Count, reportPath);
+            ReconciliationStartupLog.Blocked(logger, result.CorrelationId.ToString(), result.Events.Count, result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count, reportPath);
         }
     }
 

@@ -6,9 +6,22 @@ set -Eeuo pipefail
 # success means the probe refused before constructing an authenticated client.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 report_dir="$repo_root/artifacts/binance"
+if [[ "${PREFLIGHT_TEST_MODE:-}" == "1" ]]; then
+    report_dir="${PREFLIGHT_TEST_REPORT_DIR:-$report_dir}"
+fi
+if ! python3 - "$report_dir" <<'PY'
+import os
+import sys
+
+path = os.path.abspath(sys.argv[1])
+sys.exit(0 if os.path.realpath(path) == path else 1)
+PY
+then
+    echo 'Refusing to run: preflight report directory contains a symlink component.' >&2
+    exit 2
+fi
 mkdir -p -- "$report_dir"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-report_file="$report_dir/read-only-preflight-$timestamp-$$.md"
 temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-readonly-preflight.XXXXXX")"
 probe_log="$temp_dir/probe.log"
 cleanup() {
@@ -17,7 +30,9 @@ cleanup() {
 trap cleanup EXIT
 
 dotnet_command="dotnet"
-if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
+if [[ "${PREFLIGHT_TEST_MODE:-}" == "1" ]]; then
+    dotnet_command="${PREFLIGHT_TEST_EXECUTABLE:?test mode requires PREFLIGHT_TEST_EXECUTABLE}"
+elif [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
     dotnet_command="$repo_root/.tools/dotnet/dotnet"
 elif [[ -x "$HOME/.dotnet/dotnet" ]]; then
     dotnet_command="$HOME/.dotnet/dotnet"
@@ -53,7 +68,23 @@ probe_status=$?
 set -e
 
 if (( probe_status != 2 )) || ! grep -q 'Binance credentials must be supplied through local values or protected credential files' "$probe_log"; then
-    echo 'Refusing to pass: probe did not fail closed on missing credentials.' >&2
+    diagnostics_dir="$(mktemp -d "$report_dir/.readonly-preflight-diagnostics.XXXXXX")"
+    chmod 700 "$diagnostics_dir"
+    diagnostics_file="$diagnostics_dir/probe.log"
+    python3 "$repo_root/scripts/redact-diagnostic-log.py" "$probe_log" "$diagnostics_file"
+    umask 077
+    report_file="$(mktemp "$report_dir/read-only-preflight-failure-$timestamp-$$.XXXXXX.md")"
+    {
+        echo '# Binance read-only offline preflight — failure'
+        echo
+        echo "- UTC: \`$(date -u +%Y-%m-%dT%H:%M:%SZ)\`"
+        echo '- Credentials: absent by construction'
+        echo "- Probe exit code: \`$probe_status\`"
+        echo "- Sanitized bounded diagnostics: \`$diagnostics_file\`"
+    } >"$report_file"
+    chmod 600 "$report_file"
+    echo "Refusing to pass: probe did not fail closed on missing credentials (exit $probe_status)." >&2
+    echo "Sanitized diagnostics: $diagnostics_file" >&2
     exit 1
 fi
 
@@ -62,6 +93,8 @@ if grep -Eiq '(signature=|X-MBX-APIKEY|secret=)' "$probe_log"; then
     exit 1
 fi
 
+umask 077
+report_file="$(mktemp "$report_dir/read-only-preflight-$timestamp-$$.XXXXXX.md")"
 {
     echo '# Binance read-only offline preflight'
     echo

@@ -102,13 +102,28 @@ public sealed class AdaptiveDecisionCycleTests
             CreateRiskPolicy(),
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 500m,
-            EvaluatedAtUtc: TestTime);
+            EvaluatedAtUtc: TestTime) with
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime),
+            ExecutionMarketMaxAge = TimeSpan.FromMinutes(5),
+            AvailableAccountLiquidityNotional = 10_000m,
+            EffectiveCommission = new EffectiveCommissionSnapshot(
+                BtcUsdt, "testnet", "account",
+                new CommissionRateSet(.004m, .002m, 0m, 0m),
+                new CommissionRateSet(0m, 0m, 0m, 0m),
+                new CommissionRateSet(0m, 0m, 0m, 0m),
+                false, false, null, null, false, TestTime),
+            CommissionMaximumAge = TimeSpan.FromMinutes(1),
+            UseConservativeCommissionReserve = true,
+        };
 
         var result = cycle.Evaluate(request);
 
         Assert.False(result.IsNoTrade);
         Assert.NotNull(result.Intent);
         Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.True(result.Execution!.IsDispatchable);
+        Assert.Equal(.004m, result.Execution!.Command!.EstimatedCommissionRate);
         Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
         Assert.NotNull(result.TacticRecommendation);
         Assert.Contains("mean-reversion-btcusdt", result.DecisionTraceJson, StringComparison.Ordinal);

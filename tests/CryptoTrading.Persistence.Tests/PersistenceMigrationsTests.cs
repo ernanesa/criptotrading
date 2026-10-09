@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Xunit;
 
 namespace CryptoTrading.Persistence.Tests;
@@ -8,6 +10,7 @@ public sealed class PersistenceMigrationsTests
     public void MigrationsAreEmbeddedAndOrdered()
     {
         var migrations = PersistenceMigrations.ReadAll();
+        PersistenceMigrations.ValidateInventory(migrations);
 
         Assert.Equal(
             [
@@ -39,14 +42,100 @@ public sealed class PersistenceMigrationsTests
                 "026_autonomous_regimes_models_and_drift.down.sql", "026_autonomous_regimes_models_and_drift.up.sql",
                 "027_submission_side_effect_fence.down.sql", "027_submission_side_effect_fence.up.sql",
                 "028_portfolio_performance_snapshots.down.sql", "028_portfolio_performance_snapshots.up.sql",
-                "029_execution_learning_rewards.down.sql", "029_execution_learning_rewards.up.sql",
+"029_execution_learning_rewards.down.sql", "029_execution_learning_rewards.up.sql",
+"030_reconciliation_known_trade_composite_identity.down.sql", "030_reconciliation_known_trade_composite_identity.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-            ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029"],
+    ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029", "030", "030"],
             migrations.Select(static migration => migration.Version));
     }
+
+    [Fact]
+    public void MigrationInventoryRejectsDuplicatesGapsAndOutOfOrderVersions()
+    {
+        var versionOne = Pair("001");
+        var versionTwo = Pair("002");
+        var versionThree = Pair("003");
+
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateInventory(
+            [.. versionOne, versionOne[0]]));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateInventory(
+            [versionOne[0], versionOne[1], versionThree[0], versionThree[1]]));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateInventory(
+            [.. versionTwo, .. versionOne]));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateInventory(
+            [versionOne[0]]));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateInventory([]));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateInventory(Pair("1")));
+    }
+
+    [Fact]
+    public void AppliedMigrationVersionsMustBeAnExactContiguousKnownPrefix()
+    {
+        MigrationScript[] inventory = [.. Pair("001"), .. Pair("002"), .. Pair("003")];
+
+        PersistenceMigrations.ValidateAppliedVersions([], inventory);
+        PersistenceMigrations.ValidateAppliedVersions(["001"], inventory);
+        PersistenceMigrations.ValidateAppliedVersions(["001", "002", "003"], inventory);
+
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateAppliedVersions(
+            ["001", "003"], inventory));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateAppliedVersions(
+            ["001", "002", "004"], inventory));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateAppliedVersions(
+            ["001", "002", "003", "004"], inventory));
+    }
+
+    [Fact]
+    public void SourceIntegrityAcceptsMatchingRawMigrationBytes()
+    {
+        var source = Encoding.UTF8.GetBytes("-- stable migration source\n");
+        MigrationScript[] migrations =
+        [
+            new("001", "up", "001_test.up.sql", Encoding.UTF8.GetString(source), source),
+        ];
+        IReadOnlyDictionary<string, string> hashes = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Migrations/001_test.up.sql"] = Convert.ToHexString(SHA256.HashData(source)),
+        };
+
+        PersistenceMigrations.ValidateSourceIntegrity(migrations, hashes);
+    }
+
+    [Fact]
+    public void SourceIntegrityRejectsMissingDuplicateAndTamperedManifestEntries()
+    {
+        var source = Encoding.UTF8.GetBytes("-- original migration source\n");
+        MigrationScript migration = new("001", "up", "001_test.up.sql", Encoding.UTF8.GetString(source), source);
+        IReadOnlyDictionary<string, string> matchingHash = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Migrations/001_test.up.sql"] = Convert.ToHexString(SHA256.HashData(source)),
+        };
+        IReadOnlyDictionary<string, string> wrongHash = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Migrations/001_test.up.sql"] = new string('0', 64),
+        };
+
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateSourceIntegrity([migration], new Dictionary<string, string>()));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateSourceIntegrity([migration, migration], matchingHash));
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateSourceIntegrity([migration], wrongHash));
+
+        var changedSource = Encoding.UTF8.GetBytes("-- changed migration source\n");
+        var changedMigration = migration with
+        {
+            Sql = Encoding.UTF8.GetString(changedSource),
+            RawSql = changedSource,
+        };
+        Assert.Throws<InvalidOperationException>(() => PersistenceMigrations.ValidateSourceIntegrity([changedMigration], matchingHash));
+    }
+
+    private static MigrationScript[] Pair(string version) =>
+    [
+        new(version, "down", $"{version}_test.down.sql", "-- down"),
+        new(version, "up", $"{version}_test.up.sql", "-- up"),
+    ];
 
     [Fact]
     public void UpMigrationsDeclareExpectedDurableBoundaries()
@@ -107,6 +196,8 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("append_only", upMigrations[25].Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("execution_submission_starts", upMigrations[26].Sql, StringComparison.Ordinal);
         Assert.Contains("portfolio_nav_snapshots", upMigrations[27].Sql, StringComparison.Ordinal);
-        Assert.Contains("external_cash_flow_quote", upMigrations[27].Sql, StringComparison.Ordinal);
+Assert.Contains("external_cash_flow_quote", upMigrations[27].Sql, StringComparison.Ordinal);
+Assert.Contains("reconciliation_known_trades", upMigrations[29].Sql, StringComparison.Ordinal);
+Assert.Contains("PRIMARY KEY (symbol, trade_id)", upMigrations[29].Sql, StringComparison.Ordinal);
     }
 }

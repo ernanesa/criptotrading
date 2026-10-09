@@ -30,7 +30,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     EffectiveCommissionSnapshot? EffectiveCommission = null,
     TimeSpan? CommissionMaximumAge = null,
     BaselineFeatureSnapshot? FeatureSnapshot = null,
-    decimal ExplorationFactor = 0.10m)
+    decimal ExplorationFactor = 0.10m,
+    bool UseConservativeCommissionReserve = false)
 {
     public void Validate()
     {
@@ -305,7 +306,8 @@ public sealed class AdaptiveDecisionCycle
                     availableAccountLiquidityNotional: request.AvailableAccountLiquidityNotional,
                     feeReservePolicy: request.FeeReservePolicy,
                     effectiveCommission: request.EffectiveCommission,
-                    commissionMaximumAge: request.CommissionMaximumAge));
+                    commissionMaximumAge: request.CommissionMaximumAge,
+                    useConservativeCommissionReserve: request.UseConservativeCommissionReserve));
 
             if (plan.Plan is not null)
             {

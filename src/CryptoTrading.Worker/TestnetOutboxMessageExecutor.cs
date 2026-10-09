@@ -128,11 +128,11 @@ public sealed class TestnetOutboxMessageExecutor(
             {
                 await projection.TransitionAndProjectAsync(
                     order,
-                    OrderStatus.Unknown,
-                    new IdempotencyKey($"unknown:{message.MessageId:N}"),
+                    OrderStatus.Rejected,
+                    new IdempotencyKey($"rejected:{message.MessageId:N}"),
                     DateTimeOffset.UtcNow,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
-                throw new OrderOutcomeUnknownException(command.ClientOrderId.Value);
+                throw;
             }
             var result = await client.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
             try
@@ -210,6 +210,10 @@ public sealed class TestnetOutboxMessageExecutor(
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // The start marker survives shutdown; the next owner must query.
+            throw;
+        }
+        catch (ExecutionDispatchBlockedException)
+        {
             throw;
         }
         catch (Exception exception)

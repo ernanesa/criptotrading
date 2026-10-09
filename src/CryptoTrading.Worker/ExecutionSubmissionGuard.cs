@@ -39,20 +39,37 @@ internal sealed class ExecutionSubmissionGuard(
 {
     public async Task ValidateFinalAsync(SubmitOrderCommand command, LeasedOutboxMessage message, CancellationToken cancellationToken = default)
     {
-        ValidateOperationalState();
-        var now = DateTimeOffset.UtcNow;
-        if ((command.ExecutionExpiresAtUtc ?? command.CreatedAtUtc.AddMinutes(1)) <= now ||
-            !await submissionStore.ValidateOutboxLeaseAsync(message, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false))
+        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(message);
+
+        try
         {
-            throw new ExecutionDispatchBlockedException("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST");
+            // A durable fence prevents duplicate submissions, but it does not make the decision
+            // safe when market, account, or risk state changed while that fence was acquired.
+            await ValidateAsync(command, message, cancellationToken).ConfigureAwait(false);
+
+            var now = DateTimeOffset.UtcNow;
+            if ((command.ExecutionExpiresAtUtc ?? command.CreatedAtUtc.AddMinutes(1)) <= now ||
+                !await submissionStore.ValidateOutboxLeaseAsync(message, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false))
+            {
+                throw new ExecutionDispatchBlockedException("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST");
+            }
+
+            await ValidateCurrentCommissionAsync(command, now, cancellationToken).ConfigureAwait(false);
+            ValidateOperationalState();
         }
-        var policy = await policies.GetActiveRiskPolicyAsync(now, cancellationToken).ConfigureAwait(false);
-        if (policy is null || policy.Lifecycle != RiskPolicyLifecycle.Active || policy.Policy.WithdrawalsEnabled ||
-            policy.Policy.Version != command.PolicyVersion || policy.EffectiveFromUtc > now || policy.ExpiresAtUtc <= now)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            throw new ExecutionDispatchBlockedException("FINAL_RISK_POLICY_NOT_CURRENT");
+            throw;
         }
-        ValidateOperationalState();
+        catch (ExecutionDispatchBlockedException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_REVALIDATION_UNAVAILABLE", exception);
+        }
     }
 
     public async Task ValidateAsync(SubmitOrderCommand command, LeasedOutboxMessage message, CancellationToken cancellationToken = default)
@@ -158,6 +175,55 @@ internal sealed class ExecutionSubmissionGuard(
     private static decimal Parse(string? value) => value is null ? 0m :
         decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var result) && result >= 0m
             ? result : throw new ExecutionDispatchBlockedException("ACCOUNT_BALANCE_INVALID");
+
+    private async Task ValidateCurrentCommissionAsync(SubmitOrderCommand command, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (command.EstimatedCommissionRate < 0m || string.IsNullOrWhiteSpace(command.CommissionSource) ||
+            string.IsNullOrWhiteSpace(command.CommissionSnapshotHash) || command.CommissionObservedAtUtc is null ||
+            command.CommissionValidUntilUtc is null || command.CommissionObservedAtUtc.Value.Offset != TimeSpan.Zero ||
+            command.CommissionValidUntilUtc.Value.Offset != TimeSpan.Zero || command.CommissionObservedAtUtc > command.CommissionValidUntilUtc ||
+            command.CommissionObservedAtUtc > now || command.CommissionValidUntilUtc <= now)
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_COMMISSION_SNAPSHOT_INVALID_OR_EXPIRED");
+        }
+
+        var current = await account.GetCommissionAsync(command.Symbol.Value, cancellationToken).ConfigureAwait(false);
+        var observedAt = DateTimeOffset.UtcNow;
+        if (current.Response is null || current.ObservedAtUtc.Offset != TimeSpan.Zero || current.ObservedAtUtc > observedAt ||
+            !string.Equals(current.Response.Symbol, command.Symbol.Value, StringComparison.Ordinal))
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_COMMISSION_REVALIDATION_INVALID");
+        }
+
+        // The commission response proves an offered discount, but not the fresh conversion
+        // valuation needed to reserve that third-asset fee safely. Reserve the undiscounted rate.
+        var standardRate = WorstCaseRateFor(current.Response.StandardCommission, command.Side, "STANDARD");
+
+        var currentRate = standardRate +
+            WorstCaseRateFor(current.Response.SpecialCommission, command.Side, "SPECIAL") +
+            WorstCaseRateFor(current.Response.TaxCommission, command.Side, "TAX");
+        var toleranceRate = options.Value.AutonomyFeeDriftToleranceBps / 10_000m;
+        if (toleranceRate < 0m || currentRate > command.EstimatedCommissionRate + toleranceRate)
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_COMMISSION_RATE_ADVERSE_OR_ELIGIBILITY_UNPROVEN");
+        }
+    }
+
+    private static decimal WorstCaseRateFor(BinanceCommissionRateSet rates, OrderSide side, string component)
+    {
+        if (rates is null)
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_COMMISSION_REVALIDATION_INVALID");
+        }
+
+        return Math.Max(ParseCommissionRate(rates.Maker, component), ParseCommissionRate(rates.Taker, component)) +
+            ParseCommissionRate(side == OrderSide.Buy ? rates.Buyer : rates.Seller, component);
+    }
+
+    private static decimal ParseCommissionRate(string? value, string component) =>
+        decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var rate) && rate >= 0m
+            ? rate
+            : throw new ExecutionDispatchBlockedException($"FINAL_COMMISSION_{component}_INVALID");
 }
 
 internal static partial class ExecutionGuardLog
