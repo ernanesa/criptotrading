@@ -209,7 +209,7 @@ public interface ILocalBalanceReader
 
 public interface IKnownTradeReader
 {
- Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default);
+    Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default);
 }
 
 public interface ILocalOpenOrderReader
@@ -373,18 +373,18 @@ public sealed class AccountReconciliationService
         var snapshotIsFresh = snapshot.ObservedAtUtc <= now
             && now - snapshot.ObservedAtUtc <= options.MaxSnapshotAge;
         var snapshotReason = snapshotIsFresh ? "BALANCE_DRIFT" : "STALE_SNAPSHOT";
-    var unknownTrades = snapshot.Fills
-        .Select(KnownTradeIdentity.From)
-        .Where(trade => !knownTradeIds.Contains(trade))
-        .Distinct()
-        .OrderBy(static trade => trade.Symbol, StringComparer.Ordinal)
-        .ThenBy(static trade => trade.TradeId)
-        .ToArray();
-    var unknownTradeIds = unknownTrades
-        .Select(static trade => trade.TradeId)
-        .Distinct()
-        .Order()
-        .ToArray();
+        var unknownTrades = snapshot.Fills
+            .Select(KnownTradeIdentity.From)
+            .Where(trade => !knownTradeIds.Contains(trade))
+            .Distinct()
+            .OrderBy(static trade => trade.Symbol, StringComparer.Ordinal)
+            .ThenBy(static trade => trade.TradeId)
+            .ToArray();
+        var unknownTradeIds = unknownTrades
+            .Select(static trade => trade.TradeId)
+            .Distinct()
+            .Order()
+            .ToArray();
         var events = new List<ReconciliationEvent>();
 
         var externalOpenOrders = snapshot.OpenOrders.ToDictionary(static order => order.ClientOrderId, StringComparer.Ordinal);
@@ -513,7 +513,7 @@ public sealed class AccountReconciliationService
         }
 
         TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
-return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count, unknownTrades);
+        return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count, unknownTrades);
     }
 
     private static bool IsAmbiguousLocalStatus(string status) =>
@@ -546,7 +546,7 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
     public async Task<ReconciliationSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
     {
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-  var trades = new Dictionary<KnownTradeIdentity, ReconciliationFill>();
+        var trades = new Dictionary<KnownTradeIdentity, ReconciliationFill>();
         var openOrders = new Dictionary<long, ReconciliationOpenOrder>();
         foreach (var symbol in options.Symbols)
         {
@@ -567,8 +567,8 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
                     .ConfigureAwait(false);
                 foreach (var trade in symbolTrades)
                 {
-    var fill = ReconciliationFill.FromBinance(trade);
-    trades.TryAdd(KnownTradeIdentity.From(fill), fill);
+                    var fill = ReconciliationFill.FromBinance(trade);
+                    trades.TryAdd(KnownTradeIdentity.From(fill), fill);
                 }
 
                 if (symbolTrades.Count < 1_000)
@@ -622,10 +622,10 @@ public sealed class LedgerBalanceReader : ILocalBalanceReader
 
 public sealed class NoKnownTradesReader : IKnownTradeReader
 {
- public Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
+    public Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-  return Task.FromResult<IReadOnlySet<KnownTradeIdentity>>(new HashSet<KnownTradeIdentity>());
+        return Task.FromResult<IReadOnlySet<KnownTradeIdentity>>(new HashSet<KnownTradeIdentity>());
     }
 }
 

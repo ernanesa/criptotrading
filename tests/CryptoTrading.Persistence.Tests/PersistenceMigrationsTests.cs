@@ -196,8 +196,8 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("append_only", upMigrations[25].Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("execution_submission_starts", upMigrations[26].Sql, StringComparison.Ordinal);
         Assert.Contains("portfolio_nav_snapshots", upMigrations[27].Sql, StringComparison.Ordinal);
-Assert.Contains("external_cash_flow_quote", upMigrations[27].Sql, StringComparison.Ordinal);
-Assert.Contains("reconciliation_known_trades", upMigrations[29].Sql, StringComparison.Ordinal);
-Assert.Contains("PRIMARY KEY (symbol, trade_id)", upMigrations[29].Sql, StringComparison.Ordinal);
+        Assert.Contains("external_cash_flow_quote", upMigrations[27].Sql, StringComparison.Ordinal);
+        Assert.Contains("reconciliation_known_trades", upMigrations[29].Sql, StringComparison.Ordinal);
+        Assert.Contains("PRIMARY KEY (symbol, trade_id)", upMigrations[29].Sql, StringComparison.Ordinal);
     }
 }

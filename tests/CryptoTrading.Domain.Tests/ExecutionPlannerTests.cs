@@ -178,14 +178,14 @@ public sealed class ExecutionPlannerTests
     }
 
     [Theory]
-    [InlineData(OrderSide.Buy, OrderType.Market, 0.0088)]
-    [InlineData(OrderSide.Buy, OrderType.Limit, 0.0088)]
-    [InlineData(OrderSide.Sell, OrderType.Market, 0.01)]
-    [InlineData(OrderSide.Sell, OrderType.Limit, 0.01)]
+    [InlineData(OrderSide.Buy, OrderType.Market, "0.0088")]
+    [InlineData(OrderSide.Buy, OrderType.Limit, "0.0088")]
+    [InlineData(OrderSide.Sell, OrderType.Market, "0.01")]
+    [InlineData(OrderSide.Sell, OrderType.Limit, "0.01")]
     public void ConservativeCommissionReserveUsesUndiscountedWorstCaseAndPreservesSnapshot(
         OrderSide side,
         OrderType orderType,
-        decimal expectedRate)
+        string expectedRateText)
     {
         var baseline = Request(side);
         var original = baseline.Intent;
@@ -226,7 +226,7 @@ public sealed class ExecutionPlannerTests
         var plan = ExecutionPlanner.Plan(request).Plan;
 
         Assert.NotNull(plan);
-        Assert.Equal(expectedRate, plan!.EstimatedCommissionRate);
+        Assert.Equal(decimal.Parse(expectedRateText, System.Globalization.CultureInfo.InvariantCulture), plan!.EstimatedCommissionRate);
         Assert.Equal(commission.CanonicalPayloadHash, plan.CommissionSnapshotHash);
         Assert.Equal("test:commission", plan.CommissionSource);
         Assert.Equal(commission.ObservedAtUtc, plan.CommissionObservedAtUtc);
@@ -261,7 +261,7 @@ public sealed class ExecutionPlannerTests
         var baseline = Request(OrderSide.Buy);
         var commission = new EffectiveCommissionSnapshot(
             new Symbol("BTCUSDT"), "testnet", "account",
-            new CommissionRateSet(1_000_001m, 1_000_001m, 0m, 0m),
+            new CommissionRateSet(1.000001m, 1.000001m, 0m, 0m),
             new CommissionRateSet(0m, 0m, 0m, 0m),
             new CommissionRateSet(0m, 0m, 0m, 0m),
             false, false, null, null, false, Now);
@@ -271,6 +271,23 @@ public sealed class ExecutionPlannerTests
             effectiveCommission: commission, useConservativeCommissionReserve: true));
 
         Assert.Equal(ExecutionPlanner.CommissionUnavailable, result.NoTradeReason);
+    }
+
+    [Fact]
+    public void EffectiveCommissionFailsClosedForFractionRateAboveOne()
+    {
+        var commission = new EffectiveCommissionSnapshot(
+            new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(1.000001m, 1.000001m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m),
+            false, false, null, null, false, Now);
+
+        var available = commission.TryGetEffectiveRate(OrderSide.Buy, false, Now, TimeSpan.FromMinutes(1), out var rate, out var reason);
+
+        Assert.False(available);
+        Assert.Equal(0m, rate);
+        Assert.Equal("COMMISSION_RATE_INVALID", reason);
     }
 
     [Fact]

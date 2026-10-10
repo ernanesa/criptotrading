@@ -1752,22 +1752,22 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, normalizedSymbol));
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
-}
+    }
 
-/// <summary>Reads immutable trade identities used by account reconciliation.</summary>
-public async Task<IReadOnlySet<KnownReconciliationTrade>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
+    /// <summary>Reads immutable trade identities used by account reconciliation.</summary>
+    public async Task<IReadOnlySet<KnownReconciliationTrade>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
         "SELECT symbol, trade_id FROM trading.reconciliation_known_trades ORDER BY symbol, trade_id;", connection);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-    var identities = new HashSet<KnownReconciliationTrade>();
+        var identities = new HashSet<KnownReconciliationTrade>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-        identities.Add(new(reader.GetString(0), reader.GetInt64(1)));
+            identities.Add(new(reader.GetString(0), reader.GetInt64(1)));
         }
 
-    return identities;
+        return identities;
     }
 
     public async Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default)
@@ -1872,7 +1872,7 @@ public async Task<IReadOnlySet<KnownReconciliationTrade>> GetKnownTradeIdsAsync(
                 Parameter("symbol", NpgsqlDbType.Varchar, normalizedSymbol),
             ], cancellationToken).ConfigureAwait(false);
 
-}
+    }
 
     public async Task<bool> AppendOrderLifecycleEventAsync(
         OrderLifecycleEvent lifecycleEvent,

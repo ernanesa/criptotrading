@@ -35,8 +35,11 @@ internal sealed class ExecutionSubmissionGuard(
     IBinanceSpotMarketClient market,
     IBinanceSpotAccountClient account,
     IOptions<WorkerRuntimeOptions> options,
-    ILogger<ExecutionSubmissionGuard> logger) : IExecutionSubmissionGuard
+    ILogger<ExecutionSubmissionGuard> logger,
+    TimeProvider? timeProvider = null) : IExecutionSubmissionGuard
 {
+    private static readonly string[] SupportedQuoteAssets = ["USDT", "FDUSD", "USDC", "TUSD", "BUSD", "BTC", "ETH", "BNB", "BRL"];
+
     public async Task ValidateFinalAsync(SubmitOrderCommand command, LeasedOutboxMessage message, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -44,18 +47,35 @@ internal sealed class ExecutionSubmissionGuard(
 
         try
         {
-            // A durable fence prevents duplicate submissions, but it does not make the decision
-            // safe when market, account, or risk state changed while that fence was acquired.
-            await ValidateAsync(command, message, cancellationToken).ConfigureAwait(false);
+            var commission = await ValidateCurrentCommissionAsync(command, UtcNow, cancellationToken).ConfigureAwait(false);
+            var observation = await ValidateCoreAsync(command, message, commission.Rate, cancellationToken).ConfigureAwait(false);
 
-            var now = DateTimeOffset.UtcNow;
-            if ((command.ExecutionExpiresAtUtc ?? command.CreatedAtUtc.AddMinutes(1)) <= now ||
-                !await submissionStore.ValidateOutboxLeaseAsync(message, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false))
+            var now = UtcNow;
+            var finalPolicy = await policies.GetActiveRiskPolicyAsync(now, cancellationToken).ConfigureAwait(false);
+            now = UtcNow;
+            if (finalPolicy is null || !IsCurrentPolicy(finalPolicy, command, now) ||
+                !string.Equals(observation.PolicyDocumentHash, finalPolicy.DocumentHash, StringComparison.Ordinal))
+            {
+                throw new ExecutionDispatchBlockedException("FINAL_RISK_POLICY_NOT_CURRENT");
+            }
+
+            if (!await submissionStore.ValidateOutboxLeaseAsync(message, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false))
             {
                 throw new ExecutionDispatchBlockedException("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST");
             }
 
-            await ValidateCurrentCommissionAsync(command, now, cancellationToken).ConfigureAwait(false);
+            now = UtcNow;
+            if (
+                (command.ExecutionExpiresAtUtc ?? command.CreatedAtUtc.AddMinutes(1)) <= now ||
+                command.CommissionValidUntilUtc is not { } plannedCommissionValidUntil ||
+                plannedCommissionValidUntil <= now || commission.ObservedAtUtc > now ||
+                now - commission.ObservedAtUtc > finalPolicy.Policy.MaxMarketDataAge ||
+                observation.MarketObservedAtUtc > now ||
+                now - observation.MarketObservedAtUtc > finalPolicy.Policy.MaxMarketDataAge)
+            {
+                throw new ExecutionDispatchBlockedException("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST");
+            }
+
             ValidateOperationalState();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -74,10 +94,16 @@ internal sealed class ExecutionSubmissionGuard(
 
     public async Task ValidateAsync(SubmitOrderCommand command, LeasedOutboxMessage message, CancellationToken cancellationToken = default)
     {
+        _ = await ValidateCoreAsync(command, message, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ValidationObservation> ValidateCoreAsync(SubmitOrderCommand command, LeasedOutboxMessage message,
+        decimal? freshCommissionRate, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(message);
         ValidateOperationalState();
-        var now = DateTimeOffset.UtcNow;
+        var now = UtcNow;
         var expiry = command.ExecutionExpiresAtUtc ?? command.CreatedAtUtc.AddMinutes(1);
         if (command.CreatedAtUtc.Offset != TimeSpan.Zero || expiry.Offset != TimeSpan.Zero ||
             command.CreatedAtUtc > now || expiry <= now)
@@ -91,8 +117,7 @@ internal sealed class ExecutionSubmissionGuard(
         }
 
         var policy = await policies.GetActiveRiskPolicyAsync(now, cancellationToken).ConfigureAwait(false);
-        if (policy is null || policy.Lifecycle != RiskPolicyLifecycle.Active || policy.Policy.WithdrawalsEnabled ||
-            policy.EffectiveFromUtc > now || policy.ExpiresAtUtc <= now || policy.Policy.Version != command.PolicyVersion)
+        if (policy is null || !IsCurrentPolicy(policy, command, now))
         {
             throw new ExecutionDispatchBlockedException("RISK_POLICY_NOT_CURRENT");
         }
@@ -107,19 +132,17 @@ internal sealed class ExecutionSubmissionGuard(
         var klines = await market.GetKlinesAsync(command.Symbol.Value, options.Value.AutonomyInterval,
             limit: options.Value.AutonomyKlineLimit, cancellationToken: cancellationToken).ConfigureAwait(false);
         var closed = AutonomyCycleHostedService.ValidateAndMapKlines(klines, command.Symbol.Value,
-            options.Value.AutonomyInterval, policy.Policy.MaxMarketDataAge, DateTimeOffset.UtcNow, null);
+            options.Value.AutonomyInterval, policy.Policy.MaxMarketDataAge, UtcNow, null);
         var measuredRisk = MarketRiskCalculator.Calculate(
             closed.Select(item => new MarketCandle(item.Bar.CloseTimeUtc, item.Bar.ClosePrice.Value)).ToArray(),
             [new MarketBookLevel(ticker.BidPrice, ticker.BidQuantity)],
             [new MarketBookLevel(ticker.AskPrice, ticker.AskQuantity)],
             command.Side == OrderSide.Buy ? MarketRiskSide.Buy : MarketRiskSide.Sell, ticker.ObservedAtUtc);
         var snapshot = await account.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-        const string quote = "USDT";
-        if (!command.Symbol.Value.EndsWith(quote, StringComparison.Ordinal))
+        if (!TrySplitSymbol(command.Symbol.Value, out var baseAsset, out var quote))
         {
             throw new ExecutionDispatchBlockedException("QUOTE_ASSET_NOT_SUPPORTED");
         }
-        var baseAsset = command.Symbol.Value[..^quote.Length];
         var baseBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == baseAsset);
         var quoteBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == quote);
         var positionQuantity = Parse(baseBalance?.Free) + Parse(baseBalance?.Locked);
@@ -127,7 +150,7 @@ internal sealed class ExecutionSubmissionGuard(
         var mid = (ticker.BidPrice + ticker.AskPrice) / 2m;
         var unsupportedAsset = snapshot.Balances.Any(item => item.Asset != baseAsset && item.Asset != quote &&
             Parse(item.Free) + Parse(item.Locked) > 0m);
-        var evaluatedAt = DateTimeOffset.UtcNow;
+        var evaluatedAt = UtcNow;
         var accounting = await riskContexts.RecordAutonomyRiskContextAsync(
             $"equity:{options.Value.ReconciliationAccount}:{command.Symbol.Value}:{quote}",
             command.Symbol, new Asset(quote), new DateTimeOffset(evaluatedAt.UtcDateTime.Date, TimeSpan.Zero),
@@ -155,13 +178,19 @@ internal sealed class ExecutionSubmissionGuard(
             accounting.DrawdownNotional ?? 0m, closed[^1].Bar.CloseTimeUtc, evaluatedAt,
             marketRisk: measuredRisk, riskContextComplete: accounting.RiskContextComplete), control.Snapshot);
         if (!risk.AllowsNewExposure || risk.AuthorizedTargetNotional < currentNotional ||
-            policy.ExpiresAtUtc <= DateTimeOffset.UtcNow || expiry <= DateTimeOffset.UtcNow)
+            policy.ExpiresAtUtc <= UtcNow || expiry <= UtcNow)
         {
             throw new ExecutionDispatchBlockedException("PRE_SUBMIT_RISK_REJECTED");
         }
+        if (freshCommissionRate is { } rate)
+        {
+            ValidateFinalAvailableBalance(command, snapshot, rate, currentNotional);
+        }
+
         ValidateOperationalState();
         ExecutionGuardLog.Approved(logger, message.MessageId, command.Symbol.Value, command.PolicyVersion,
             measuredRisk.ExpectedSlippageBps, measuredRisk.VolatilityBps, measuredRisk.AvailableLiquidityNotional);
+        return new ValidationObservation(policy.DocumentHash, ticker.ObservedAtUtc, currentNotional);
     }
 
     private void ValidateOperationalState()
@@ -172,13 +201,15 @@ internal sealed class ExecutionSubmissionGuard(
         }
     }
 
+    private DateTimeOffset UtcNow => (timeProvider ?? TimeProvider.System).GetUtcNow();
+
     private static decimal Parse(string? value) => value is null ? 0m :
         decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var result) && result >= 0m
             ? result : throw new ExecutionDispatchBlockedException("ACCOUNT_BALANCE_INVALID");
 
-    private async Task ValidateCurrentCommissionAsync(SubmitOrderCommand command, DateTimeOffset now, CancellationToken cancellationToken)
+    private async Task<CommissionObservation> ValidateCurrentCommissionAsync(SubmitOrderCommand command, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        if (command.EstimatedCommissionRate < 0m || string.IsNullOrWhiteSpace(command.CommissionSource) ||
+        if (command.EstimatedCommissionRate is not (>= 0m and <= 1m) || string.IsNullOrWhiteSpace(command.CommissionSource) ||
             string.IsNullOrWhiteSpace(command.CommissionSnapshotHash) || command.CommissionObservedAtUtc is null ||
             command.CommissionValidUntilUtc is null || command.CommissionObservedAtUtc.Value.Offset != TimeSpan.Zero ||
             command.CommissionValidUntilUtc.Value.Offset != TimeSpan.Zero || command.CommissionObservedAtUtc > command.CommissionValidUntilUtc ||
@@ -188,7 +219,7 @@ internal sealed class ExecutionSubmissionGuard(
         }
 
         var current = await account.GetCommissionAsync(command.Symbol.Value, cancellationToken).ConfigureAwait(false);
-        var observedAt = DateTimeOffset.UtcNow;
+        var observedAt = UtcNow;
         if (current.Response is null || current.ObservedAtUtc.Offset != TimeSpan.Zero || current.ObservedAtUtc > observedAt ||
             !string.Equals(current.Response.Symbol, command.Symbol.Value, StringComparison.Ordinal))
         {
@@ -202,11 +233,12 @@ internal sealed class ExecutionSubmissionGuard(
         var currentRate = standardRate +
             WorstCaseRateFor(current.Response.SpecialCommission, command.Side, "SPECIAL") +
             WorstCaseRateFor(current.Response.TaxCommission, command.Side, "TAX");
-        var toleranceRate = options.Value.AutonomyFeeDriftToleranceBps / 10_000m;
-        if (toleranceRate < 0m || currentRate > command.EstimatedCommissionRate + toleranceRate)
+        if (currentRate > 1m || currentRate > command.EstimatedCommissionRate.Value)
         {
             throw new ExecutionDispatchBlockedException("FINAL_COMMISSION_RATE_ADVERSE_OR_ELIGIBILITY_UNPROVEN");
         }
+
+        return new CommissionObservation(currentRate, current.ObservedAtUtc);
     }
 
     private static decimal WorstCaseRateFor(BinanceCommissionRateSet rates, OrderSide side, string component)
@@ -221,9 +253,70 @@ internal sealed class ExecutionSubmissionGuard(
     }
 
     private static decimal ParseCommissionRate(string? value, string component) =>
-        decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var rate) && rate >= 0m
+        decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var rate) && rate is >= 0m and <= 1m
             ? rate
             : throw new ExecutionDispatchBlockedException($"FINAL_COMMISSION_{component}_INVALID");
+
+    private static bool IsCurrentPolicy(RiskPolicyDocument? policy, SubmitOrderCommand command, DateTimeOffset now) =>
+        policy is not null && policy.IsValidAt(now) && !policy.Policy.WithdrawalsEnabled &&
+        policy.Policy.Version == command.PolicyVersion && !string.IsNullOrWhiteSpace(policy.DocumentHash) &&
+        !string.IsNullOrWhiteSpace(policy.ApprovedBy) && !string.IsNullOrWhiteSpace(policy.ApprovalId) &&
+        policy.ApprovedAtUtc is { } approvedAt && approvedAt.Offset == TimeSpan.Zero && approvedAt <= now;
+
+    private static bool TrySplitSymbol(string symbol, out string baseAsset, out string quoteAsset)
+    {
+        var quote = SupportedQuoteAssets.FirstOrDefault(candidate =>
+            symbol.EndsWith(candidate, StringComparison.Ordinal) && symbol.Length > candidate.Length);
+        if (quote is null)
+        {
+            baseAsset = string.Empty;
+            quoteAsset = string.Empty;
+            return false;
+        }
+
+        baseAsset = symbol[..^quote.Length];
+        quoteAsset = quote;
+        return true;
+    }
+
+    private static void ValidateFinalAvailableBalance(SubmitOrderCommand command, BinanceAccountSnapshot accountSnapshot,
+        decimal currentCommissionRate, decimal effectiveNotional)
+    {
+        if (!TrySplitSymbol(command.Symbol.Value, out var baseAsset, out var quoteAsset))
+        {
+            throw new ExecutionDispatchBlockedException("QUOTE_ASSET_NOT_SUPPORTED");
+        }
+
+        var requiredAsset = command.Side == OrderSide.Buy ? quoteAsset : baseAsset;
+        var free = Parse(accountSnapshot.Balances.FirstOrDefault(item => item.Asset == requiredAsset)?.Free);
+        if (command.Side == OrderSide.Sell)
+        {
+            if (free < command.Quantity.Value)
+            {
+                throw new ExecutionDispatchBlockedException("FINAL_INSUFFICIENT_FREE_BASE_BALANCE");
+            }
+
+            return;
+        }
+
+        decimal requiredQuote;
+        try
+        {
+            requiredQuote = checked(effectiveNotional + effectiveNotional * currentCommissionRate);
+        }
+        catch (OverflowException)
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_INSUFFICIENT_FREE_QUOTE_BALANCE");
+        }
+
+        if (free < requiredQuote)
+        {
+            throw new ExecutionDispatchBlockedException("FINAL_INSUFFICIENT_FREE_QUOTE_BALANCE");
+        }
+    }
+
+    private sealed record ValidationObservation(string PolicyDocumentHash, DateTimeOffset MarketObservedAtUtc, decimal EffectiveNotional);
+    private sealed record CommissionObservation(decimal Rate, DateTimeOffset ObservedAtUtc);
 }
 
 internal static partial class ExecutionGuardLog

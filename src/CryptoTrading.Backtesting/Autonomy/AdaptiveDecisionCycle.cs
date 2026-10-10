@@ -318,7 +318,7 @@ public sealed class AdaptiveDecisionCycle
                     request.Portfolio.Drawdown,
                     latestBar.CloseTimeUtc,
                     request.EvaluatedAtUtc,
-                    marketRisk: request.MarketRisk,
+                    marketRisk: marketRisk,
                     riskContextComplete: request.Portfolio.RiskContextComplete);
 
                 finalIntent = new OrderIntent(

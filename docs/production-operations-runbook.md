@@ -73,18 +73,24 @@ O script cria o diretório com modo `0700`, arquivo com modo `0600`, valida o UI
 
 O backup/restore local não tem agenda automática configurada neste repositório. Defina antes do uso persistente local o caminho protegido, criptografia, controle de acesso, frequência e retenção; monitore que a cópia terminou e faça restore periódico em volume isolado. Os valores de RPO/RTO seguem pendentes de decisão e medição. A rotação de logs não é backup de banco.
 
-Para um dump local protegido, defina `BACKUP_FILE` para um caminho fora do Git e execute com `umask 077`. O processo de PostgreSQL acessa suas próprias variáveis; não copie a senha para a linha de comando:
+Use o backup manual abaixo somente com um diretório explícito, privado e fora do Git. Ele não lê `.env`, não aceita senha por argumento ou variável, não restaura dados e não escolhe container, banco ou usuário por default. O dump é escrito primeiro em staging `0700`, fica em arquivo `0600`, passa por `pg_restore --list` no mesmo container e só então é publicado atomicamente com checksum e manifesto mínimo. Os logs JSON registram apenas `timestamp`, `status`, `backupId`, bytes, duração, verificação e razão sanitizada.
 
 ```bash
-umask 077
-docker compose exec -T postgres pg_dump \
-  -U "${POSTGRES_USER:-cryptotrading}" \
-  -d "${POSTGRES_DB:-cryptotrading}" \
-  --format=custom > "$BACKUP_FILE"
-sha256sum "$BACKUP_FILE"
+bash scripts/backup-postgres.sh \
+  --container "<container-postgres-explícito>" \
+  --database "<banco-explícito>" \
+  --user "<usuário-explícito>" \
+  --output-directory "/caminho/privado/fora-do-git" \
+  --min-free-bytes "<mínimo-aprovado-em-bytes>"
 ```
 
-Guarde o hash junto ao artefato em armazenamento protegido. O [relatório corrigido de RPO/RTO local](evidence/postgres-recovery-2026-10-07.md) compara 35 linhas em 36 tabelas e informa tempos de backup/restore da fixture. O relatório anterior de 1 tabela e 0 linhas está superseded e não prova cobertura financeira. Mesmo a evidência corrigida é local, sem garantia de RPO/RTO de produção. `scripts/test-postgres-backup-restore.sh` é um drill descartável com dados sintéticos; ele não é rotina de backup do banco operacional.
+Cada publicação cria um diretório novo, sem sobrescrever artefato existente, com `backup.dump`, `backup.dump.sha256` e `manifest.json`. Guarde o diretório em armazenamento protegido. Para validar o contrato local sem Docker, execute `bash scripts/test-backup-postgres.sh`; ele usa comandos falsos controlados no `PATH` e não acessa rede ou banco.
+
+O comando requer Bash; Git (falha fechado sem ele); Docker CLI com acesso ao container indicado; e coreutils GNU compatíveis, incluindo `stat -c`, `df -PB1`, `mv -T -n` e `sha256sum`. O container PostgreSQL indicado deve conter `pg_dump` e `pg_restore`. O diretório de saída deve existir, pertencer ao usuário que executa o comando, não ter permissões para grupo/outros, não ter componentes simbólicos e ficar fora de qualquer worktree. O comando não comprime nem criptografa o arquivo.
+
+Esta é uma ferramenta manual local: não configura agenda, rotação, criptografia, cópia offsite ou restore. RPO de 1 hora e RTO de 4 horas são propostas operacionais, não metas aprovadas ou medidas. O gate 6 continua pendente até decisão de frequência/retenção/proteção, agendamento aprovado, evidência de capacidade/falhas consultáveis e restore periódico isolado.
+
+O [relatório corrigido de RPO/RTO local](evidence/postgres-recovery-2026-10-07.md) compara 35 linhas em 36 tabelas e informa tempos de backup/restore da fixture. O relatório anterior de 1 tabela e 0 linhas está superseded e não prova cobertura financeira. Mesmo a evidência corrigida é local, sem garantia de RPO/RTO de produção. `scripts/test-postgres-backup-restore.sh` é um drill descartável com dados sintéticos; ele não é rotina de backup do banco operacional.
 
 No caminho para OCI, decida entre PostgreSQL gerenciado e PostgreSQL operado pela aplicação antes de criar recursos. A documentação da Oracle informa que os endpoints do [OCI Database with PostgreSQL](https://docs.oracle.com/en-us/iaas/Content/postgresql/connect-to-db.htm) não são acessíveis diretamente pela Internet e requerem VCN/sub-rede privada. A documentação também descreve backups de volumes de Compute como snapshots crash-consistent, que não substituem um backup lógico consistente do PostgreSQL ([Boot Volume Backups](https://docs.oracle.com/en-us/iaas/Content/Block/Concepts/bootvolumebackups.htm)). Trate esses serviços apenas como opções para avaliação: tenancy, região, arquitetura, orçamento, políticas IAM, destino offsite, agenda e retenção ainda não foram escolhidos nem aprovados.
 
