@@ -17,6 +17,7 @@ restored_manifest="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-backup.XXXXXX.restore
 report_dir="$repo_root/artifacts/recovery"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_file="$report_dir/postgres-rpo-rto-$run_stamp-$$.md"
+backup_cli_output_directory="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-backup-cli.XXXXXX")"
 password="$(openssl rand -hex 32)"
 compose=(docker compose --env-file /dev/null --project-name "$compose_project" --file "$repo_root/compose.yaml")
 
@@ -24,11 +25,13 @@ cleanup() {
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -f -- "$backup_file"
     rm -f -- "$checksum_file" "$corrupt_backup_file" "$source_manifest" "$restored_manifest"
+    rm -rf -- "$backup_cli_output_directory"
 }
 trap cleanup EXIT
 
 mkdir -p -- "$report_dir"
 umask 077
+chmod 0700 "$backup_cli_output_directory"
 
 now_ns() { date +%s%N; }
 elapsed_ms() { printf '%s' "$(( ($2 - $1) / 1000000 ))"; }
@@ -95,6 +98,27 @@ if (( $(wc -l < "$source_manifest") < 20 )) || ! awk '$1 == "journal_entries" &&
     echo "Backup/restore manifest is incomplete or financial fixture is absent." >&2
     exit 1
 fi
+
+# Exercise the operational CLI against only this ephemeral PostgreSQL fixture.
+# The CLI itself runs pg_restore --list before atomically publishing its dump;
+# this drill keeps the existing full restore and corruption probes below.
+postgres_container_id="$("${compose[@]}" ps -q postgres)"
+[[ -n "$postgres_container_id" ]] || { echo 'Ephemeral PostgreSQL container ID is unavailable.' >&2; exit 1; }
+"$repo_root/scripts/backup-postgres.sh" \
+    --container "$postgres_container_id" \
+    --database "$postgres_db" \
+    --user "$postgres_user" \
+    --output-directory "$backup_cli_output_directory" \
+    --min-free-bytes 1048576 >/dev/null
+backup_cli_artifact="$(find "$backup_cli_output_directory" -mindepth 1 -maxdepth 1 -type d -name 'postgres-*' -print -quit)"
+[[ -n "$backup_cli_artifact" && -s "$backup_cli_artifact/backup.dump" && -s "$backup_cli_artifact/backup.dump.sha256" && -s "$backup_cli_artifact/manifest.json" ]] || {
+    echo 'Operational backup CLI did not publish a complete verified artifact.' >&2
+    exit 1
+}
+[[ "$(stat -c '%a' "$backup_cli_artifact")" == 700 && "$(stat -c '%a' "$backup_cli_artifact/backup.dump")" == 600 ]]
+(cd "$backup_cli_artifact" && sha256sum --check backup.dump.sha256 >/dev/null)
+grep -Fq '"verification":"pg_restore_list"' "$backup_cli_artifact/manifest.json"
+
 backup_started_ns="$(now_ns)"
 "${compose[@]}" exec -T postgres pg_dump -U "$postgres_user" -d "$postgres_db" --format=custom > "$backup_file"
 backup_finished_ns="$(now_ns)"

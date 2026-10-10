@@ -140,7 +140,7 @@ public sealed record EffectiveCommissionSnapshot
         }
 
         rate = standardRate + Special.For(side, makerEligible) + Tax.For(side, makerEligible);
-        if (rate < 0m || rate > 1_000_000m)
+        if (rate < 0m || rate > 1m)
         {
             rate = 0m;
             reason = "COMMISSION_RATE_INVALID";
@@ -177,7 +177,7 @@ public sealed record EffectiveCommissionSnapshot
             return false;
         }
 
-        if (rate < 0m || rate > 1_000_000m)
+        if (rate < 0m || rate > 1m)
         {
             rate = 0m;
             reason = "COMMISSION_RATE_INVALID";

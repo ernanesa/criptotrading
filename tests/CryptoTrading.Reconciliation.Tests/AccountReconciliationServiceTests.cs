@@ -132,8 +132,8 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
-public async Task UnknownExchangeFillIsDriftEvenWhenBalancesMatch()
-{
+    public async Task UnknownExchangeFillIsDriftEvenWhenBalancesMatch()
+    {
         var control = CreateControl();
         var service = CreateService(
             new ReconciliationSnapshot(Now, [new ReconciliationBalance("BTC", 1m, 0m)], [new("BTCUSDT", 42, 7)]),
@@ -146,28 +146,28 @@ public async Task UnknownExchangeFillIsDriftEvenWhenBalancesMatch()
         Assert.False(result.IsHealthy);
         Assert.Equal([42L], result.UnknownTradeIds);
         Assert.True(control.Snapshot.BlocksNewEntries);
-    Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
-}
+        Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
+    }
 
-[Fact]
-public async Task SameTradeIdForDifferentSymbolsPreservesUnknownTradeIdentity()
-{
-    var control = CreateControl();
-    var service = CreateService(
-        new ReconciliationSnapshot(
-            Now,
-            [new ReconciliationBalance("BTC", 1m, 0m)],
-            [new("BTCUSDT", 42, 7), new("ETHUSDT", 42, 8)]),
-        new Dictionary<string, decimal> { ["BTC"] = 1m },
-        control,
-        new InMemoryReconciliationEventSink(),
-        knownTrades: new HashSet<KnownTradeIdentity> { new("BTCUSDT", 42) });
+    [Fact]
+    public async Task SameTradeIdForDifferentSymbolsPreservesUnknownTradeIdentity()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(
+                Now,
+                [new ReconciliationBalance("BTC", 1m, 0m)],
+                [new("BTCUSDT", 42, 7), new("ETHUSDT", 42, 8)]),
+            new Dictionary<string, decimal> { ["BTC"] = 1m },
+            control,
+            new InMemoryReconciliationEventSink(),
+            knownTrades: new HashSet<KnownTradeIdentity> { new("BTCUSDT", 42) });
 
-    var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
-    Assert.Equal([42L], result.UnknownTradeIds);
-    Assert.Equal([new KnownTradeIdentity("ETHUSDT", 42)], result.UnknownTrades);
-}
+        Assert.Equal([42L], result.UnknownTradeIds);
+        Assert.Equal([new KnownTradeIdentity("ETHUSDT", 42)], result.UnknownTrades);
+    }
 
     [Fact]
     public async Task UnknownExchangeOpenOrderEntersSafeMode()
@@ -409,10 +409,10 @@ public async Task SameTradeIdForDifferentSymbolsPreservesUnknownTradeIdentity()
             Task.FromResult<IReadOnlySet<string>>(balances.Keys.ToHashSet(StringComparer.Ordinal));
     }
 
-private sealed class FakeKnownTradeReader(IReadOnlySet<KnownTradeIdentity> ids) : IKnownTradeReader
-{
-    public Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default) => Task.FromResult(ids);
-}
+    private sealed class FakeKnownTradeReader(IReadOnlySet<KnownTradeIdentity> ids) : IKnownTradeReader
+    {
+        public Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default) => Task.FromResult(ids);
+    }
 
     private sealed class FakeLocalOpenOrderReader(IReadOnlyList<ReconciliationOpenOrder> orders) : ILocalOpenOrderReader
     {

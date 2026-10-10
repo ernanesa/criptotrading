@@ -2,7 +2,7 @@ name: cryptotrading-observability
 
 services:
   otel-collector:
-    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.123.0@sha256:e39311df1f3d941923c00da79ac7ba6269124a870ee87e3c3ad24d60f8aee4d2}
+    image: ${OTEL_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6}
     restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     user: "0:0"
@@ -32,9 +32,7 @@ services:
         labels: com.docker.compose.project,com.docker.compose.service
 
   loki:
-    # Version verified against Grafana's official 3.5 release notes; select a
-    # digest from an inspected image before a release.
-    image: ${LOKI_IMAGE:-grafana/loki:3.5.12@sha256:c2a6860c2f94ecc98fffce7c10e6c8b350cf25e2ea3daa255dff27d7c6a4dffc}
+    image: ${LOKI_IMAGE:-grafana/loki:3.7.8@sha256:1107dd5274e0ada47e42472b7a7e71f3b2a2fe878878108f3e2f9e51528f0193}
     restart: unless-stopped
     command: ["-config.file=/etc/loki/config.yaml", "-config.expand-env=true"]
     environment:
@@ -49,7 +47,7 @@ services:
     logging: *json-logs
 
   prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.2.1@sha256:6927e0919a144aa7616fd0137d4816816d42f6b816de3af269ab065250859a62}
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e}
     restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
     volumes:
@@ -95,7 +93,7 @@ services:
     logging: *json-logs
 
   tempo:
-    image: ${TEMPO_IMAGE:-grafana/tempo:2.7.2@sha256:4b0277a9b572a4b1fa43b01468e58911ec214dd69d033f2cd476596d14de9fe3}
+    image: ${TEMPO_IMAGE:-grafana/tempo:3.1.0@sha256:3076b8dcdfb32fd6bc5ccef85e7b7313e6199b9cb84366257fc17ecb696db5fd}
     restart: unless-stopped
     user: "0:0"
     command: ["-config.file=/etc/tempo.yaml"]
