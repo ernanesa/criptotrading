@@ -139,6 +139,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAccountStreamEventStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IReconciliationEventStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IOutboxStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAutonomyCheckpointStore>(serviceProvider =>
@@ -158,6 +160,8 @@ if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
     _ = builder.Services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<ILocalOpenOrderStore>(serviceProvider =>
+        serviceProvider.GetRequiredService<PostgresTradingStore>());
+    _ = builder.Services.AddSingleton<IAccountStreamOrderProjectionStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IMarketRegimeStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
@@ -231,7 +235,8 @@ if (builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false))
     _ = builder.Services.AddSingleton<IKnownTradeReader, PostgresKnownTradeReader>();
     _ = builder.Services.AddSingleton<ILocalOpenOrderReader, PostgresLocalOpenOrderReader>();
     _ = builder.Services.AddSingleton<ILocalOpenOrderResolutionSink, PostgresLocalOpenOrderResolutionSink>();
-    _ = builder.Services.AddSingleton<IReconciliationEventSink, InMemoryReconciliationEventSink>();
+    _ = builder.Services.AddSingleton<IReconciliationEventSink>(serviceProvider => new PostgresReconciliationEventSink(
+        serviceProvider.GetRequiredService<IReconciliationEventStore>()));
     _ = builder.Services.AddSingleton<AccountReconciliationService>(serviceProvider =>
     {
         var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value;

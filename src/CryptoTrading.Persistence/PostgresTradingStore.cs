@@ -28,6 +28,16 @@ namespace CryptoTrading.Persistence;
 /// </summary>
 public readonly record struct KnownReconciliationTrade(string Symbol, long TradeId);
 
+/// <summary>Versioned, redacted append-only reconciliation event payload.</summary>
+public sealed record ReconciliationEventRecord(
+    Guid EventId,
+    Guid CorrelationId,
+    DateTimeOffset OccurredAtUtc,
+    string EventType,
+    short SchemaVersion,
+    string PayloadJson,
+    string PayloadSha256);
+
 /// <summary>Connection settings for the local PostgreSQL persistence adapter.</summary>
 public sealed record PostgresPersistenceOptions
 {
@@ -59,7 +69,8 @@ public sealed record LocalOpenOrderRecord(
     string Status,
     DateTimeOffset UpdatedAtUtc,
     decimal? OriginalQuantity = null,
-    decimal? CumulativeExecutedQuantity = null);
+    decimal? CumulativeExecutedQuantity = null,
+    DateTimeOffset? ExchangeUpdatedAtUtc = null);
 
 /// <summary>Immutable linkage from a deterministic plan attempt to its outbox command.</summary>
 public sealed record ExecutionSubmissionContext(
@@ -368,6 +379,14 @@ public interface IAccountStreamEventStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable idempotent storage for reconciliation audit events.</summary>
+public interface IReconciliationEventStore
+{
+    Task<bool> AppendReconciliationEventAsync(
+        ReconciliationEventRecord record,
+        CancellationToken cancellationToken = default);
+}
+
 public interface ILocalOpenOrderStore
 {
     Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default);
@@ -375,6 +394,19 @@ public interface ILocalOpenOrderStore
     Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default);
 
     Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default);
+}
+
+/// <summary>Atomically applies ordered account-stream updates without reviving terminal orders.</summary>
+public interface IAccountStreamOrderProjectionStore : ILocalOpenOrderStore
+{
+    Task<bool> ApplyAccountStreamExecutionReportAsync(
+        LocalOpenOrderRecord order,
+        bool isTerminal,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> ApplyAuthoritativeOpenOrderSnapshotAsync(
+        LocalOpenOrderRecord order,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Atomic execution-fact, journal, position and PnL projection boundary.</summary>
@@ -473,7 +505,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, ILocalOpenOrderStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, IReconciliationEventStore, ILocalOpenOrderStore, IAccountStreamOrderProjectionStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1770,6 +1802,50 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         return identities;
     }
 
+    public async Task<bool> AppendReconciliationEventAsync(
+        ReconciliationEventRecord record,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateReconciliationEvent(record);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO trading.reconciliation_events
+                (event_id, correlation_id, occurred_at, event_type, schema_version, payload, payload_sha256)
+            VALUES
+                (@event_id, @correlation_id, @occurred_at, @event_type, @schema_version, @payload, @payload_sha256)
+            ON CONFLICT (event_id) DO NOTHING;
+            """, connection);
+        command.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, record.EventId));
+        command.Parameters.Add(Parameter("correlation_id", NpgsqlDbType.Uuid, record.CorrelationId));
+        command.Parameters.Add(Parameter("occurred_at", NpgsqlDbType.TimestampTz, record.OccurredAtUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("event_type", NpgsqlDbType.Varchar, record.EventType.Trim()));
+        command.Parameters.Add(Parameter("schema_version", NpgsqlDbType.Smallint, record.SchemaVersion));
+        command.Parameters.Add(Parameter("payload", NpgsqlDbType.Jsonb, record.PayloadJson));
+        command.Parameters.Add(Parameter("payload_sha256", NpgsqlDbType.Char, record.PayloadSha256.ToUpperInvariant()));
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0)
+        {
+            return true;
+        }
+
+        await using var existingCommand = new NpgsqlCommand(
+            "SELECT correlation_id, occurred_at, event_type, schema_version, payload_sha256 " +
+            "FROM trading.reconciliation_events WHERE event_id = @event_id;", connection);
+        existingCommand.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, record.EventId));
+        await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetGuid(0) != record.CorrelationId ||
+            new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero) != record.OccurredAtUtc ||
+            !string.Equals(reader.GetString(2), record.EventType.Trim(), StringComparison.Ordinal) ||
+            reader.GetInt16(3) != record.SchemaVersion ||
+            !string.Equals(reader.GetString(4).Trim(), record.PayloadSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Reconciliation event identity conflicts with previously persisted evidence.");
+        }
+
+        return false;
+    }
+
     public async Task<IReadOnlyList<LocalOpenOrderRecord>> ReadOpenOrdersAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -1793,18 +1869,50 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         return result;
     }
 
-    public async Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default)
+    public async Task<bool> ApplyAccountStreamExecutionReportAsync(
+        LocalOpenOrderRecord order,
+        bool isTerminal,
+        CancellationToken cancellationToken = default)
     {
         ValidateOpenOrder(order);
+        ValidateAccountStreamStatus(order.Status, isTerminal);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             """
-            INSERT INTO trading.reconciliation_open_orders (symbol, order_id, client_order_id, status, updated_at, original_quantity, cumulative_executed_quantity, active)
-            VALUES (@symbol, @order_id, @client_order_id, @status, @updated_at, @original_quantity, @cumulative_executed_quantity, TRUE)
+            INSERT INTO trading.reconciliation_open_orders
+                (symbol, order_id, client_order_id, status, updated_at, original_quantity, cumulative_executed_quantity, active, exchange_updated_at)
+            VALUES
+                (@symbol, @order_id, @client_order_id, @status, @updated_at, @original_quantity, @cumulative_executed_quantity, @active, @exchange_updated_at)
             ON CONFLICT (client_order_id) DO UPDATE SET
-                symbol = EXCLUDED.symbol, order_id = EXCLUDED.order_id, status = EXCLUDED.status,
-                updated_at = EXCLUDED.updated_at, original_quantity = EXCLUDED.original_quantity,
-                cumulative_executed_quantity = EXCLUDED.cumulative_executed_quantity, active = TRUE;
+                symbol = EXCLUDED.symbol,
+                order_id = COALESCE(EXCLUDED.order_id, trading.reconciliation_open_orders.order_id),
+                status = EXCLUDED.status,
+                updated_at = EXCLUDED.updated_at,
+                original_quantity = COALESCE(EXCLUDED.original_quantity, trading.reconciliation_open_orders.original_quantity),
+                cumulative_executed_quantity = COALESCE(EXCLUDED.cumulative_executed_quantity, trading.reconciliation_open_orders.cumulative_executed_quantity),
+                active = EXCLUDED.active,
+                exchange_updated_at = EXCLUDED.exchange_updated_at
+            WHERE trading.reconciliation_open_orders.active = TRUE
+              AND EXCLUDED.exchange_updated_at >= COALESCE(
+                    trading.reconciliation_open_orders.exchange_updated_at,
+                    trading.reconciliation_open_orders.updated_at)
+              AND (
+                    EXCLUDED.exchange_updated_at > COALESCE(
+                        trading.reconciliation_open_orders.exchange_updated_at,
+                        trading.reconciliation_open_orders.updated_at)
+                    OR EXCLUDED.status = trading.reconciliation_open_orders.status
+                    OR EXCLUDED.active = FALSE
+                    OR (EXCLUDED.status IN ('PARTIALLY_FILLED', 'PENDING_CANCEL')
+                        AND COALESCE(EXCLUDED.cumulative_executed_quantity, 0)
+                            > COALESCE(trading.reconciliation_open_orders.cumulative_executed_quantity, 0))
+              )
+              AND trading.reconciliation_open_orders.symbol = EXCLUDED.symbol
+              AND (trading.reconciliation_open_orders.order_id IS NULL OR EXCLUDED.order_id IS NULL
+                   OR trading.reconciliation_open_orders.order_id = EXCLUDED.order_id)
+              AND (trading.reconciliation_open_orders.original_quantity IS NULL OR EXCLUDED.original_quantity IS NULL
+                   OR trading.reconciliation_open_orders.original_quantity = EXCLUDED.original_quantity)
+              AND COALESCE(EXCLUDED.cumulative_executed_quantity, trading.reconciliation_open_orders.cumulative_executed_quantity, 0)
+                  >= COALESCE(trading.reconciliation_open_orders.cumulative_executed_quantity, 0);
             """, connection);
         command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, order.Symbol.Trim().ToUpperInvariant()));
         command.Parameters.Add(Parameter("order_id", NpgsqlDbType.Bigint, order.OrderId.HasValue ? order.OrderId.Value : DBNull.Value));
@@ -1813,6 +1921,82 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         command.Parameters.Add(Parameter("updated_at", NpgsqlDbType.TimestampTz, order.UpdatedAtUtc.UtcDateTime));
         command.Parameters.Add(Parameter("original_quantity", NpgsqlDbType.Numeric, order.OriginalQuantity.HasValue ? order.OriginalQuantity.Value : DBNull.Value));
         command.Parameters.Add(Parameter("cumulative_executed_quantity", NpgsqlDbType.Numeric, order.CumulativeExecutedQuantity.HasValue ? order.CumulativeExecutedQuantity.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("active", NpgsqlDbType.Boolean, !isTerminal));
+        command.Parameters.Add(Parameter("exchange_updated_at", NpgsqlDbType.TimestampTz, (order.ExchangeUpdatedAtUtc ?? order.UpdatedAtUtc).UtcDateTime));
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    public async Task<bool> ApplyAuthoritativeOpenOrderSnapshotAsync(
+        LocalOpenOrderRecord order,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateOpenOrder(order);
+        if (order.ExchangeUpdatedAtUtc is null)
+        {
+            throw new ArgumentException("An authoritative exchange order update timestamp is required.", nameof(order));
+        }
+
+        if (order.Status.Trim().ToUpperInvariant() is not ("NEW" or "PARTIALLY_FILLED" or "PENDING_CANCEL"))
+        {
+            throw new ArgumentException("An authoritative open-order snapshot must contain an open status.", nameof(order));
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            UPDATE trading.reconciliation_open_orders SET
+                symbol = @symbol,
+                order_id = COALESCE(@order_id, order_id),
+                status = @status,
+                updated_at = @updated_at,
+                original_quantity = COALESCE(@original_quantity, original_quantity),
+                cumulative_executed_quantity = COALESCE(@cumulative_executed_quantity, cumulative_executed_quantity),
+                exchange_updated_at = @exchange_updated_at
+            WHERE client_order_id = @client_order_id
+              AND active = TRUE
+              AND symbol = @symbol
+              AND (@order_id IS NULL OR order_id IS NULL OR order_id = @order_id)
+              AND (original_quantity IS NULL OR @original_quantity IS NULL OR original_quantity = @original_quantity)
+              AND COALESCE(@cumulative_executed_quantity, cumulative_executed_quantity, 0)
+                  >= COALESCE(cumulative_executed_quantity, 0)
+              AND @exchange_updated_at >= COALESCE(exchange_updated_at, updated_at);
+            """, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, order.Symbol.Trim().ToUpperInvariant()));
+        command.Parameters.Add(Parameter("order_id", NpgsqlDbType.Bigint, order.OrderId.HasValue ? order.OrderId.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+        command.Parameters.Add(Parameter("status", NpgsqlDbType.Varchar, order.Status.Trim().ToUpperInvariant()));
+        command.Parameters.Add(Parameter("updated_at", NpgsqlDbType.TimestampTz, order.UpdatedAtUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("original_quantity", NpgsqlDbType.Numeric, order.OriginalQuantity.HasValue ? order.OriginalQuantity.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("cumulative_executed_quantity", NpgsqlDbType.Numeric, order.CumulativeExecutedQuantity.HasValue ? order.CumulativeExecutedQuantity.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("exchange_updated_at", NpgsqlDbType.TimestampTz, order.ExchangeUpdatedAtUtc.Value.UtcDateTime));
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    public async Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default)
+    {
+        ValidateOpenOrder(order);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO trading.reconciliation_open_orders (symbol, order_id, client_order_id, status, updated_at, original_quantity, cumulative_executed_quantity, active, exchange_updated_at)
+            VALUES (@symbol, @order_id, @client_order_id, @status, @updated_at, @original_quantity, @cumulative_executed_quantity, TRUE, @exchange_updated_at)
+            ON CONFLICT (client_order_id) DO UPDATE SET
+                symbol = EXCLUDED.symbol, order_id = EXCLUDED.order_id, status = EXCLUDED.status,
+                updated_at = EXCLUDED.updated_at, original_quantity = EXCLUDED.original_quantity,
+                cumulative_executed_quantity = EXCLUDED.cumulative_executed_quantity,
+                exchange_updated_at = COALESCE(EXCLUDED.exchange_updated_at, trading.reconciliation_open_orders.exchange_updated_at),
+                active = TRUE
+            WHERE trading.reconciliation_open_orders.active = TRUE
+              AND EXCLUDED.updated_at >= trading.reconciliation_open_orders.updated_at;
+            """, connection);
+        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, order.Symbol.Trim().ToUpperInvariant()));
+        command.Parameters.Add(Parameter("order_id", NpgsqlDbType.Bigint, order.OrderId.HasValue ? order.OrderId.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+        command.Parameters.Add(Parameter("status", NpgsqlDbType.Varchar, order.Status.Trim().ToUpperInvariant()));
+        command.Parameters.Add(Parameter("updated_at", NpgsqlDbType.TimestampTz, order.UpdatedAtUtc.UtcDateTime));
+        command.Parameters.Add(Parameter("original_quantity", NpgsqlDbType.Numeric, order.OriginalQuantity.HasValue ? order.OriginalQuantity.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("cumulative_executed_quantity", NpgsqlDbType.Numeric, order.CumulativeExecutedQuantity.HasValue ? order.CumulativeExecutedQuantity.Value : DBNull.Value));
+        command.Parameters.Add(Parameter("exchange_updated_at", NpgsqlDbType.TimestampTz, order.ExchangeUpdatedAtUtc.HasValue ? order.ExchangeUpdatedAtUtc.Value.UtcDateTime : DBNull.Value));
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1834,10 +2018,63 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         ArgumentException.ThrowIfNullOrWhiteSpace(order.ClientOrderId);
         ArgumentException.ThrowIfNullOrWhiteSpace(order.Status);
         if (order.OrderId is < 0 || order.UpdatedAtUtc.Offset != TimeSpan.Zero ||
+            (order.ExchangeUpdatedAtUtc.HasValue && order.ExchangeUpdatedAtUtc.Value.Offset != TimeSpan.Zero) ||
             order.OriginalQuantity is <= 0 || order.CumulativeExecutedQuantity is < 0 ||
             (order.OriginalQuantity is { } original && order.CumulativeExecutedQuantity is { } cumulative && cumulative > original))
         {
             throw new ArgumentException("Open order identity, quantities, or timestamp are invalid.", nameof(order));
+        }
+    }
+
+    private static void ValidateAccountStreamStatus(string status, bool isTerminal)
+    {
+        var normalized = status.Trim().ToUpperInvariant();
+        var terminalStatus = normalized is "FILLED" or "CANCELED" or "CANCELLED" or "REJECTED" or "EXPIRED" or "EXPIRED_IN_MATCH";
+        if (normalized is not ("NEW" or "PARTIALLY_FILLED" or "PENDING_CANCEL" or
+            "FILLED" or "CANCELED" or "CANCELLED" or "REJECTED" or "EXPIRED" or "EXPIRED_IN_MATCH") || terminalStatus != isTerminal)
+        {
+            throw new ArgumentException("Account-stream terminal classification does not match the exchange order status.", nameof(status));
+        }
+    }
+
+    private static void ValidateReconciliationEvent(ReconciliationEventRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(record.EventType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(record.PayloadJson);
+        ArgumentException.ThrowIfNullOrWhiteSpace(record.PayloadSha256);
+        if (record.EventId == Guid.Empty || record.CorrelationId == Guid.Empty ||
+            record.OccurredAtUtc.Offset != TimeSpan.Zero || record.SchemaVersion <= 0 ||
+            record.PayloadSha256.Length != 64 ||
+            record.PayloadSha256.Any(static character => !char.IsAsciiHexDigit(character)))
+        {
+            throw new ArgumentException("Reconciliation event identity, timestamp, version, or hash is invalid.", nameof(record));
+        }
+
+        using var document = JsonDocument.Parse(record.PayloadJson);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("schemaVersion", out var payloadSchemaVersion) ||
+            !payloadSchemaVersion.TryGetInt16(out var schemaVersion) || schemaVersion != record.SchemaVersion ||
+            !root.TryGetProperty("eventType", out var payloadEventType) ||
+            payloadEventType.ValueKind != JsonValueKind.String ||
+            !string.Equals(payloadEventType.GetString(), record.EventType.Trim(), StringComparison.Ordinal) ||
+            !root.TryGetProperty("eventId", out var payloadEventId) ||
+            !payloadEventId.TryGetGuid(out var eventId) || eventId != record.EventId ||
+            !root.TryGetProperty("correlationId", out var payloadCorrelationId) ||
+            !payloadCorrelationId.TryGetGuid(out var correlationId) || correlationId != record.CorrelationId ||
+            !root.TryGetProperty("occurredAtUtc", out var payloadOccurredAt) ||
+            !payloadOccurredAt.TryGetDateTimeOffset(out var occurredAtUtc) || occurredAtUtc != record.OccurredAtUtc ||
+            !root.TryGetProperty("data", out var eventData) || eventData.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("Reconciliation event payload envelope does not match its indexed metadata.", nameof(record));
+        }
+
+        var actualHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(record.PayloadJson)));
+        if (!CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(actualHash), Convert.FromHexString(record.PayloadSha256)))
+        {
+            throw new ArgumentException("Reconciliation event payload hash does not match its content.", nameof(record));
         }
     }
 
@@ -3614,6 +3851,8 @@ public static class PostgresServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         services.AddSingleton(_ => new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)));
         services.AddSingleton<ILocalOpenOrderStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<IAccountStreamOrderProjectionStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddSingleton<IAutonomyDecisionCommitStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());

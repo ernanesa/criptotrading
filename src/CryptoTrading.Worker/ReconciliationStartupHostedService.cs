@@ -89,7 +89,7 @@ internal sealed class PostgresLocalOpenOrderReader(PostgresTradingStore store) :
 /// <summary>Persists only fresh exchange-authoritative resolutions for ambiguous orders.</summary>
 internal sealed class PostgresLocalOpenOrderResolutionSink(PostgresTradingStore store) : ILocalOpenOrderResolutionSink
 {
-    public Task ResolveAsync(
+    public async Task ResolveAsync(
         ReconciliationOpenOrder authoritativeOrder,
         string previousLocalStatus,
         CorrelationId correlationId,
@@ -103,14 +103,24 @@ internal sealed class PostgresLocalOpenOrderResolutionSink(PostgresTradingStore 
             throw new ArgumentException("Reconciliation observation must be UTC.", nameof(observedAtUtc));
         }
 
-        return store.UpsertOpenOrderAsync(
+        if (authoritativeOrder.ExchangeUpdatedAtUtc is not { } exchangeUpdatedAtUtc)
+        {
+            throw new InvalidOperationException("An exchange-authoritative order resolution requires Binance updateTime.");
+        }
+
+        var applied = await store.ApplyAuthoritativeOpenOrderSnapshotAsync(
             new LocalOpenOrderRecord(
                 authoritativeOrder.Symbol,
                 authoritativeOrder.OrderId,
                 authoritativeOrder.ClientOrderId,
                 authoritativeOrder.Status,
-                observedAtUtc),
-            cancellationToken);
+                observedAtUtc,
+                ExchangeUpdatedAtUtc: exchangeUpdatedAtUtc),
+            cancellationToken).ConfigureAwait(false);
+        if (!applied)
+        {
+            throw new InvalidOperationException("The exchange snapshot is stale or the local order is terminal; resolution was not applied.");
+        }
     }
 }
 

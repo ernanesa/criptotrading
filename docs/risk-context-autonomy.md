@@ -30,3 +30,11 @@ na mesma transação que a leitura contábil do ciclo.
 Nenhuma chamada deste contexto envia ordem à Binance. A consulta PostgreSQL é
 somente leitura e a autorização continua passando pela `RiskPolicy`, pelo
 supervisor de runtime e pelo outbox durável.
+
+Até o ledger representar reservas por ordem e ativo, a reconciliação não pode
+inferir equivalência entre o total local e as parcelas `free`/`locked` da
+exchange. Qualquer parcela `locked` não zero é registrada como
+`EXCHANGE_LOCKED_BALANCE_UNMODELED`, gera mismatch e força `SafeMode`, mesmo se
+os totais coincidirem. Essa trava é intencionalmente conservadora e só deve ser
+relaxada após implementar e testar reservas, fees, fills parciais e liberação
+de bloqueios por ordem.

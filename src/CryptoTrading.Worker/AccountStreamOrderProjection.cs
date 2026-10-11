@@ -7,7 +7,7 @@ namespace CryptoTrading.Worker;
 internal static class AccountStreamOrderProjection
 {
     public static async Task ApplyAsync(
-        ILocalOpenOrderStore store,
+        IAccountStreamOrderProjectionStore store,
         BinanceExecutionReportEvent execution,
         CancellationToken cancellationToken = default)
     {
@@ -24,26 +24,34 @@ internal static class AccountStreamOrderProjection
         ValidateMonotonicity(existing, execution);
 
         var status = execution.OrderStatus.Trim().ToUpperInvariant();
-        await (status switch
+        var exchangeUpdatedAtUtc = ToUtc(execution.EventTimeMilliseconds);
+        var receivedAtUtc = execution.ReceivedAtUtc.ToUniversalTime();
+        var record = status switch
         {
-            "NEW" or "PARTIALLY_FILLED" or "PENDING_CANCEL" => store.UpsertOpenOrderAsync(
-                new LocalOpenOrderRecord(
-                    execution.Symbol,
-                    execution.OrderId,
-                    execution.ClientOrderId,
-                    status,
-                    ToUtc(execution.EventTimeMilliseconds),
-                    execution.OriginalQuantity,
-                    execution.CumulativeExecutedQuantity),
-                cancellationToken),
-            "FILLED" or "CANCELED" or "CANCELLED" or "REJECTED" or "EXPIRED" =>
-                store.RemoveOpenOrderAsync(execution.ClientOrderId, cancellationToken),
+            "NEW" or "PARTIALLY_FILLED" or "PENDING_CANCEL" or
+            "FILLED" or "CANCELED" or "CANCELLED" or "REJECTED" or "EXPIRED" or "EXPIRED_IN_MATCH" => new LocalOpenOrderRecord(
+                execution.Symbol,
+                execution.OrderId,
+                execution.ClientOrderId,
+                status,
+                receivedAtUtc,
+                execution.OriginalQuantity,
+                execution.CumulativeExecutedQuantity,
+                exchangeUpdatedAtUtc),
             _ => throw new InvalidOperationException($"Unsupported Binance execution order status '{execution.OrderStatus}'."),
-        }).ConfigureAwait(false);
+        };
+        var terminal = status is "FILLED" or "CANCELED" or "CANCELLED" or "REJECTED" or "EXPIRED" or "EXPIRED_IN_MATCH";
+        _ = await store.ApplyAccountStreamExecutionReportAsync(record, terminal, cancellationToken).ConfigureAwait(false);
     }
 
     private static void ValidateQuantities(BinanceExecutionReportEvent execution)
     {
+        if (string.Equals(execution.OrderStatus, "NEW", StringComparison.OrdinalIgnoreCase) &&
+            execution.CumulativeExecutedQuantity != 0m)
+        {
+            throw new InvalidOperationException("A NEW execution report cannot have a non-zero cumulative executed quantity.");
+        }
+
         if (execution.LastExecutedQuantity < 0 || execution.CumulativeExecutedQuantity < 0 ||
             execution.OriginalQuantity is <= 0 ||
             (execution.OriginalQuantity is { } original && execution.CumulativeExecutedQuantity > original))

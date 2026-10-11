@@ -113,12 +113,27 @@ public sealed record ReconciliationFill(string Symbol, long TradeId, long OrderI
     }
 }
 
-public sealed record ReconciliationOpenOrder(string Symbol, long OrderId, string ClientOrderId, string Status)
+public sealed record ReconciliationOpenOrder(
+    string Symbol,
+    long OrderId,
+    string ClientOrderId,
+    string Status,
+    DateTimeOffset? ExchangeUpdatedAtUtc = null)
 {
     public static ReconciliationOpenOrder FromBinance(BinanceOpenOrder order)
     {
         ArgumentNullException.ThrowIfNull(order);
-        return new(order.Symbol.Trim().ToUpperInvariant(), order.OrderId, order.ClientOrderId, order.Status);
+        if (order.UpdateTime <= 0)
+        {
+            throw new FormatException("Binance returned an open order without a valid update timestamp.");
+        }
+
+        return new(
+            order.Symbol.Trim().ToUpperInvariant(),
+            order.OrderId,
+            order.ClientOrderId,
+            order.Status,
+            DateTimeOffset.FromUnixTimeMilliseconds(order.UpdateTime));
     }
 }
 
@@ -403,18 +418,33 @@ public sealed class AccountReconciliationService
                 !string.Equals(exchangeOrder.Status, "PENDING_CANCEL", StringComparison.OrdinalIgnoreCase) &&
                 openOrderResolutionSink is not null)
             {
-                await openOrderResolutionSink.ResolveAsync(
-                    exchangeOrder,
-                    localOrder!.Status,
-                    correlationId,
-                    snapshot.ObservedAtUtc,
-                    cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await openOrderResolutionSink.ResolveAsync(
+                        exchangeOrder,
+                        localOrder!.Status,
+                        correlationId,
+                        snapshot.ObservedAtUtc,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException)
+                {
+                    const string rejectedReason = "AUTHORITATIVE_ORDER_SNAPSHOT_REJECTED";
+                    var rejected = new OpenOrderReconciliationMismatch(
+                        Guid.NewGuid(), correlationId, timeProvider.GetUtcNow(),
+                        exchangeOrder.Symbol, clientOrderId, localOrder.OrderId,
+                        exchangeOrder.OrderId, localOrder.Status, exchangeOrder.Status, rejectedReason);
+                    events.Add(rejected);
+                    await PublishEventAsync(rejected, correlationId, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
                 var resolved = new OpenOrderReconciled(
                     Guid.NewGuid(), correlationId, snapshot.ObservedAtUtc,
                     exchangeOrder.Symbol, clientOrderId, localOrder.Status,
                     exchangeOrder.Status, exchangeOrder.OrderId);
                 events.Add(resolved);
-                await eventSink.PublishAsync(resolved, cancellationToken).ConfigureAwait(false);
+                await PublishEventAsync(resolved, correlationId, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
@@ -450,7 +480,7 @@ public sealed class AccountReconciliationService
                 localOrder?.OrderId, exchangeOrder?.OrderId,
                 localOrder?.Status, exchangeOrder?.Status, reason);
             events.Add(mismatch);
-            await eventSink.PublishAsync(mismatch, cancellationToken).ConfigureAwait(false);
+            await PublishEventAsync(mismatch, correlationId, cancellationToken).ConfigureAwait(false);
         }
 
         var exchangeBalances = snapshot.Balances.ToDictionary(static balance => balance.Asset, StringComparer.Ordinal);
@@ -468,8 +498,10 @@ public sealed class AccountReconciliationService
             var exchangeTotal = exchangeBalance?.Total ?? 0m;
             var delta = exchangeTotal - localBalance;
             var occurredAt = timeProvider.GetUtcNow();
+            var unmodeledLockedBalance = exchangeBalance?.Locked is { } lockedBalance && lockedBalance != 0m;
             ReconciliationEvent reconciliationEvent;
-            if (snapshotIsFresh && Math.Abs(delta) <= options.AbsoluteTolerance && unknownTradeIds.Length == 0)
+            if (snapshotIsFresh && Math.Abs(delta) <= options.AbsoluteTolerance &&
+                unknownTradeIds.Length == 0 && !unmodeledLockedBalance)
             {
                 reconciliationEvent = new BalanceReconciled(
                     Guid.NewGuid(), correlationId, occurredAt, asset,
@@ -479,11 +511,12 @@ public sealed class AccountReconciliationService
             {
                 reconciliationEvent = new ReconciliationMismatch(
                     Guid.NewGuid(), correlationId, occurredAt, asset,
-                    localBalance, exchangeTotal, delta, options.AbsoluteTolerance, unknownTradeIds, snapshotReason);
+                    localBalance, exchangeTotal, delta, options.AbsoluteTolerance, unknownTradeIds,
+                    unmodeledLockedBalance ? "EXCHANGE_LOCKED_BALANCE_UNMODELED" : snapshotReason);
             }
 
             events.Add(reconciliationEvent);
-            await eventSink.PublishAsync(reconciliationEvent, cancellationToken).ConfigureAwait(false);
+            await PublishEventAsync(reconciliationEvent, correlationId, cancellationToken).ConfigureAwait(false);
         }
 
         // An account may legitimately return no balance rows while the trade endpoint
@@ -496,7 +529,7 @@ public sealed class AccountReconciliationService
                 Guid.NewGuid(), correlationId, occurredAt, "*",
                 0m, 0m, 0m, options.AbsoluteTolerance, unknownTradeIds, snapshotReason);
             events.Add(reconciliationEvent);
-            await eventSink.PublishAsync(reconciliationEvent, cancellationToken).ConfigureAwait(false);
+            await PublishEventAsync(reconciliationEvent, correlationId, cancellationToken).ConfigureAwait(false);
         }
 
         var healthy = events.All(static item => item is BalanceReconciled or OpenOrderReconciled)
@@ -515,6 +548,29 @@ public sealed class AccountReconciliationService
         TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
         return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count, unknownTrades);
     }
+
+#pragma warning disable CA1031 // Persistence/provider failures must trigger SafeMode regardless of the concrete adapter exception type.
+    private async Task PublishEventAsync(
+        ReconciliationEvent reconciliationEvent,
+        CorrelationId correlationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await eventSink.PublishAsync(reconciliationEvent, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            var command = new OperationalControlCommand(
+                Actor,
+                "Reconciliation evidence persistence failed.",
+                new IdempotencyKey($"reconciliation-event-persistence:{correlationId}:{reconciliationEvent.EventId:N}"),
+                timeProvider.GetUtcNow());
+            _ = await operationalControl.EnterSafeModeAsync(command, cancellationToken).ConfigureAwait(false);
+            throw;
+        }
+    }
+#pragma warning restore CA1031
 
     private static bool IsAmbiguousLocalStatus(string status) =>
         status.Trim().Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase)
@@ -545,6 +601,10 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
 
     public async Task<ReconciliationSnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default)
     {
+        // The account, open orders and trade pages are fetched sequentially, not
+        // from one exchange snapshot. Timestamp the snapshot at the start of that
+        // window so its age is conservative rather than hiding fetch duration.
+        var observedAtUtc = timeProvider.GetUtcNow();
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         var trades = new Dictionary<KnownTradeIdentity, ReconciliationFill>();
         var openOrders = new Dictionary<long, ReconciliationOpenOrder>();
@@ -594,7 +654,7 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
         }
 
         return new(
-            timeProvider.GetUtcNow(),
+            observedAtUtc,
             account.Balances.Select(ReconciliationBalance.FromBinance),
             trades.Values.OrderBy(static trade => trade.TradeId).ToArray(),
             openOrders.Values.OrderBy(static order => order.OrderId).ToArray());

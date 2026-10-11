@@ -91,6 +91,7 @@ public sealed class AccountReconciliationServiceTests
         Assert.Equal("BTCUSDT", snapshot.OpenOrders.Single().Symbol);
         Assert.Equal(42, snapshot.OpenOrders.Single().OrderId);
         Assert.Equal("NEW", snapshot.OpenOrders.Single().Status);
+        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_001), snapshot.OpenOrders.Single().ExchangeUpdatedAtUtc);
     }
 
     [Fact]
@@ -128,6 +129,40 @@ public sealed class AccountReconciliationServiceTests
         var mismatch = Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
         Assert.Equal(1m, mismatch.Delta);
         Assert.True(control.Snapshot.BlocksNewEntries);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task UnmodeledExchangeLockedBalanceEntersSafeModeEvenWhenTotalsMatch()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(Now, [new ReconciliationBalance("USDT", 90m, 10m)], []),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            new InMemoryReconciliationEventSink());
+
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains(result.Events, static item => item is ReconciliationMismatch mismatch
+            && mismatch.ReasonCode == "EXCHANGE_LOCKED_BALANCE_UNMODELED");
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task EventPersistenceFailureEntersSafeModeBeforePropagatingFailure()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(Now, [new ReconciliationBalance("USDT", 100m, 0m)], []),
+            new Dictionary<string, decimal> { ["USDT"] = 99m },
+            control,
+            new FailingEventSink());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken));
+
         Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
     }
 
@@ -220,6 +255,30 @@ public sealed class AccountReconciliationServiceTests
         Assert.Equal("NEW", resolved.AuthoritativeStatus);
         Assert.Single(resolver.Resolutions);
         Assert.Equal("NEW", resolver.Resolutions[0].Status);
+    }
+
+    [Fact]
+    public async Task RejectedStaleOpenOrderResolutionBecomesMismatchAndEntersSafeMode()
+    {
+        var control = CreateControl();
+        var service = CreateService(
+            new ReconciliationSnapshot(
+                Now,
+                [new ReconciliationBalance("USDT", 100m, 0m)],
+                [],
+                [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "NEW")]),
+            new Dictionary<string, decimal> { ["USDT"] = 100m },
+            control,
+            new InMemoryReconciliationEventSink(),
+            [new ReconciliationOpenOrder("BTCUSDT", 42, "client-42", "UNKNOWN")],
+            new RejectingOpenOrderResolutionSink());
+
+        var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsHealthy);
+        Assert.Contains(result.Events, static item => item is OpenOrderReconciliationMismatch mismatch
+            && mismatch.ReasonCode == "AUTHORITATIVE_ORDER_SNAPSHOT_REJECTED");
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
     }
 
     [Fact]
@@ -354,6 +413,21 @@ public sealed class AccountReconciliationServiceTests
     }
 
     [Fact]
+    public async Task BinanceSnapshotTimestampUsesConservativeStartOfSequentialFetchWindow()
+    {
+        var timeProvider = new AdvancingTimeProvider(Now);
+        var client = new FakeBinanceClient([], [], () => timeProvider.Advance(TimeSpan.FromMinutes(5)));
+        var provider = new BinanceReadOnlySnapshotProvider(
+            client,
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
+            timeProvider);
+
+        var snapshot = await provider.GetSnapshotAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(Now, snapshot.ObservedAtUtc);
+    }
+
+    [Fact]
     public async Task BinanceSnapshotProviderPreservesSameTradeIdAcrossSymbols()
     {
         var trades = new[]
@@ -419,6 +493,12 @@ public sealed class AccountReconciliationServiceTests
         public Task<IReadOnlyList<ReconciliationOpenOrder>> GetOpenOrdersAsync(CancellationToken cancellationToken = default) => Task.FromResult(orders);
     }
 
+    private sealed class FailingEventSink : IReconciliationEventSink
+    {
+        public Task PublishAsync(ReconciliationEvent reconciliationEvent, CancellationToken cancellationToken = default) =>
+            Task.FromException(new InvalidOperationException("synthetic persistence failure"));
+    }
+
     private sealed class RecordingOpenOrderResolutionSink : ILocalOpenOrderResolutionSink
     {
         public List<ReconciliationOpenOrder> Resolutions { get; } = [];
@@ -435,6 +515,17 @@ public sealed class AccountReconciliationServiceTests
         }
     }
 
+    private sealed class RejectingOpenOrderResolutionSink : ILocalOpenOrderResolutionSink
+    {
+        public Task ResolveAsync(
+            ReconciliationOpenOrder authoritativeOrder,
+            string previousLocalStatus,
+            CorrelationId correlationId,
+            DateTimeOffset observedAtUtc,
+            CancellationToken cancellationToken = default) =>
+            Task.FromException(new InvalidOperationException("snapshot older than persisted order state"));
+    }
+
     private sealed class AllowResetAuthorizer : IOperationalControlResetAuthorizer
     {
         public bool IsAuthorized(OperationalControlSnapshot current, OperationalControlCommand resetCommand, OperationalControlResetAuthorization authorization) => true;
@@ -445,17 +536,30 @@ public sealed class AccountReconciliationServiceTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
+    private sealed class AdvancingTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        private DateTimeOffset current = now;
+
+        public override DateTimeOffset GetUtcNow() => current;
+
+        public void Advance(TimeSpan duration) => current += duration;
+    }
+
     private static BinanceTrade CreateTrade(long id) => new(
         "BTCUSDT", id, id, "100", "0.01", "1", "0.001", "USDT", 1, true, false, true);
 
     private sealed class FakeBinanceClient(
         IReadOnlyList<BinanceTrade> firstPage,
-        IReadOnlyList<BinanceTrade> secondPage) : IBinanceSpotAccountClient
+        IReadOnlyList<BinanceTrade> secondPage,
+        Action? onGetAccount = null) : IBinanceSpotAccountClient
     {
         public List<long?> FromIds { get; } = [];
 
-        public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new BinanceAccountSnapshot(15, 15, 0, 0, true, false, true, 1, "SPOT", []));
+        public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default)
+        {
+            onGetAccount?.Invoke();
+            return Task.FromResult(new BinanceAccountSnapshot(15, 15, 0, 0, true, false, true, 1, "SPOT", []));
+        }
 
         public Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(string? symbol = null, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<BinanceOpenOrder>>([]);
