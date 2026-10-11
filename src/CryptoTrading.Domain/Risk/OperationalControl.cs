@@ -111,7 +111,8 @@ public interface IOperationalControl
 
 /// <summary>
 /// Async operational-control boundary for hosted services. Implementations
-/// must await durable audit persistence before publishing a new snapshot.
+/// must await durable audit persistence before returning. Restrictive transitions
+/// may publish a local fail-closed snapshot before the durable append completes.
 /// </summary>
 public interface IAsyncOperationalControl
 {
@@ -403,8 +404,14 @@ public sealed class InMemoryOperationalControl : IOperationalControl, IAsyncOper
             command.IdempotencyKey,
             command.OccurredAtUtc,
             approvalId);
-        // Audit persistence is part of the state transition. If it fails, the
-        // control state remains unchanged and the caller stays fail-closed.
+        // Restrictive transitions latch locally before persistence so that a
+        // failed audit database cannot leave concurrent guards in Normal mode.
+        var restrictiveTransition = requestedMode is OperationalMode.SafeMode or OperationalMode.KillSwitch;
+        if (restrictiveTransition)
+        {
+            snapshot = next;
+        }
+
         if (auditSink is null)
         {
             throw new InvalidOperationException("Synchronous operational-control transition is unavailable for an async-only audit sink.");
@@ -440,6 +447,15 @@ public sealed class InMemoryOperationalControl : IOperationalControl, IAsyncOper
             command.IdempotencyKey,
             command.OccurredAtUtc,
             approvalId);
+        // Never wait for durable audit I/O before blocking new risk. This local
+        // latch survives provider failures; audit remains mandatory and the
+        // failure still propagates to the caller.
+        var restrictiveTransition = requestedMode is OperationalMode.SafeMode or OperationalMode.KillSwitch;
+        if (restrictiveTransition)
+        {
+            snapshot = next;
+        }
+
         if (asyncAuditSink is null)
         {
             throw new InvalidOperationException("Async operational-control transition requires an async audit sink.");

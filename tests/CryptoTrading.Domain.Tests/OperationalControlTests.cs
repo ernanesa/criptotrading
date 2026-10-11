@@ -32,7 +32,7 @@ public sealed class OperationalControlTests
     }
 
     [Fact]
-    public void KillSwitchPersistsVersionedHashedAuditBeforeChangingState()
+    public void KillSwitchPersistsVersionedHashedAuditAndLatchesSafety()
     {
         var audit = new InMemoryOperationalControlAuditSink();
         var control = new InMemoryOperationalControl(new TestResetAuthorizer { Allowed = true }, audit);
@@ -48,7 +48,7 @@ public sealed class OperationalControlTests
     }
 
     [Fact]
-    public void AuditFailureLeavesControlUnchangedAndFailsClosed()
+    public void AuditFailureLatchesKillSwitchBeforePropagatingFailure()
     {
         var control = new InMemoryOperationalControl(
             new TestResetAuthorizer { Allowed = true },
@@ -57,12 +57,12 @@ public sealed class OperationalControlTests
         Assert.Throws<InvalidOperationException>(() =>
             control.ActivateKillSwitch(Command("audit-failure", "operator-1", "manual emergency stop")));
 
-        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
-        Assert.Equal(0, control.Snapshot.Revision);
+        Assert.Equal(OperationalMode.KillSwitch, control.Snapshot.Mode);
+        Assert.Equal(1, control.Snapshot.Revision);
     }
 
     [Fact]
-    public async Task AsyncAuditFailureLeavesControlUnchangedAndFailsClosed()
+    public async Task AsyncAuditFailureLatchesSafeModeBeforePropagatingFailure()
     {
         var control = new InMemoryOperationalControl(
             new TestResetAuthorizer { Allowed = true },
@@ -74,12 +74,12 @@ public sealed class OperationalControlTests
                 Command("async-audit-failure", "operator-1", "market data unavailable"),
                 TestContext.Current.CancellationToken));
 
-        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
-        Assert.Equal(0, control.Snapshot.Revision);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+        Assert.Equal(1, control.Snapshot.Revision);
     }
 
     [Fact]
-    public async Task AsyncTransitionPublishesStateOnlyAfterAuditCompletes()
+    public async Task AsyncSafeModeTransitionLatchesStateBeforeAuditCompletes()
     {
         var audit = new BlockingAsyncAuditSink();
         var control = new InMemoryOperationalControl(
@@ -91,7 +91,7 @@ public sealed class OperationalControlTests
             TestContext.Current.CancellationToken);
 
         await audit.Started.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken).ConfigureAwait(true);
-        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
         Assert.False(transition.IsCompleted);
 
         audit.Release();
