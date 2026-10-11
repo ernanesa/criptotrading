@@ -44,6 +44,40 @@ privados.
 
 Os instrumentos têm dimensões de baixa cardinalidade. IDs de ordens, chaves, secrets, tokens e payloads de exchange não devem ser adicionados como labels ou propriedades de log. A classe `SecretRedactor` fornece uma proteção explícita para valores sensíveis, mas a regra principal é não registrar credenciais.
 
+## Consulta local de logs e exercício seguro
+
+Este procedimento é somente de leitura local: não cria alertas externos, não
+envia ordens, não consulta a exchange e não copia logs brutos para artefatos.
+Antes de executá-lo, remova credenciais Binance do ambiente do terminal; os
+containers não devem ser reiniciados ou reconfigurados como parte do exercício.
+
+```bash
+env -u BINANCE_API_KEY -u BINANCE_API_SECRET \
+  docker compose logs --no-color --tail 200 cryptotrading-worker cryptotrading-api | \
+  rg -i 'safemode|killswitch|reconciliation|unknown order|dead.?letter|error|critical'
+```
+
+Para validar o limite independente de risco sem rede, credenciais ou ordens,
+execute o drill local:
+
+```bash
+env -u BINANCE_API_KEY -u BINANCE_API_SECRET bash scripts/test-operational-control.sh
+```
+
+O exercício é observável quando: o comando de consulta só lê as últimas 200
+linhas dos serviços locais; cada ocorrência investigada pode ser correlacionada
+por `X-Correlation-Id` ou `correlation_id`; e o drill termina com `PASS`,
+registrando um relatório `0600` em `artifacts/operations/`. Uma ocorrência de
+`SafeMode`, `KillSwitch`, divergência de reconciliação, `unknown order` ou
+dead-letter exige registrar o correlation ID, horário UTC e ação no runbook
+local antes de qualquer tentativa de retomada.
+
+Não cole URI com query, header `Authorization`, bearer token, password ou
+credencial em propriedades de diagnóstico. Quando uma propriedade de
+diagnóstico contiver esses formatos, `SecretRedactor` mascara valores de query
+sensíveis, credenciais em URI e valores de Authorization/Bearer; isso é defesa
+complementar e não autoriza registrar o valor original.
+
 ## Collector OpenTelemetry local
 
 Por padrão, nenhum exporter OTLP é criado e nenhum tráfego de telemetria sai da

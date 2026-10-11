@@ -121,6 +121,61 @@ public sealed class AutonomyCycleExecutionGuardsTests
         Assert.NotEqual("UNKNOWN_ORDER_BLOCKED", latestCommit.StrategyReason);
     }
 
+    [Fact]
+    public async Task RunOnceFailsClosedWhenTradingRulesCannotBeFetched()
+    {
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        using var fixture = CreateHostedService(
+            decisionCommitStore,
+            new ThrowingRulesProvider());
+
+        await fixture.HostedService.RunOnceAsync(CreateOptions().Value, TestContext.Current.CancellationToken);
+
+        var latestCommit = Assert.Single(decisionCommitStore.Commits);
+        Assert.Equal("NO_TRADE", latestCommit.Outcome);
+        Assert.Equal("BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE", latestCommit.NoTradeReason);
+        Assert.Null(latestCommit.OutboxRecord);
+    }
+
+    [Fact]
+    public async Task RunOnceFailsClosedWhenTradingRulesAreIncomplete()
+    {
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        using var fixture = CreateHostedService(
+            decisionCommitStore,
+            new FixedRulesProvider(new BinanceSymbolTradingRules(
+                "BTCUSDT", "TRADING", 0.01m, 1_000_000m, 0m, 0.0001m, 1_000m, 0.0001m, 10m)));
+
+        await fixture.HostedService.RunOnceAsync(CreateOptions().Value, TestContext.Current.CancellationToken);
+
+        var latestCommit = Assert.Single(decisionCommitStore.Commits);
+        Assert.Equal("NO_TRADE", latestCommit.Outcome);
+        Assert.Equal("BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE", latestCommit.NoTradeReason);
+        Assert.Null(latestCommit.OutboxRecord);
+    }
+
+    private static IOptions<WorkerRuntimeOptions> CreateOptions() => Options.Create(new WorkerRuntimeOptions
+    {
+        AutonomyEnabled = true,
+        AutonomySymbol = "BTCUSDT",
+        AutonomyInterval = "1m",
+        AutonomyKlineLimit = 50,
+        PollIntervalMilliseconds = 50,
+        ExecutionMode = "PAPER",
+        NoTrade = true,
+        ReconciliationAccount = "test-account",
+        PersistenceEnabled = true,
+        PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+        ApplyMigrations = true,
+        RiskPolicyRequired = true,
+        ReconciliationEnabled = true,
+        AccountStreamEnabled = true
+    });
+
+    private static HostedServiceFixture CreateHostedService(
+        IAutonomyDecisionCommitStore decisionCommitStore,
+        IBinanceSymbolTradingRulesProvider rulesProvider) => new(decisionCommitStore, rulesProvider);
+
     private static BinanceSpotKline Kline(DateTimeOffset open, decimal close) => new(
         open,
         open.AddMinutes(1).AddMilliseconds(-1),
@@ -151,10 +206,10 @@ public sealed class AutonomyCycleExecutionGuardsTests
             var list = new List<BinanceSpotKline>
             {
                 Kline(currentMinute.AddMinutes(-4), 100m),
-                Kline(currentMinute.AddMinutes(-3), 101m),
-                Kline(currentMinute.AddMinutes(-2), 102m),
-                Kline(currentMinute.AddMinutes(-1), 103m),
-                Kline(currentMinute, 104m)
+                Kline(currentMinute.AddMinutes(-3), 99m),
+                Kline(currentMinute.AddMinutes(-2), 98m),
+                Kline(currentMinute.AddMinutes(-1), 200m),
+                Kline(currentMinute, 201m)
             };
             return Task.FromResult<IReadOnlyList<BinanceSpotKline>>(list);
         }
@@ -260,5 +315,54 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
         public Task UpsertOpenOrderAsync(LocalOpenOrderRecord order, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class ThrowingRulesProvider : IBinanceSymbolTradingRulesProvider
+    {
+        public Task<BinanceSymbolTradingRules> GetAsync(string symbol, CancellationToken cancellationToken = default) =>
+            throw new BinanceTradingRulesUnavailableException(symbol, new IOException("test"));
+
+        public Task<BinanceSymbolTradingRules> RefreshAsync(string symbol, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class FixedRulesProvider(BinanceSymbolTradingRules rules) : IBinanceSymbolTradingRulesProvider
+    {
+        public Task<BinanceSymbolTradingRules> GetAsync(string symbol, CancellationToken cancellationToken = default) =>
+            Task.FromResult(rules);
+
+        public Task<BinanceSymbolTradingRules> RefreshAsync(string symbol, CancellationToken cancellationToken = default) =>
+            Task.FromResult(rules);
+    }
+
+    private sealed class HostedServiceFixture : IDisposable
+    {
+        private readonly RuntimeSupervisor supervisor = new(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+
+        public HostedServiceFixture(
+            IAutonomyDecisionCommitStore decisionCommitStore,
+            IBinanceSymbolTradingRulesProvider rulesProvider)
+        {
+            HostedService = new AutonomyCycleHostedService(
+                CreateOptions(),
+                new FakeMarketClient(),
+                new FakeAccountClient(),
+                new FakePolicyStore(),
+                new FakeRiskContextStore(),
+                decisionCommitStore,
+                new InMemoryOperationalControl(new AllowAllResetAuthorizer()),
+                supervisor,
+                new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m)),
+                NullLogger<AutonomyCycleHostedService>.Instance,
+                rulesProvider: rulesProvider);
+        }
+
+        public AutonomyCycleHostedService HostedService { get; }
+
+        public void Dispose()
+        {
+            HostedService.Dispose();
+            supervisor.Dispose();
+        }
     }
 }

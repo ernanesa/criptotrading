@@ -33,12 +33,13 @@ Isso congela o bloco no Prompt Caching da OpenAI, reduzindo latência e custo em
 
 ## ⚡ Delegação, Paralelismo e Modelos Mistos
 
-- **Segregação por Modelo (GPT-6):** 
-  - O Orquestrador (`gpt-6-sol`) detém a permissão exclusiva de execução de comandos (`execute_bash`) e planejamento.
-  - Os subagentes paralelos (`gpt-6-luna`) operam estritamente em tarefas isoladas de leitura (`explorer`) ou escrita de arquivos (`worker`).
-- **Contratos de Delegação:** Delegue apenas unidades 100% independentes. Cada subagente disparado deve receber: objetivo, caminhos permitidos, não-objetivos, invariantes, commit-base, comandos de validação e conflitos conhecidos.
-- **Prevenção de Colisão:** Agentes paralelos estão proibidos de editar o mesmo arquivo simultaneamente. Havendo sobreposição, o agente `consolidator` assume como único responsável pela integração.
-- **Gates de Retorno:** O retorno de cada agente exige: commit semântico, testes executados com sucesso, lacunas residuais e suposições de segurança validadas.
+- **Paralelismo Obrigatório por Padrão**: Paralelize sempre qualquer pedido que admita decomposição concorrente (investigações, leituras amplas, auditorias, diagnósticos e testes) utilizando múltiplos agentes e subagentes disparados concorrentemente.
+- **Segregação por Modelo (GPT-6 / Gemini)**: 
+  - O Orquestrador (`gpt-6-sol` / Antigravity Pro) detém o planejamento e a integração de alterações concorrentes.
+  - Os subagentes paralelos operam concorrentemente em tarefas isoladas de exploração, auditoria e validação.
+- **Contratos de Delegação**: Delegue apenas unidades 100% independentes. Cada subagente disparado deve receber: objetivo, caminhos permitidos, não-objetivos, invariantes, commit-base, comandos de validação e conflitos conhecidos.
+- **Prevenção de Colisão**: Agentes paralelos estão proibidos de editar o mesmo arquivo simultaneamente. Havendo sobreposição, o agente integrador/consolidador assume como único responsável pela edição no arquivo compartilhado.
+- **Gates de Retorno**: O retorno de cada agente exige: commits semânticos, testes executados com sucesso ou identificados como `not verified`, lacunas residuais e suposições validadas.
 
 ---
 

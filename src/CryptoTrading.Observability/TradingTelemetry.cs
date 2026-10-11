@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using System.Text.RegularExpressions;
 
 namespace CryptoTrading.Observability;
 
@@ -195,6 +196,18 @@ public sealed record TradingMetricsSnapshot(
 public static class SecretRedactor
 {
     private static readonly string[] SensitiveNameFragments = ["key", "secret", "token", "password", "credential", "authorization"];
+    private static readonly Regex AuthorizationHeader = new(
+        @"(?<prefix>\b(?:proxy-)?authorization\s*:\s*)(?<value>[^\r\n]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex AuthorizationScheme = new(
+        @"(?<prefix>\b(?:bearer|basic|token)\s+)(?<value>[^\s,;]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex SensitiveAssignment = new(
+        """(?<prefix>(?:(?:[?&;]\s*|(?:^|[\s,{]))(?:x-mbx-apikey|api[-_]?key|access[-_]?token|id[-_]?token|refresh[-_]?token|token|secret|password|credential)\s*(?:=|:)\s*["']?))(?<value>[^&#\s,;"'}]+)""",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex UriCredentials = new(
+        @"(?<prefix>\b[a-z][a-z0-9+.-]*://[^:/\s]+:)(?<value>[^@/\s]+)(?<suffix>@)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     public static bool IsSensitiveName(string? name) =>
         !string.IsNullOrWhiteSpace(name) && SensitiveNameFragments.Any(fragment => name.Contains(fragment, StringComparison.OrdinalIgnoreCase));
@@ -203,5 +216,22 @@ public static class SecretRedactor
         ? "[empty]"
         : "[redacted]";
 
-    public static object? Value(string? name, object? value) => IsSensitiveName(name) ? Redact(value?.ToString()) : value;
+    /// <summary>Removes secret-bearing fragments from a textual diagnostic value.</summary>
+    public static string RedactEmbeddedSecrets(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var redacted = AuthorizationHeader.Replace(value, "${prefix}[redacted]");
+        redacted = AuthorizationScheme.Replace(redacted, "${prefix}[redacted]");
+        redacted = SensitiveAssignment.Replace(redacted, "${prefix}[redacted]");
+        return UriCredentials.Replace(redacted, "${prefix}[redacted]${suffix}");
+    }
+
+    public static object? Value(string? name, object? value) => IsSensitiveName(name)
+        ? Redact(value?.ToString())
+        : value switch
+        {
+            string text => RedactEmbeddedSecrets(text),
+            Uri uri => RedactEmbeddedSecrets(uri.OriginalString),
+            _ => value
+        };
 }

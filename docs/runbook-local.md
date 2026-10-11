@@ -17,12 +17,18 @@ ordens reais.
 ## Comandos de diagnóstico
 
 ```bash
+./scripts/test-local-compose-preflight.sh
 export PATH="$PWD/.tools/dotnet:$HOME/.dotnet:$PATH"
 dotnet build CryptoTrading.slnx --no-restore --configuration Release
 dotnet test CryptoTrading.slnx --no-build --no-restore --configuration Release --verbosity minimal
 ./scripts/scan-secrets.sh
 POSTGRES_PASSWORD='validation-only-not-a-credential' docker compose config --quiet
 ```
+
+O preflight verifica apenas padrões de texto nos dois arquivos Compose: binds
+em loopback, defaults seguros do Worker, ausência de atribuições de credenciais
+Binance no Compose base e healthcheck do PostgreSQL. Ele não interpreta todo o
+YAML nem valida Docker, rede, imagens ou containers.
 
 Para o teste de persistência, usar somente a senha efêmera do script:
 
