@@ -21,16 +21,47 @@ var configuration = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-var connectionString = configuration["POSTGRES_CONNECTION_STRING"];
+var connectionString = PostgresConnectionConfiguration.Resolve(configuration);
 if (string.IsNullOrWhiteSpace(connectionString))
 {
     Console.Error.WriteLine("Error: POSTGRES_CONNECTION_STRING is required.");
     return 1;
 }
 
+if (args.Contains("--bootstrap-testnet-autonomy", StringComparer.Ordinal))
+{
+    try
+    {
+        return await BootstrapTestnetAutonomyAsync(configuration, connectionString);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
 if (args.Contains("--run-f20-lifecycle-drill", StringComparer.Ordinal))
 {
-    return await RunF20LifecycleDrillAsync(configuration, connectionString);
+    try
+    {
+        return await RunF20LifecycleDrillAsync(configuration, connectionString);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
 }
 
 await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
@@ -200,7 +231,7 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
 
     using var marketHttp = new HttpClient
     {
-        BaseAddress = new Uri("https://testnet.binance.vision/api/v3/"),
+        BaseAddress = new Uri("https://testnet.binance.vision/api/"),
         Timeout = TimeSpan.FromSeconds(15),
     };
     marketHttp.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading/f20-drill-market");
@@ -240,20 +271,7 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
     var orderClient = new BinanceSpotOrderClient(orderHttp, orderOptions);
 
     var now = DateTimeOffset.UtcNow;
-    var budgetPolicy = new BudgetPolicy(
-        nominalBudgetBrl: 100m,
-        hardCapUsdt: 20m,
-        fxSafetyHaircutRate: 0.02m,
-        maxFxQuoteAgeSeconds: 60,
-        maxOpenPositions: 1,
-        maxDailyLossBrl: 2m,
-        maxCumulativeDrawdownBrl: 5m,
-        maxRiskPerTradeBrl: 1m,
-        makerFeeRate: 0.0010m,
-        takerFeeRate: 0.0010m,
-        feeReserveBufferRate: 0.0025m,
-        minimumOrderNotionalUsdt: 5m,
-        allowedSymbol: symbol);
+    var budgetPolicy = BudgetPolicy.ApprovedMicroLiveDefault;
 
     var riskPolicy = new RiskPolicy(
         version: "v1-r100-f20-testnet",
@@ -283,15 +301,16 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
     {
         await store1.ApplyMigrationsAsync().ConfigureAwait(false);
 
-        var draft = RiskPolicyDocument.CreateDraft(riskPolicy, now.AddMinutes(-5), now.AddDays(30), "Ernane");
+        var draft = RiskPolicyDocument.CreateDraft(riskPolicy, now.AddMinutes(-5), now.AddDays(30), "policy-author");
         await store1.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
         _ = await store1.ApproveRiskPolicyAsync(riskPolicy.Version, "f20-approval-1", "Ernane", now.AddMinutes(-4)).ConfigureAwait(false);
         _ = await store1.ActivateRiskPolicyAsync(riskPolicy.Version, now.AddMinutes(-3)).ConfigureAwait(false);
 
         var fxTicker = await marketClient.GetBookTickerAsync("USDTBRL").ConfigureAwait(false);
         var btcTicker = await marketClient.GetBookTickerAsync(symbol).ConfigureAwait(false);
-        var fxQuote = new UsdtBrlFxQuote(fxTicker.AskPrice, DateTimeOffset.UtcNow, "BinanceSpotTestnet:USDTBRL", true);
-        var valuation = budgetPolicy.EvaluateValuation(fxQuote, DateTimeOffset.UtcNow);
+        var evalNowUtc = DateTimeOffset.UtcNow;
+        var fxQuote = new UsdtBrlFxQuote(fxTicker.AskPrice, evalNowUtc, true);
+        var valuation = budgetPolicy.CalculateEffectiveCeiling(fxQuote, evalNowUtc);
         if (!valuation.IsValid)
         {
             throw new InvalidOperationException($"FX valuation failed: {valuation.ReasonCode}");
@@ -299,19 +318,19 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
         effectiveCeilingUsdt = valuation.EffectiveBudgetCeilingUsdt;
 
         // 1. Pre-submit budget ceiling rejection (> 20 USDT)
-        var overBudgetDecision = budgetPolicy.EvaluateOrderCommitment(
-            valuation,
-            new BudgetOrderCommitmentRequest(
-                Symbol: symbol,
-                OrderNotionalUsdt: 30m,
-                OpenPositionsCount: 0,
-                OpenPositionsNotionalUsdt: 0m,
-                PendingReservedUsdt: 0m,
-                UnknownLockedUsdt: 0m,
-                CumulativeNetRealizedLossUsdt: 0m,
-                DailyRealizedLossUsdt: 0m,
-                EstimatedStopRiskUsdt: 0.10m));
-        if (overBudgetDecision.IsAllowed || overBudgetDecision.ReasonCode != RiskReasonCodes.BudgetCeilingExceeded)
+        var overBudgetDecision = budgetPolicy.EvaluateCommitment(
+            new BudgetCommitmentRequest(
+                requestedOrderNotionalUsdt: 30m,
+                openPositionsNotionalUsdt: 0m,
+                openPositionsCount: 0,
+                pendingOrdersReservedUsdt: 0m,
+                unknownOrdersLockedUsdt: 0m,
+                dailyRealizedLossUsdt: 0m,
+                cumulativeNetRealizedLossUsdt: 0m,
+                estimatedStopRiskUsdt: 0.10m,
+                evaluatedAtUtc: evalNowUtc,
+                fxQuote: fxQuote));
+        if (overBudgetDecision.IsApproved || overBudgetDecision.ReasonCode != RiskReasonCodes.BudgetCeilingExceeded)
         {
             throw new InvalidOperationException($"Expected BUDGET_CEILING_EXCEEDED for 30 USDT order, got {overBudgetDecision.ReasonCode}");
         }
@@ -320,22 +339,22 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
         var restingPrice = Math.Floor(btcTicker.BidPrice * 0.85m * 100m) / 100m;
         const decimal orderQty = 0.00015m; // ~10.6 - 12.5 USDT (between 5 USDT minNotional and ~19.5 USDT ceiling)
         var restingNotional = Math.Round(restingPrice * orderQty, 8);
-        var restingReserved = budgetPolicy.CalculateRequiredOrderReservationUsdt(restingNotional);
+        var restingReserved = Math.Round(restingNotional * (1m + budgetPolicy.RoundTripFeeAndReserveRate), 8, MidpointRounding.ToPositiveInfinity);
 
         var res1 = await store1.TryReserveCapitalAsync(new CapitalReservationRequest(
-            ReservationId: $"res-{restingClientOrderId}",
-            AccountId: accountId,
-            Symbol: symbol,
-            ClientOrderId: restingClientOrderId,
-            Asset: "USDT",
-            RequestedAmount: restingReserved,
-            EffectiveBudgetCeilingAmount: effectiveCeilingUsdt,
-            OpenPositionsCommittedAmount: 0m,
-            CumulativeRealizedLossAmount: 0m,
-            FenceToken: 1,
-            WorkerInstanceId: "f20-worker-1",
-            NowUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        if (!res1.IsReserved)
+            reservationId: $"res-{restingClientOrderId}",
+            accountId: accountId,
+            symbol: symbol,
+            clientOrderId: restingClientOrderId,
+            asset: "USDT",
+            requestedAmount: restingReserved,
+            effectiveBudgetCeilingAmount: effectiveCeilingUsdt,
+            openPositionsCommittedAmount: 0m,
+            realizedLossesAmount: 0m,
+            workerInstanceId: "f20-worker-1",
+            fencingToken: 1,
+            occurredAtUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
+        if (!res1.Succeeded)
         {
             throw new InvalidOperationException($"Failed to reserve capital for resting order: {res1.ReasonCode}");
         }
@@ -358,31 +377,32 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
 
         var canceledResting = await orderClient.CancelAsync(symbol, restingClientOrderId).ConfigureAwait(false);
         cancelStatus = canceledResting.Status;
-        _ = await store1.TransitionReservationAsync(new CapitalReservationTransition(
+        _ = await store1.TransitionReservationAsync(
             restingClientOrderId,
-            CapitalReservationStatus.PendingOrder,
             CapitalReservationStatus.Released,
             0m,
-            "CANCELED_ON_TESTNET",
-            DateTimeOffset.UtcNow)).ConfigureAwait(false);
+            "f20-worker-1",
+            1,
+            DateTimeOffset.UtcNow,
+            "CANCELED_ON_TESTNET").ConfigureAwait(false);
 
-        // 3. Submit executable MARKET BUY -> verify FILLED -> transition to ConsumedPosition -> flatten via MARKET SELL -> release
+        // 3. Submit executable MARKET BUY -> verify FILLED -> transition to CommittedToExchange -> flatten via MARKET SELL -> release
         var fillNotionalEstimate = Math.Round(btcTicker.AskPrice * orderQty, 8);
-        var fillReserved = budgetPolicy.CalculateRequiredOrderReservationUsdt(fillNotionalEstimate);
+        var fillReserved = Math.Round(fillNotionalEstimate * (1m + budgetPolicy.RoundTripFeeAndReserveRate), 8, MidpointRounding.ToPositiveInfinity);
         var res2 = await store1.TryReserveCapitalAsync(new CapitalReservationRequest(
-            ReservationId: $"res-{fillBuyClientOrderId}",
-            AccountId: accountId,
-            Symbol: symbol,
-            ClientOrderId: fillBuyClientOrderId,
-            Asset: "USDT",
-            RequestedAmount: fillReserved,
-            EffectiveBudgetCeilingAmount: effectiveCeilingUsdt,
-            OpenPositionsCommittedAmount: 0m,
-            CumulativeRealizedLossAmount: 0m,
-            FenceToken: 1,
-            WorkerInstanceId: "f20-worker-1",
-            NowUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        if (!res2.IsReserved)
+            reservationId: $"res-{fillBuyClientOrderId}",
+            accountId: accountId,
+            symbol: symbol,
+            clientOrderId: fillBuyClientOrderId,
+            asset: "USDT",
+            requestedAmount: fillReserved,
+            effectiveBudgetCeilingAmount: effectiveCeilingUsdt,
+            openPositionsCommittedAmount: 0m,
+            realizedLossesAmount: 0m,
+            workerInstanceId: "f20-worker-1",
+            fencingToken: 1,
+            occurredAtUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
+        if (!res2.Succeeded)
         {
             throw new InvalidOperationException($"Failed to reserve capital for executable order: {res2.ReasonCode}");
         }
@@ -400,13 +420,14 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
             throw new InvalidOperationException($"Expected MARKET BUY to fill immediately, got status={filledBuy.Status}");
         }
 
-        _ = await store1.TransitionReservationAsync(new CapitalReservationTransition(
+        _ = await store1.TransitionReservationAsync(
             fillBuyClientOrderId,
-            CapitalReservationStatus.PendingOrder,
-            CapitalReservationStatus.ConsumedPosition,
+            CapitalReservationStatus.CommittedToExchange,
             fillReserved,
-            "FILLED_ON_TESTNET",
-            DateTimeOffset.UtcNow)).ConfigureAwait(false);
+            "f20-worker-1",
+            1,
+            DateTimeOffset.UtcNow,
+            "FILLED_ON_TESTNET").ConfigureAwait(false);
 
         var filledSell = await orderClient.SubmitAsync(new BinanceSpotOrderRequest(
             symbol,
@@ -420,29 +441,30 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
             throw new InvalidOperationException($"Expected closing MARKET SELL to fill immediately, got status={filledSell.Status}");
         }
 
-        _ = await store1.TransitionReservationAsync(new CapitalReservationTransition(
+        _ = await store1.TransitionReservationAsync(
             fillBuyClientOrderId,
-            CapitalReservationStatus.ConsumedPosition,
             CapitalReservationStatus.Released,
             0m,
-            $"POSITION_CLOSED:{fillSellClientOrderId}",
-            DateTimeOffset.UtcNow)).ConfigureAwait(false);
+            "f20-worker-1",
+            1,
+            DateTimeOffset.UtcNow,
+            $"POSITION_CLOSED:{fillSellClientOrderId}").ConfigureAwait(false);
 
         // 4. Definitive Exchange Filter Reject (sub-notional 0.00001 BTC ~ 0.83 USDT < 5.00 USDT MIN_NOTIONAL)
         var res3 = await store1.TryReserveCapitalAsync(new CapitalReservationRequest(
-            ReservationId: $"res-{rejectFilterClientOrderId}",
-            AccountId: accountId,
-            Symbol: symbol,
-            ClientOrderId: rejectFilterClientOrderId,
-            Asset: "USDT",
-            RequestedAmount: 6m,
-            EffectiveBudgetCeilingAmount: effectiveCeilingUsdt,
-            OpenPositionsCommittedAmount: 0m,
-            CumulativeRealizedLossAmount: 0m,
-            FenceToken: 1,
-            WorkerInstanceId: "f20-worker-1",
-            NowUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        if (!res3.IsReserved)
+            reservationId: $"res-{rejectFilterClientOrderId}",
+            accountId: accountId,
+            symbol: symbol,
+            clientOrderId: rejectFilterClientOrderId,
+            asset: "USDT",
+            requestedAmount: 6m,
+            effectiveBudgetCeilingAmount: effectiveCeilingUsdt,
+            openPositionsCommittedAmount: 0m,
+            realizedLossesAmount: 0m,
+            workerInstanceId: "f20-worker-1",
+            fencingToken: 1,
+            occurredAtUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
+        if (!res3.Succeeded)
         {
             throw new InvalidOperationException("Failed to reserve capital for reject drill.");
         }
@@ -462,43 +484,46 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
         catch (BinanceOrderRejectedException ex)
         {
             filterRejectCode = $"HTTP_{(int?)ex.StatusCode ?? 400}_DEFINITIVE_REJECT";
-            _ = await store1.TransitionReservationAsync(new CapitalReservationTransition(
+            _ = await store1.TransitionReservationAsync(
                 rejectFilterClientOrderId,
-                CapitalReservationStatus.PendingOrder,
                 CapitalReservationStatus.Released,
                 0m,
-                filterRejectCode,
-                DateTimeOffset.UtcNow)).ConfigureAwait(false);
+                "f20-worker-1",
+                1,
+                DateTimeOffset.UtcNow,
+                filterRejectCode).ConfigureAwait(false);
         }
 
         // 5. Ambiguous outcome -> LockedUnknown before simulated process restart
         var res4 = await store1.TryReserveCapitalAsync(new CapitalReservationRequest(
-            ReservationId: $"res-{ambiguousClientOrderId}",
-            AccountId: accountId,
-            Symbol: symbol,
-            ClientOrderId: ambiguousClientOrderId,
-            Asset: "USDT",
-            RequestedAmount: 10m,
-            EffectiveBudgetCeilingAmount: effectiveCeilingUsdt,
-            OpenPositionsCommittedAmount: 0m,
-            CumulativeRealizedLossAmount: 0m,
-            FenceToken: 1,
-            WorkerInstanceId: "f20-worker-1",
-            NowUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        if (!res4.IsReserved)
+            reservationId: $"res-{ambiguousClientOrderId}",
+            accountId: accountId,
+            symbol: symbol,
+            clientOrderId: ambiguousClientOrderId,
+            asset: "USDT",
+            requestedAmount: 10m,
+            effectiveBudgetCeilingAmount: effectiveCeilingUsdt,
+            openPositionsCommittedAmount: 0m,
+            realizedLossesAmount: 0m,
+            workerInstanceId: "f20-worker-1",
+            fencingToken: 1,
+            occurredAtUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
+        if (!res4.Succeeded)
         {
             throw new InvalidOperationException("Failed to reserve capital for ambiguous drill.");
         }
 
-        _ = await store1.TransitionToLockedUnknownAsync(
+        _ = await store1.MarkReservationLockedUnknownAsync(
             ambiguousClientOrderId,
-            "TRANSPORT_TIMEOUT_AMBIGUOUS",
-            DateTimeOffset.UtcNow).ConfigureAwait(false);
-
-        await store1.RecordRuntimeStateTransitionAsync(new RuntimeStateTransition(
+            "f20-worker-1",
             1,
+            DateTimeOffset.UtcNow,
+            "TRANSPORT_TIMEOUT_AMBIGUOUS").ConfigureAwait(false);
+
+        await store1.AppendRuntimeTransitionAsync(new RuntimeStateTransition(
             RuntimeState.Stopped,
             RuntimeState.Bootstrapping,
+            1,
             "f20-drill-start",
             DateTimeOffset.UtcNow)).ConfigureAwait(false);
     }
@@ -512,25 +537,26 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
             throw new InvalidOperationException("Runtime checkpoint did not persist across restart.");
         }
 
-        if (!await store2.HasLockedUnknownReservationsAsync(accountId).ConfigureAwait(false))
+        var activeOnRestart = await store2.GetActiveReservationsAsync(accountId).ConfigureAwait(false);
+        if (!activeOnRestart.Any(r => r.ClientOrderId == ambiguousClientOrderId && r.Status == CapitalReservationStatus.LockedUnknown))
         {
             throw new InvalidOperationException("LockedUnknown reservation did not survive process restart.");
         }
 
         var blockedDuringUnknown = await store2.TryReserveCapitalAsync(new CapitalReservationRequest(
-            ReservationId: "res-blocked-by-unknown",
-            AccountId: accountId,
-            Symbol: symbol,
-            ClientOrderId: "f20-blocked-1",
-            Asset: "USDT",
-            RequestedAmount: 6m,
-            EffectiveBudgetCeilingAmount: effectiveCeilingUsdt,
-            OpenPositionsCommittedAmount: 0m,
-            CumulativeRealizedLossAmount: 0m,
-            FenceToken: 2,
-            WorkerInstanceId: "f20-worker-2",
-            NowUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        if (blockedDuringUnknown.IsReserved || blockedDuringUnknown.ReasonCode != "LOCKED_UNKNOWN_CAPITAL_ACTIVE")
+            reservationId: "res-blocked-by-unknown",
+            accountId: accountId,
+            symbol: symbol,
+            clientOrderId: "f20-blocked-1",
+            asset: "USDT",
+            requestedAmount: 6m,
+            effectiveBudgetCeilingAmount: effectiveCeilingUsdt,
+            openPositionsCommittedAmount: 0m,
+            realizedLossesAmount: 0m,
+            workerInstanceId: "f20-worker-2",
+            fencingToken: 2,
+            occurredAtUtc: DateTimeOffset.UtcNow)).ConfigureAwait(false);
+        if (blockedDuringUnknown.Succeeded || blockedDuringUnknown.ReasonCode != "LOCKED_UNKNOWN_CAPITAL_ACTIVE")
         {
             throw new InvalidOperationException($"Expected LOCKED_UNKNOWN_CAPITAL_ACTIVE during restart, got {blockedDuringUnknown.ReasonCode}");
         }
@@ -543,12 +569,13 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
         }
 
         var reconCorrelationId = Guid.NewGuid();
+        var reconTimeUtc = DateTimeOffset.UtcNow;
         _ = await store2.ReconcileLockedUnknownAsync(
             ambiguousClientOrderId,
             CapitalReservationStatus.Released,
             0m,
             reconCorrelationId.ToString("N"),
-            DateTimeOffset.UtcNow).ConfigureAwait(false);
+            reconTimeUtc).ConfigureAwait(false);
 
         var reconPayload = JsonSerializer.Serialize(new
         {
@@ -556,35 +583,35 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
             eventType = "TestnetF20LifecycleReconciled",
             eventId = reconCorrelationId,
             correlationId = reconCorrelationId,
-            occurredAtUtc = DateTimeOffset.UtcNow,
+            occurredAtUtc = reconTimeUtc,
             data = new { symbol, openOrdersCount = openOrdersAfterRestart.Count, ambiguousResolved = ambiguousClientOrderId }
         });
         var reconRecord = new ReconciliationEventRecord(
             reconCorrelationId,
             reconCorrelationId,
-            JsonDocument.Parse(reconPayload).RootElement.GetProperty("occurredAtUtc").GetDateTimeOffset(),
+            reconTimeUtc,
             "TestnetF20LifecycleReconciled",
             1,
             reconPayload,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(reconPayload))));
         _ = await store2.AppendReconciliationEventAsync(reconRecord).ConfigureAwait(false);
 
-        await store2.RecordRuntimeStateTransitionAsync(new RuntimeStateTransition(
-            2,
+        await store2.AppendRuntimeTransitionAsync(new RuntimeStateTransition(
             RuntimeState.Bootstrapping,
             RuntimeState.SafeMode,
+            2,
             "restart-requires-reconciliation",
             DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        await store2.RecordRuntimeStateTransitionAsync(new RuntimeStateTransition(
-            3,
+        await store2.AppendRuntimeTransitionAsync(new RuntimeStateTransition(
             RuntimeState.SafeMode,
             RuntimeState.Stopping,
+            3,
             "f20-drill-stop",
             DateTimeOffset.UtcNow)).ConfigureAwait(false);
-        await store2.RecordRuntimeStateTransitionAsync(new RuntimeStateTransition(
-            4,
+        await store2.AppendRuntimeTransitionAsync(new RuntimeStateTransition(
             RuntimeState.Stopping,
             RuntimeState.Stopped,
+            4,
             "f20-drill-stopped-no-trade",
             DateTimeOffset.UtcNow)).ConfigureAwait(false);
 
@@ -605,6 +632,156 @@ static async Task<int> RunF20LifecycleDrillAsync(IConfiguration configuration, s
         marketFillAndFlatten = new { buyClientOrderId = fillBuyClientOrderId, buyOrderId = fillBuyOrderId, sellClientOrderId = fillSellClientOrderId, sellOrderId = fillSellOrderId, executedQuantity = filledQty },
         rejections = new { preSubmitOverBudget = RiskReasonCodes.BudgetCeilingExceeded, exchangeFilterReject = filterRejectCode },
         ambiguousRestartReconcileStop = new { ambiguousClientOrderId, survivedRestart = true, blockedNewOrdersWhileUnknown = true, reconciledAndReleased = true, finalRuntimeState = "Stopped" }
+    }));
+    return 0;
+}
+
+static async Task<int> BootstrapTestnetAutonomyAsync(IConfiguration configuration, string connectionString)
+{
+    if (!string.Equals(configuration["TRADING_ENVIRONMENT"], "TESTNET", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Refusing bootstrap: TRADING_ENVIRONMENT must be TESTNET.");
+        return 2;
+    }
+
+    if (bool.TryParse(configuration["BINANCE_WITHDRAWALS_ENABLED"], out var withdrawals) && withdrawals)
+    {
+        Console.Error.WriteLine("Refusing bootstrap: BINANCE_WITHDRAWALS_ENABLED must be false.");
+        return 2;
+    }
+
+    var restBaseUrl = configuration["BINANCE_REST_BASE_URL"] ?? "https://testnet.binance.vision/api";
+    if (!string.Equals(restBaseUrl.TrimEnd('/'), "https://testnet.binance.vision/api", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.Error.WriteLine("Refusing bootstrap: BINANCE_REST_BASE_URL must be https://testnet.binance.vision/api.");
+        return 2;
+    }
+
+    var apiKey = TradingConfigurationExtensions.ResolveCredential(configuration, "BINANCE_API_KEY", "BINANCE_API_KEY_FILE");
+    var apiSecret = TradingConfigurationExtensions.ResolveCredential(configuration, "BINANCE_API_SECRET", "BINANCE_API_SECRET_FILE");
+    if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(apiSecret))
+    {
+        Console.Error.WriteLine("Refusing bootstrap: protected Binance Testnet credentials are required.");
+        return 2;
+    }
+
+    const string symbol = "BTCUSDT";
+    const string accountId = "exchange-wallet";
+
+    await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+    await store.ApplyMigrationsAsync().ConfigureAwait(false);
+
+    var now = DateTimeOffset.UtcNow;
+    var activePolicy = await store.GetActiveRiskPolicyAsync(now).ConfigureAwait(false);
+    if (activePolicy is null || !string.Equals(activePolicy.Policy.Version, "v2-r100-testnet-live-sim", StringComparison.Ordinal))
+    {
+        var riskPolicy = new RiskPolicy(
+            version: "v2-r100-testnet-live-sim",
+            maxOrderNotional: 20m,
+            maxExposureNotional: 20m,
+            maxDailyLoss: 2m,
+            maxDrawdown: 5m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            budgetPolicy: BudgetPolicy.ApprovedMicroLiveDefault);
+        var draft = RiskPolicyDocument.CreateDraft(riskPolicy, now.AddMinutes(-5), now.AddDays(90), "policy-author");
+        await store.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
+        _ = await store.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v2-testnet-live-sim", "Ernane", now.AddMinutes(-4)).ConfigureAwait(false);
+        activePolicy = await store.ActivateRiskPolicyAsync(riskPolicy.Version, now.AddMinutes(-3)).ConfigureAwait(false);
+    }
+
+    var latestControl = await store.ReadLatestOperationalControlAuditEventAsync().ConfigureAwait(false);
+    if (latestControl is null || latestControl.To != OperationalMode.Normal)
+    {
+        var audit = new OperationalControlAuditEvent(
+            Guid.NewGuid(),
+            latestControl?.To ?? OperationalMode.Normal,
+            OperationalMode.Normal,
+            "testnet-bootstrap",
+            "Initial Normal operational state for continuous Testnet autonomy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow,
+            "bootstrap-testnet-normal");
+        _ = await store.AppendOperationalControlAuditEventAsync(audit).ConfigureAwait(false);
+    }
+
+    var accountOptions = new BinanceAuthenticatedClientOptions
+    {
+        Environment = BinanceEnvironment.Testnet,
+        RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+        ApiKey = apiKey,
+        ApiSecret = apiSecret,
+        AllowTestnetWithdrawCapability = true,
+    };
+    using var accountHttp = new HttpClient
+    {
+        BaseAddress = accountOptions.RestBaseAddress,
+        Timeout = accountOptions.RequestTimeout,
+    };
+    accountHttp.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading/testnet-bootstrap");
+    var accountClient = new BinanceSpotAccountClient(accountHttp, accountOptions);
+    _ = await accountClient.SynchronizeClockAsync().ConfigureAwait(false);
+
+    var account = await accountClient.GetAccountAsync().ConfigureAwait(false);
+    var exchangeTotals = new Dictionary<string, decimal>(StringComparer.Ordinal);
+    foreach (var b in account.Balances)
+    {
+        if (decimal.TryParse(b.Free, NumberStyles.Number, CultureInfo.InvariantCulture, out var free) &&
+            decimal.TryParse(b.Locked, NumberStyles.Number, CultureInfo.InvariantCulture, out var locked))
+        {
+            var total = free + locked;
+            if (total > 0m && TryCreateAsset(b.Asset, out var asset))
+            {
+                exchangeTotals[asset.Value] = total;
+            }
+        }
+    }
+
+    var localAssets = await store.GetAssetsAsync(new AccountId(accountId)).ConfigureAwait(false);
+    var allAssets = exchangeTotals.Keys.Union(localAssets, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+    var postings = new List<LedgerPosting>();
+    foreach (var assetCode in allAssets)
+    {
+        if (!TryCreateAsset(assetCode, out var asset))
+        {
+            continue;
+        }
+
+        var localBal = (await store.GetBalanceAsync(new AccountId(accountId), asset).ConfigureAwait(false)).Amount;
+        var exchangeBal = exchangeTotals.GetValueOrDefault(asset.Value, 0m);
+        var delta = Math.Round(exchangeBal - localBal, 8);
+        if (Math.Abs(delta) > 0m)
+        {
+            postings.Add(new LedgerPosting(new AccountId(accountId), new Money(delta, asset)));
+            postings.Add(new LedgerPosting(new AccountId("equity-opening"), new Money(-delta, asset)));
+        }
+    }
+
+    if (postings.Count >= 2)
+    {
+        var entry = new LedgerEntry(
+            LedgerEntryId.New(),
+            CorrelationId.New(),
+            DateTimeOffset.UtcNow,
+            "testnet-autonomy-balance-sync",
+            postings,
+            new IdempotencyKey($"testnet-sync-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}"));
+        _ = await store.AppendJournalEntryAsync(entry).ConfigureAwait(false);
+    }
+
+    var myTrades = await accountClient.GetMyTradesAsync(symbol).ConfigureAwait(false);
+    foreach (var trade in myTrades)
+    {
+        await store.RecordKnownTradeAsync(trade.Id, symbol).ConfigureAwait(false);
+    }
+
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        status = "PASS",
+        activeRiskPolicy = activePolicy.Policy.Version,
+        exchangeAssetsCount = exchangeTotals.Count,
+        adjustedAssetsCount = postings.Count / 2,
+        knownTradesCount = myTrades.Count
     }));
     return 0;
 }

@@ -475,8 +475,15 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
     {
         var symbol = BinanceSpotOrderRequest.NormalizeSymbol(wire.Symbol);
         var clientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(wire.ClientOrderId);
-        if (!string.Equals(symbol, expectedSymbol, StringComparison.Ordinal) ||
-            !string.Equals(clientOrderId, expectedClientOrderId, StringComparison.Ordinal))
+        var origClientOrderId = string.IsNullOrWhiteSpace(wire.OrigClientOrderId)
+            ? null
+            : BinanceSpotOrderRequest.NormalizeClientOrderId(wire.OrigClientOrderId);
+        var matchedClientOrderId = string.Equals(clientOrderId, expectedClientOrderId, StringComparison.Ordinal)
+            ? clientOrderId
+            : string.Equals(origClientOrderId, expectedClientOrderId, StringComparison.Ordinal)
+                ? origClientOrderId!
+                : null;
+        if (!string.Equals(symbol, expectedSymbol, StringComparison.Ordinal) || matchedClientOrderId is null)
         {
             throw new JsonException("Binance order response identity did not match the requested symbol/clientOrderId.");
         }
@@ -484,12 +491,12 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         return new(
             wire.OrderId,
             symbol,
-            clientOrderId,
+            matchedClientOrderId,
             RequireText(wire.Status, nameof(wire.Status)),
             ParseNonNegative(wire.Price, nameof(wire.Price)),
             ParsePositive(wire.OriginalQuantity, nameof(wire.OriginalQuantity)),
             ParseNonNegative(wire.ExecutedQuantity, nameof(wire.ExecutedQuantity)),
-            wire.TransactTime);
+            wire.TransactTime != 0 ? wire.TransactTime : (wire.UpdateTime ?? 0));
     }
 
     private static decimal ParsePositive(string value, string fieldName)
@@ -525,5 +532,7 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         [property: JsonPropertyName("origQty")] string OriginalQuantity,
         [property: JsonPropertyName("executedQty")] string ExecutedQuantity,
         [property: JsonPropertyName("status")] string Status,
-        [property: JsonPropertyName("transactTime")] long TransactTime);
+        [property: JsonPropertyName("transactTime")] long TransactTime,
+        [property: JsonPropertyName("origClientOrderId")] string? OrigClientOrderId = null,
+        [property: JsonPropertyName("updateTime")] long? UpdateTime = null);
 }

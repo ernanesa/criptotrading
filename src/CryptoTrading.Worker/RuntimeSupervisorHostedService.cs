@@ -14,6 +14,13 @@ internal sealed class RuntimeSupervisorHostedService(
     IAsyncOperationalControl operationalControl,
     ILogger<RuntimeSupervisorHostedService> logger) : BackgroundService
 {
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        await initializer.InitializeAsync(cancellationToken).ConfigureAwait(false);
+        await supervisor.BeginBootstrappingAsync("worker-started", cancellationToken).ConfigureAwait(false);
+        await base.StartAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await initializer.InitializeAsync(stoppingToken).ConfigureAwait(false);

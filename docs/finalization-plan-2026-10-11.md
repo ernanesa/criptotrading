@@ -220,5 +220,14 @@ Não depositar com base neste plano. O orçamento offline não configura o execu
   - Regras de alerta (`ops/observability/prometheus-alerts.yml`, `ops/observability/alertmanager.yml`) e drill end-to-end `./scripts/test-observability-alert-drill.sh` aprovado (`artifacts/operations/observability-alert-drill-20261011T151716Z-3175881.md`).
   - Scan de vulnerabilidades (`F16`): `0` pacotes NuGet vulneráveis em `CryptoTrading.slnx` (`dotnet list package --vulnerable --include-transitive`) e `0` vulnerabilidades npm em `src/CryptoTrading.Web` (`npm audit --prefix src/CryptoTrading.Web`, `26/26` testes frontend e build `vite` limpos).
   - Rastreabilidade (`F17`): `ClickUp/canonical/**` sincronizado com `plan/**`; `./scripts/validate-traceability.sh` aprovado (126 IDs, schema v2, sem órfãos/duplicatas).
-  - Artefatos de readiness (`docs/readiness/PRM-20260919-foundation.md`, `docs/readiness/CANARY-20260919-draft.md`, `docs/readiness/RISK-POLICY-20261011-r100-draft.md`) preenchidos com Owner `Ernane` e parâmetros da política `R$ 100`, preservando `Decisão: No-Go` até a execução supervisionada de `F20` (Testnet autenticada) e aprovação humana de `F22` (Live).
+  - Artefatos de readiness (`docs/readiness/PRM-20260919-foundation.md`, `docs/readiness/CANARY-20260919-draft.md`, `docs/readiness/RISK-POLICY-20261011-r100-draft.md`) preenchidos com Owner `Ernane` e parâmetros da política `R$ 100`, preservando `Decisão: No-Go` até a aprovação humana de `F22` (Live).
+- **Incremento `F20` — Integração supervisionada na Binance Spot Testnet (`PASS`):**
+  - Credenciais migradas para arquivos protegidos `0600` em `/home/ernane/.config/cryptotrading/testnet` (`0700`); `.env.testnet` higienizado sem segredos inline.
+  - Probe read-only autenticado (`./scripts/test-binance-testnet-auth-readonly.sh`): **PASS** (`artifacts/binance/read-only-probe-20261011T161708Z-3256390.md`).
+  - Ciclo supervisionado autorizado pelo operador (`TESTNET_F20_DRILL_AUTHORIZED=true ./scripts/test-binance-testnet-f20-drill.sh`): **PASS** (`artifacts/binance/testnet-f20-lifecycle-drill-20261011T162954Z-3278708.md`), validando em PostgreSQL 17 real e `https://testnet.binance.vision/api`:
+    - Cotação `USDTBRL` em tempo real $\rightarrow$ teto efetivo `19.50753428 USDT` (`R$ 100` com haircut de `2%`);
+    - `submit` + `openOrders` + `cancel` de ordem `LIMIT BUY` (`orderId: 1546976`, `finalStatus: CANCELED`) + correção real no `BinanceSpotOrderClient.ToResult` para validar `origClientOrderId` no retorno de `DELETE /api/v3/order`;
+    - `submit` + `fill` de `MARKET BUY` (`orderId: 1546984`, `0.00015000 BTC`) + flatten imediato via `MARKET SELL` (`orderId: 1546987`, `0.00015000 BTC`) + liberação de reserva;
+    - `reject` pré-submit (`BUDGET_CEILING_EXCEEDED`) e `reject` definitivo de filtro na exchange (`HTTP_400_DEFINITIVE_REJECT`);
+    - `ambiguous` (`LockedUnknown`) persistido antes de restart $\rightarrow$ sobrevivência ao restart $\rightarrow$ bloqueio de novas ordens (`LOCKED_UNKNOWN_CAPITAL_ACTIVE`) $\rightarrow$ reconciliação contra `openOrders` da Testnet (`0` ordens abertas) $\rightarrow$ `stop` (`Stopped`).
 
