@@ -86,6 +86,23 @@ internal sealed class PostgresLocalOpenOrderReader(PostgresTradingStore store) :
     }
 }
 
+internal sealed class PostgresLocalLockedBalanceReader(PostgresTradingStore store) : ILocalLockedBalanceReader
+{
+    public async Task<LocalLockedBalanceExpectation> GetLockedExpectationAsync(
+        AccountId account,
+        string asset,
+        CancellationToken cancellationToken = default)
+    {
+        var active = await store.GetActiveReservationsAsync(account.Value, cancellationToken).ConfigureAwait(false);
+        var matching = active.Where(r => string.Equals(r.Asset, asset, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var hasLockedUnknown = matching.Any(static r => r.State == CapitalReservationState.LockedUnknown);
+        var expectedLocked = matching
+            .Where(static r => r.State is CapitalReservationState.Pending or CapitalReservationState.Active or CapitalReservationState.PartiallyFilled)
+            .Sum(static r => Math.Max(0m, r.ReservedAmount - r.ConsumedAmount));
+        return new LocalLockedBalanceExpectation(asset, expectedLocked, hasLockedUnknown);
+    }
+}
+
 /// <summary>Persists only fresh exchange-authoritative resolutions for ambiguous orders.</summary>
 internal sealed class PostgresLocalOpenOrderResolutionSink(PostgresTradingStore store) : ILocalOpenOrderResolutionSink
 {

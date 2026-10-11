@@ -3526,6 +3526,32 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             row.MaxSlippageBps,
             row.MaxVolatilityBps,
             row.MinLiquidityNotional);
+        if (!string.Equals(
+                RiskPolicyDocument.ComputeHash(policy, row.EffectiveFromUtc, row.ExpiresAtUtc),
+                row.DocumentHash,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var policyWithDefaultBudget = new RiskPolicy(
+                row.PolicyVersion,
+                row.MaxOrderNotional,
+                row.MaxExposureNotional,
+                row.MaxDailyLoss,
+                row.MaxDrawdown,
+                TimeSpan.FromTicks(row.MaxMarketDataAgeTicks),
+                row.WithdrawalsEnabled,
+                row.MaxSlippageBps,
+                row.MaxVolatilityBps,
+                row.MinLiquidityNotional,
+                BudgetPolicy.ApprovedMicroLiveDefault);
+            if (string.Equals(
+                    RiskPolicyDocument.ComputeHash(policyWithDefaultBudget, row.EffectiveFromUtc, row.ExpiresAtUtc),
+                    row.DocumentHash,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                policy = policyWithDefaultBudget;
+            }
+        }
+
         var approval = lifecycle is RiskPolicyLifecycle.Approved or RiskPolicyLifecycle.Active ? eventRow : null;
         return new RiskPolicyDocument(
             policy,
