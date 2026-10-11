@@ -79,3 +79,18 @@ mensagem como processada, evitando confirmação por um processo antigo. Ao
 terminar, executa `docker compose down` sem `--volumes` e verifica que o volume
 nomeado continua presente. A senha deve continuar fora dos arquivos
 versionados e não é exibida pelo script.
+
+O projeto/volume padrão incluem o PID para reduzir colisões. O harness recusa
+projetos com containers existentes e volumes já existentes antes de armar o
+cleanup; não use nomes de um ambiente operacional. Uma execução cooperante por
+usuário é permitida por vez, mediante `flock` não bloqueante, inclusive quando
+projetos distintos tentam usar a mesma porta. Isso não protege contra processos
+Docker externos que não respeitam esse lock; use um daemon de teste isolado em CI.
+Falha ao enumerar volumes bloqueia o teste. Volumes retidos não são apagados nem
+reutilizados automaticamente; limpeza exige decisão explícita do operador.
+
+O contrato offline `bash scripts/test-postgres-integration-isolation.sh` cobre
+colisão de projeto/volume, erro de inspeção, contenção de lock, metadata inválida
+e propagação de falha com cleanup. Ele usa executáveis de fixture, não comprova
+integração. `POSTGRES_INTEGRATION_DOTNET_COMMAND` permite selecionar o runner de
+teste como arquivo executável; não muda endpoints da exchange ou política.

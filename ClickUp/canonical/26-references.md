@@ -22,6 +22,7 @@ Baseline verificada em 2026-09-18: .NET 11 RC1 é go-live, com GA esperada para 
 
 ## Binance
 - Spot REST API: https://developers.binance.com/en/docs/products/spot/rest-api
+- Spot Query Commission Rates (`GET /api/v3/account/commission`): https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-commission-rates-user_data
 - Spot WebSocket API: https://developers.binance.com/en/docs/products/spot/web-socket-api
 - Spot WebSocket Streams: https://developers.binance.com/en/docs/products/spot/web-socket-streams
 - Spot User Data Stream: https://developers.binance.com/en/docs/products/spot/user-data-stream

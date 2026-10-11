@@ -110,4 +110,19 @@ fi
 grep -Eq '"status":"failed".*"reason":"lock_unavailable"' "$work_dir/stderr"
 wait "$lock_pid"
 
-echo 'Scheduled PostgreSQL backup contract passed: lock, timeout, bounded retry, policy acknowledgements, and sanitized JSON events.'
+enc_sched_dir="$work_dir/enc-sched"
+key_dir="$work_dir/keys"
+mkdir -m 700 "$enc_sched_dir" "$key_dir"
+key_file="$key_dir/postgres_backup.key"
+printf 'scheduled-backup-key-material-32bytes' > "$key_file"
+chmod 0600 "$key_file"
+PATH="$fake_bin:$PATH" FAKE_DOCKER_LOG="$work_dir/docker.log" FAKE_DOCKER_MODE=success FAKE_DOCKER_COUNTER="$work_dir/counter" \
+    "$scheduled_script" --container postgres-fixture --database trading --user backup_user \
+    --output-directory "$enc_sched_dir" --min-free-bytes 100 \
+    --lock-file "$enc_sched_dir/.backup-postgres-scheduled.lock" \
+    --attempt-timeout-seconds 5 --retry-count 0 --retry-delay-seconds 0 \
+    --encryption-policy aes256-keyfile --encryption-key-file "$key_file" \
+    --retention-policy prune-after-verified-7d --retention-days 7 >"$work_dir/stdout" 2>"$work_dir/stderr"
+grep -Eq '"status":"succeeded".*"rpoTargetSeconds":900,"rtoTargetSeconds":600,"encryptionPolicy":"aes256-keyfile","retentionPolicy":"prune-after-verified-7d"' "$work_dir/stderr"
+
+echo 'Scheduled PostgreSQL backup contract passed: lock, timeout, bounded retry, AES-256/retention policy acknowledgements, and sanitized JSON events.'

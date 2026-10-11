@@ -123,3 +123,26 @@ O endpoint `/metrics` é um diagnóstico local em JSON, não substitui um export
 mesmo que o processo seja iniciado com bind externo por engano. Para publicar
 diagnósticos fora da máquina, a evolução obrigatória é uma superfície separada
 com autenticação, autorização e política de rede explícitas.
+
+## Regras de alerta Prometheus e exercício de drill
+
+O repositório define regras determinísticas de alerta em `ops/observability/prometheus-alerts.yml` e configuração do Alertmanager em `ops/observability/alertmanager.yml`. As 4 condições essenciais de falha operacional são monitoradas:
+
+1. **Backup Failure / Staleness (`CryptoTradingBackupStaleOrFailed`)**:
+   - Disparado se o backup agendado do PostgreSQL não for concluído em até 900s (RPO de 15m) ou registrar falha na última execução (`cryptotrading_backup_last_run_failed > 0`). Severidade: `critical`.
+2. **Espaço em disco baixo (`CryptoTradingLowDiskSpace`)**:
+   - Disparado se o espaço livre em disco ficar abaixo de 2 GB (`2147483648` bytes) ou a fração livre for inferior a 10% (`0.10`), acionando fail-closed. Severidade: `critical`.
+3. **Perda de heartbeat do Worker (`CryptoTradingWorkerHeartbeatMissing`)**:
+   - Disparado se nenhum heartbeat do Worker for observado em 10m (`rate == 0` ou métrica ausente). Severidade: `warning`.
+4. **Divergência de reconciliação e SafeMode (`CryptoTradingReconciliationMismatch` / `CryptoTradingSafeModeActivated`)**:
+   - Disparado imediatamente em caso de mismatch de reconciliação ou ativação de SafeMode. Severidade: `critical`.
+
+### Execução do drill local de alertas
+
+Para validar a integridade das regras Prometheus, do Alertmanager e testar ponta a ponta a geração de alertas, ingestão em JSONL (`0600`) e webhook local loopback com query verification:
+
+```bash
+bash scripts/test-observability-alert-drill.sh
+```
+
+O drill opera 100% offline (loopback `127.0.0.1`), não emite requisições para a nuvem, não lê credenciais e salva evidência auditável em `artifacts/operations/observability-alert-drill-*.md`.

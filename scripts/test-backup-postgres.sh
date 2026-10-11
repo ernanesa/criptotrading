@@ -102,4 +102,38 @@ if grep -Eq 'fixture|backup_user|trading' "$work_dir/stderr"; then
     echo 'Backup logs exposed a synthetic payload or connection identifier.' >&2
     exit 1
 fi
-echo 'PostgreSQL backup contract passed: private artifact, verification, failure cleanup, space and symlink checks.'
+
+enc_dir="$work_dir/encrypted"
+key_dir="$work_dir/keys"
+mkdir -m 700 "$enc_dir" "$key_dir"
+key_file="$key_dir/postgres_backup.key"
+printf 'synthetic-backup-key-material-32bytes' > "$key_file"
+chmod 0600 "$key_file"
+old_artifact="$enc_dir/postgres-20200101T000000Z-1"
+mkdir -m 700 "$old_artifact"
+touch -d '10 days ago' "$old_artifact"
+PATH="$fake_bin:$PATH" FAKE_DOCKER_LOG="$work_dir/docker.log" FAKE_DOCKER_MODE="success" FAKE_FREE_BYTES=1000000 \
+    "$backup_script" --container postgres-fixture --database trading --user backup_user \
+    --output-directory "$enc_dir" --min-free-bytes 100 \
+    --encryption-policy aes256-keyfile --encryption-key-file "$key_file" \
+    --retention-policy prune-after-verified-7d --retention-days 7 >"$work_dir/stdout" 2>"$work_dir/stderr"
+[[ ! -d "$old_artifact" ]] || { echo 'Expired backup directory was not pruned after verified backup.' >&2; exit 1; }
+enc_artifact="$(find "$enc_dir" -mindepth 1 -maxdepth 1 -type d -name 'postgres-*' -print -quit)"
+[[ -n "$enc_artifact" && -s "$enc_artifact/backup.dump.enc" && ! -e "$enc_artifact/backup.dump" && -s "$enc_artifact/backup.dump.enc.sha256" ]]
+(cd "$enc_artifact" && sha256sum --check backup.dump.enc.sha256 >/dev/null)
+grep -Fq '"encryptionAlgorithm":"AES-256-CBC-PBKDF2"' "$enc_artifact/manifest.json"
+grep -Fq '"encryptedSha256"' "$enc_artifact/manifest.json"
+grep -Fq '"dumpSha256"' "$enc_artifact/manifest.json"
+grep -Fq '"retentionPolicy":"prune-after-verified-7d"' "$enc_artifact/manifest.json"
+
+# Insecure key permissions rejection test
+chmod 644 "$key_file"
+if PATH="$fake_bin:$PATH" "$backup_script" --container postgres-fixture --database trading --user backup_user \
+    --output-directory "$enc_dir" --min-free-bytes 100 \
+    --encryption-policy aes256-keyfile --encryption-key-file "$key_file" >/dev/null 2>&1; then
+    echo 'Non-0600 key file unexpectedly accepted.' >&2
+    exit 1
+fi
+chmod 600 "$key_file"
+
+echo 'PostgreSQL backup contract passed: private artifact, AES-256 encryption, 7-day retention, verification, failure cleanup, space and symlink checks.'

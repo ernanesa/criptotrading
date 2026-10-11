@@ -141,6 +141,14 @@ disponíveis. Relatórios ativos com event-time igual não regridem status sem u
 avanço de quantidade executada; relatórios terminais prevalecem sobre ativos
 com o mesmo timestamp.
 
+Migration `033_capital_reservations` adiciona as tabelas `trading.capital_reservation_fences`
+e `trading.capital_reservations` para reserva atômica de capital e single-writer
+fencing (`ICapitalReservationStore`). Antes de qualquer envio de ordem, o
+Worker reserva o capital (incluindo reserva de taxas e arredondamento) sob o
+teto operacional (`R$ 100` / hard cap `20 USDT`). Reservas em estado
+`LockedUnknown` nunca são liberadas por timeout/TTL ou restart e exigem
+resolução explícita via reconciliação (`ReconcileLockedUnknownAsync`).
+
 Migration `010_operational_control_audit` adiciona a tabela append-only de
 transições de `KillSwitch`/`SafeMode`. Cada linha preserva o schema versionado,
 os modos anterior e seguinte, ator, motivo, chave de idempotência, eventual

@@ -222,6 +222,19 @@ public interface ILocalBalanceReader
     Task<IReadOnlySet<string>> GetAssetsAsync(AccountId account, CancellationToken cancellationToken = default);
 }
 
+public sealed record LocalLockedBalanceExpectation(
+    string Asset,
+    decimal ExpectedLockedAmount,
+    bool HasLockedUnknownReservation = false);
+
+public interface ILocalLockedBalanceReader
+{
+    Task<LocalLockedBalanceExpectation> GetLockedExpectationAsync(
+        AccountId account,
+        string asset,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IKnownTradeReader
 {
     Task<IReadOnlySet<KnownTradeIdentity>> GetKnownTradeIdsAsync(CancellationToken cancellationToken = default);
@@ -330,6 +343,7 @@ public sealed class AccountReconciliationService
     private readonly ILocalOpenOrderReader localOpenOrderReader;
     private readonly IReconciliationEventSink eventSink;
     private readonly ILocalOpenOrderResolutionSink? openOrderResolutionSink;
+    private readonly ILocalLockedBalanceReader? lockedBalanceReader;
     private readonly IAsyncOperationalControl operationalControl;
     private readonly ReconciliationOptions options;
     private readonly TimeProvider timeProvider;
@@ -343,7 +357,8 @@ public sealed class AccountReconciliationService
         ReconciliationOptions options,
         TimeProvider? timeProvider = null,
         ILocalOpenOrderReader? localOpenOrderReader = null,
-        ILocalOpenOrderResolutionSink? openOrderResolutionSink = null)
+        ILocalOpenOrderResolutionSink? openOrderResolutionSink = null,
+        ILocalLockedBalanceReader? lockedBalanceReader = null)
     {
         this.snapshotProvider = snapshotProvider ?? throw new ArgumentNullException(nameof(snapshotProvider));
         this.balanceReader = balanceReader ?? throw new ArgumentNullException(nameof(balanceReader));
@@ -354,6 +369,7 @@ public sealed class AccountReconciliationService
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.localOpenOrderReader = localOpenOrderReader ?? new NoLocalOpenOrdersReader();
         this.openOrderResolutionSink = openOrderResolutionSink;
+        this.lockedBalanceReader = lockedBalanceReader;
     }
 
     public async Task<ReconciliationRunResult> ReconcileAsync(CancellationToken cancellationToken = default)
@@ -496,12 +512,35 @@ public sealed class AccountReconciliationService
                 .ConfigureAwait(false);
             var exchangeBalance = exchangeBalances.GetValueOrDefault(asset);
             var exchangeTotal = exchangeBalance?.Total ?? 0m;
+            var exchangeLocked = exchangeBalance?.Locked ?? 0m;
             var delta = exchangeTotal - localBalance;
             var occurredAt = timeProvider.GetUtcNow();
-            var unmodeledLockedBalance = exchangeBalance?.Locked is { } lockedBalance && lockedBalance != 0m;
+            string? lockedFailureReason = null;
+            if (lockedBalanceReader is null)
+            {
+                if (exchangeLocked != 0m)
+                {
+                    lockedFailureReason = "EXCHANGE_LOCKED_BALANCE_UNMODELED";
+                }
+            }
+            else
+            {
+                var lockedExpectation = await lockedBalanceReader
+                    .GetLockedExpectationAsync(options.LedgerAccount, asset, cancellationToken)
+                    .ConfigureAwait(false);
+                if (lockedExpectation.HasLockedUnknownReservation)
+                {
+                    lockedFailureReason = "LOCKED_UNKNOWN_CAPITAL_UNRESOLVED";
+                }
+                else if (Math.Abs(exchangeLocked - lockedExpectation.ExpectedLockedAmount) > options.AbsoluteTolerance)
+                {
+                    lockedFailureReason = "LOCKED_BALANCE_RESERVATION_DRIFT";
+                }
+            }
+
             ReconciliationEvent reconciliationEvent;
             if (snapshotIsFresh && Math.Abs(delta) <= options.AbsoluteTolerance &&
-                unknownTradeIds.Length == 0 && !unmodeledLockedBalance)
+                unknownTradeIds.Length == 0 && lockedFailureReason is null)
             {
                 reconciliationEvent = new BalanceReconciled(
                     Guid.NewGuid(), correlationId, occurredAt, asset,
@@ -512,7 +551,7 @@ public sealed class AccountReconciliationService
                 reconciliationEvent = new ReconciliationMismatch(
                     Guid.NewGuid(), correlationId, occurredAt, asset,
                     localBalance, exchangeTotal, delta, options.AbsoluteTolerance, unknownTradeIds,
-                    unmodeledLockedBalance ? "EXCHANGE_LOCKED_BALANCE_UNMODELED" : snapshotReason);
+                    lockedFailureReason ?? snapshotReason);
             }
 
             events.Add(reconciliationEvent);
@@ -696,6 +735,15 @@ public sealed class NoLocalOpenOrdersReader : ILocalOpenOrderReader
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult<IReadOnlyList<ReconciliationOpenOrder>>([]);
     }
+}
+
+public sealed class NoLocalLockedBalanceReader : ILocalLockedBalanceReader
+{
+    public Task<LocalLockedBalanceExpectation> GetLockedExpectationAsync(
+        AccountId account,
+        string asset,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new LocalLockedBalanceExpectation(asset, 0m, false));
 }
 
 public sealed class InMemoryReconciliationEventSink : IReconciliationEventSink

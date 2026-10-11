@@ -32,6 +32,10 @@ reject_pattern '^[[:space:]]*BINANCE_API_SECRET[[:space:]]*:' "$base_compose" \
     'Base Compose must not inject BINANCE_API_SECRET.'
 reject_pattern '^[[:space:]]*BINANCE_API_(KEY|SECRET)_FILE[[:space:]]*:' "$base_compose" \
     'Base Compose must not inject Binance credential file paths.'
+reject_pattern '^[[:space:]]*POSTGRES_PASSWORD[[:space:]]*:' "$base_compose" \
+    'Base Compose must not inject direct POSTGRES_PASSWORD.'
+reject_pattern '^[[:space:]]*POSTGRES_CONNECTION_STRING[[:space:]]*:' "$base_compose" \
+    'Base Compose must not inject inline POSTGRES_CONNECTION_STRING.'
 require_pattern 'WORKER_EXECUTION_MODE: \$\{WORKER_EXECUTION_MODE:-PAPER\}' "$base_compose" \
     'Base Compose must default to PAPER execution.'
 require_pattern 'WORKER_NO_TRADE: \$\{WORKER_NO_TRADE:-true\}' "$base_compose" \

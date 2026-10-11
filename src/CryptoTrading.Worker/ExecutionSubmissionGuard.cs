@@ -36,7 +36,8 @@ internal sealed class ExecutionSubmissionGuard(
     IBinanceSpotAccountClient account,
     IOptions<WorkerRuntimeOptions> options,
     ILogger<ExecutionSubmissionGuard> logger,
-    TimeProvider? timeProvider = null) : IExecutionSubmissionGuard
+    TimeProvider? timeProvider = null,
+    ICapitalReservationStore? capitalReservations = null) : IExecutionSubmissionGuard
 {
     private static readonly string[] SupportedQuoteAssets = ["USDT", "FDUSD", "USDC", "TUSD", "BUSD", "BTC", "ETH", "BNB", "BRL"];
 
@@ -182,6 +183,20 @@ internal sealed class ExecutionSubmissionGuard(
         {
             throw new ExecutionDispatchBlockedException("PRE_SUBMIT_RISK_REJECTED");
         }
+        if (policy.Policy.BudgetPolicy is { } budgetPolicy && command.Side == OrderSide.Buy)
+        {
+            await ValidateAndReserveOperatorBudgetAsync(
+                command,
+                message,
+                budgetPolicy,
+                quote,
+                positionQuantity * mid,
+                accounting.RealizedDailyLossNotional,
+                currentNotional,
+                measuredRisk.ExpectedSlippageBps,
+                freshCommissionRate is not null,
+                cancellationToken).ConfigureAwait(false);
+        }
         if (freshCommissionRate is { } rate)
         {
             ValidateFinalAvailableBalance(command, snapshot, rate, currentNotional);
@@ -312,6 +327,114 @@ internal sealed class ExecutionSubmissionGuard(
         if (free < requiredQuote)
         {
             throw new ExecutionDispatchBlockedException("FINAL_INSUFFICIENT_FREE_QUOTE_BALANCE");
+        }
+    }
+
+    private async Task ValidateAndReserveOperatorBudgetAsync(
+        SubmitOrderCommand command,
+        LeasedOutboxMessage message,
+        BudgetPolicy budgetPolicy,
+        string quoteAsset,
+        decimal openPositionsUsdt,
+        decimal realizedLossUsdt,
+        decimal candidateNotionalUsdt,
+        decimal expectedSlippageBps,
+        bool commitDurableReservation,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(command.Symbol.Value, budgetPolicy.AllowedSymbol, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ExecutionDispatchBlockedException(RiskReasonCodes.DisallowedSymbol);
+        }
+
+        BinanceBookTicker fxTicker;
+        try
+        {
+            fxTicker = await market.GetBookTickerAsync("USDTBRL", cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ExecutionDispatchBlockedException(RiskReasonCodes.FxQuoteUnavailable, exception);
+        }
+
+        var now = UtcNow;
+        if (fxTicker is null || fxTicker.BidPrice <= 0m || fxTicker.AskPrice <= 0m)
+        {
+            throw new ExecutionDispatchBlockedException(RiskReasonCodes.FxQuoteUnavailable);
+        }
+
+        var fxQuote = new UsdtBrlFxQuote(
+            fxTicker.AskPrice,
+            fxTicker.ObservedAtUtc);
+
+        var activeReservations = capitalReservations is not null
+            ? await capitalReservations.ReadActiveReservationsAsync(options.Value.ReconciliationAccount, cancellationToken).ConfigureAwait(false)
+            : [];
+
+        var lockedUnknownUsdt = activeReservations
+            .Where(static item => item.Status == CapitalReservationStatus.LockedUnknown)
+            .Sum(static item => item.RemainingLockedAmount);
+        if (lockedUnknownUsdt > 0m || activeReservations.Any(static item => item.Status == CapitalReservationStatus.LockedUnknown))
+        {
+            throw new ExecutionDispatchBlockedException(RiskReasonCodes.LockedUnknownCapitalActive);
+        }
+
+        var otherReservedUsdt = activeReservations
+            .Where(item => !string.Equals(item.ClientOrderId, command.ClientOrderId.Value, StringComparison.Ordinal) &&
+                           string.Equals(item.Asset, quoteAsset, StringComparison.Ordinal))
+            .Sum(static item => item.RemainingLockedAmount);
+
+        var estimatedStopRiskUsdt = Math.Round(
+            candidateNotionalUsdt * (0.005m + budgetPolicy.RoundTripFeeAndReserveRate + expectedSlippageBps / 10_000m),
+            8,
+            MidpointRounding.ToPositiveInfinity);
+
+        var commitment = budgetPolicy.EvaluateCommitment(
+            new BudgetCommitmentRequest(
+                requestedOrderNotionalUsdt: candidateNotionalUsdt,
+                openPositionsNotionalUsdt: openPositionsUsdt,
+                openPositionsCount: openPositionsUsdt > 0m ? 1 : 0,
+                pendingOrdersReservedUsdt: otherReservedUsdt,
+                unknownOrdersLockedUsdt: lockedUnknownUsdt,
+                dailyRealizedLossUsdt: Math.Max(0m, realizedLossUsdt),
+                cumulativeNetRealizedLossUsdt: Math.Max(0m, realizedLossUsdt),
+                estimatedStopRiskUsdt: estimatedStopRiskUsdt,
+                evaluatedAtUtc: now,
+                fxQuote: fxQuote,
+                isPositionReduction: command.Side == OrderSide.Sell));
+
+        if (!commitment.IsApproved)
+        {
+            throw new ExecutionDispatchBlockedException(commitment.ReasonCode);
+        }
+
+        if (commitDurableReservation && capitalReservations is not null)
+        {
+            var fencingToken = Math.Max(1L, message.Attempts);
+            var reservationResult = await capitalReservations.TryReserveCapitalAsync(
+                new CapitalReservationRequest(
+                    reservationId: $"res:{command.ClientOrderId.Value}",
+                    accountId: options.Value.ReconciliationAccount,
+                    symbol: command.Symbol.Value,
+                    clientOrderId: command.ClientOrderId.Value,
+                    asset: quoteAsset,
+                    requestedAmount: commitment.RequiredOrderReservationUsdt,
+                    effectiveBudgetCeilingAmount: commitment.EffectiveBudgetCeilingUsdt,
+                    openPositionsCommittedAmount: openPositionsUsdt,
+                    realizedLossesAmount: Math.Max(0m, realizedLossUsdt),
+                    workerInstanceId: string.IsNullOrWhiteSpace(message.LeaseOwner) ? "worker" : message.LeaseOwner,
+                    fencingToken: fencingToken,
+                    occurredAtUtc: now),
+                cancellationToken).ConfigureAwait(false);
+
+            if (!reservationResult.Succeeded)
+            {
+                throw new ExecutionDispatchBlockedException(reservationResult.ReasonCode);
+            }
         }
     }
 

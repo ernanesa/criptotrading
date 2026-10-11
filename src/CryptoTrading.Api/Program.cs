@@ -51,7 +51,7 @@ builder.Services.AddSingleton<IOperationalControl>(_ =>
 builder.Services.AddHealthChecks()
     .AddCheck<TradingReadinessCheck>("trading-configuration", tags: ["ready"])
     .AddCheck<PersistenceConfigurationReadinessCheck>("persistence-configuration", tags: ["ready"]);
-var postgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"];
+var postgresConnectionString = PostgresConnectionConfiguration.Resolve(builder.Configuration);
 if (!string.IsNullOrWhiteSpace(postgresConnectionString))
 {
     _ = builder.Services.AddPostgresTradingStore(postgresConnectionString);
@@ -813,6 +813,41 @@ localDiagnostics.MapGet("/operational/allocations", async (
 })
 .WithName("GetStrategyAllocations");
 
+var deliveredAlerts = new System.Collections.Concurrent.ConcurrentQueue<object>();
+localDiagnostics.MapPost("/operational/alerts/webhook", async (
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    using var document = await JsonDocument.ParseAsync(httpContext.Request.Body, cancellationToken: cancellationToken).ConfigureAwait(false);
+    var receivedAtUtc = DateTimeOffset.UtcNow;
+    var summary = new
+    {
+        receivedAtUtc,
+        owner = "Ernane",
+        payload = document.RootElement.Clone()
+    };
+    deliveredAlerts.Enqueue(summary);
+    while (deliveredAlerts.Count > 100 && deliveredAlerts.TryDequeue(out _))
+    {
+    }
+
+    return Results.Ok(new
+    {
+        status = "accepted",
+        receivedAtUtc,
+        owner = "Ernane"
+    });
+})
+.WithName("ReceiveOperationalAlertWebhook");
+
+localDiagnostics.MapGet("/operational/alerts/delivered", () =>
+    Results.Ok(new
+    {
+        count = deliveredAlerts.Count,
+        alerts = deliveredAlerts.ToArray()
+    }))
+.WithName("GetDeliveredOperationalAlerts");
+
 app.Run();
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The health check is created through dependency injection.")]
@@ -839,14 +874,51 @@ internal sealed class TradingReadinessCheck(IOptions<TradingOptions> options) : 
 }
 
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The health check is created through dependency injection.")]
-internal sealed class PersistenceConfigurationReadinessCheck(IConfiguration configuration) : IHealthCheck
+internal sealed class PersistenceConfigurationReadinessCheck(
+    IConfiguration configuration,
+    IServiceProvider services) : IHealthCheck
 {
-    public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        var configured = !string.IsNullOrWhiteSpace(configuration["POSTGRES_CONNECTION_STRING"]);
-        return Task.FromResult(configured
-            ? HealthCheckResult.Healthy("A PostgreSQL connection string is configured; connectivity and migration checks run separately.")
-            : HealthCheckResult.Unhealthy("PostgreSQL configuration is required for readiness."));
+        string resolved;
+        try
+        {
+            resolved = PostgresConnectionConfiguration.Resolve(configuration);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return HealthCheckResult.Unhealthy($"PostgreSQL configuration is invalid: {ex.Message}");
+        }
+
+        if (string.IsNullOrWhiteSpace(resolved))
+        {
+            return HealthCheckResult.Unhealthy("PostgreSQL configuration is required for readiness.");
+        }
+
+        var currentStateStore = services.GetService<IOperationalControlCurrentStateStore>();
+        if (currentStateStore is not null)
+        {
+            try
+            {
+                var latest = await currentStateStore.ReadLatestOperationalControlAuditEventAsync(cancellationToken).ConfigureAwait(false);
+                if (latest is not null && latest.To is OperationalMode.SafeMode or OperationalMode.KillSwitch)
+                {
+                    return HealthCheckResult.Degraded(
+                        $"Operational state is {latest.To} (NO_TRADE financial readiness vs process liveness). Reason: {latest.Reason}");
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return HealthCheckResult.Degraded(
+                    $"Unable to verify operational financial readiness state: {ex.Message}");
+            }
+        }
+
+        return HealthCheckResult.Healthy("A PostgreSQL connection string is configured and operational financial readiness checks passed.");
     }
 }
 

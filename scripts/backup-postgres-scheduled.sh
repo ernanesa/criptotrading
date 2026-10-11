@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # install a scheduler, restore data, remove old artifacts, or encrypt data.
 
 usage() {
-    echo 'Usage: backup-postgres-scheduled.sh --container NAME --database NAME --user NAME --output-directory ABSOLUTE_PATH --min-free-bytes BYTES --lock-file ABSOLUTE_PATH --attempt-timeout-seconds SECONDS --retry-count COUNT --retry-delay-seconds SECONDS --encryption-policy local-private-unencrypted-approved --retention-policy no-automatic-deletion-approved' >&2
+    echo 'Usage: backup-postgres-scheduled.sh --container NAME --database NAME --user NAME --output-directory ABSOLUTE_PATH --min-free-bytes BYTES --lock-file ABSOLUTE_PATH --attempt-timeout-seconds SECONDS --retry-count COUNT --retry-delay-seconds SECONDS --encryption-policy local-private-unencrypted-approved|aes256-keyfile [--encryption-key-file ABSOLUTE_PATH] --retention-policy no-automatic-deletion-approved|prune-after-verified-7d [--retention-days DAYS]' >&2
 }
 
 container=''
@@ -18,13 +18,15 @@ attempt_timeout_seconds=''
 retry_count=''
 retry_delay_seconds=''
 encryption_policy=''
+encryption_key_file="${POSTGRES_BACKUP_KEY_FILE:-}"
 retention_policy=''
+retention_days="${BACKUP_RETENTION_DAYS:-7}"
 repo_root="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 backup_script="$repo_root/scripts/backup-postgres.sh"
 
 while (($#)); do
     case "$1" in
-        --container|--database|--user|--output-directory|--min-free-bytes|--lock-file|--attempt-timeout-seconds|--retry-count|--retry-delay-seconds|--encryption-policy|--retention-policy)
+        --container|--database|--user|--output-directory|--min-free-bytes|--lock-file|--attempt-timeout-seconds|--retry-count|--retry-delay-seconds|--encryption-policy|--encryption-key-file|--retention-policy|--retention-days)
             (($# >= 2)) || { usage; exit 2; }
             case "$1" in
                 --container) container="$2" ;;
@@ -37,7 +39,9 @@ while (($#)); do
                 --retry-count) retry_count="$2" ;;
                 --retry-delay-seconds) retry_delay_seconds="$2" ;;
                 --encryption-policy) encryption_policy="$2" ;;
+                --encryption-key-file) encryption_key_file="$2" ;;
                 --retention-policy) retention_policy="$2" ;;
+                --retention-days) retention_days="$2" ;;
             esac
             shift 2
             ;;
@@ -48,15 +52,19 @@ done
 
 [[ -x "$backup_script" ]] || { echo 'Verified backup command is unavailable.' >&2; exit 2; }
 [[ -n "$container" && -n "$database" && -n "$database_user" && -n "$output_directory" && -n "$min_free_bytes" && -n "$lock_file" && -n "$attempt_timeout_seconds" && -n "$retry_count" && -n "$retry_delay_seconds" ]] || { usage; exit 2; }
-[[ "$output_directory" == /* && "$lock_file" == /* && "$min_free_bytes" =~ ^[0-9]+$ && "$attempt_timeout_seconds" =~ ^[1-9][0-9]*$ && "$retry_count" =~ ^[0-9]+$ && "$retry_delay_seconds" =~ ^[0-9]+$ ]] || { usage; exit 2; }
+[[ "$output_directory" == /* && "$lock_file" == /* && "$min_free_bytes" =~ ^[0-9]+$ && "$attempt_timeout_seconds" =~ ^[1-9][0-9]*$ && "$retry_count" =~ ^[0-9]+$ && "$retry_delay_seconds" =~ ^[0-9]+$ && "$retention_days" =~ ^[1-9][0-9]*$ ]] || { usage; exit 2; }
 (( attempt_timeout_seconds <= 86400 && retry_count <= 10 && retry_delay_seconds <= 3600 )) || { usage; exit 2; }
 
-if [[ "$encryption_policy" != 'local-private-unencrypted-approved' ]]; then
-    echo 'A human-approved local encryption policy is required; this command does not implement encryption.' >&2
+if [[ "$encryption_policy" != 'local-private-unencrypted-approved' && "$encryption_policy" != 'aes256-keyfile' ]]; then
+    echo 'A human-approved local encryption policy is required; use local-private-unencrypted-approved or aes256-keyfile.' >&2
     exit 2
 fi
-if [[ "$retention_policy" != 'no-automatic-deletion-approved' ]]; then
-    echo 'A human-approved retention policy is required; this command never deletes backup artifacts.' >&2
+if [[ "$encryption_policy" == 'aes256-keyfile' && -z "$encryption_key_file" ]]; then
+    echo 'An explicit --encryption-key-file is required when --encryption-policy aes256-keyfile is selected.' >&2
+    exit 2
+fi
+if [[ "$retention_policy" != 'no-automatic-deletion-approved' && "$retention_policy" != 'prune-after-verified-7d' ]]; then
+    echo 'A human-approved retention policy is required; use no-automatic-deletion-approved or prune-after-verified-7d.' >&2
     exit 2
 fi
 
@@ -117,8 +125,8 @@ max_attempts=$((retry_count + 1))
 log_event() {
     local status="$1" attempt="$2" reason="$3"
     local elapsed_seconds=$(( $(date +%s) - started_epoch ))
-    printf '{"timestamp":"%s","status":"%s","runId":"%s","attempt":%s,"maxAttempts":%s,"durationSeconds":%s,"reason":"%s"}\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$run_id" "$attempt" "$max_attempts" "$elapsed_seconds" "$reason" >&2
+    printf '{"timestamp":"%s","status":"%s","runId":"%s","attempt":%s,"maxAttempts":%s,"durationSeconds":%s,"rpoTargetSeconds":900,"rtoTargetSeconds":600,"encryptionPolicy":"%s","retentionPolicy":"%s","reason":"%s"}\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" "$run_id" "$attempt" "$max_attempts" "$elapsed_seconds" "$encryption_policy" "$retention_policy" "$reason" >&2
 }
 
 exec {lock_fd}<>"$lock_file"
@@ -131,10 +139,16 @@ attempt_log="$(mktemp "$output_directory/.backup-postgres-scheduled.XXXXXX")"
 chmod 0600 "$attempt_log"
 trap 'rm -f -- "$attempt_log"' EXIT
 
+extra_args=(--encryption-policy "$encryption_policy" --retention-policy "$retention_policy" --retention-days "$retention_days")
+if [[ -n "$encryption_key_file" ]]; then
+    extra_args+=(--encryption-key-file "$encryption_key_file")
+fi
+
 for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     if timeout --signal=TERM --kill-after=5 "$attempt_timeout_seconds" "$backup_script" \
         --container "$container" --database "$database" --user "$database_user" \
         --output-directory "$output_directory" --min-free-bytes "$min_free_bytes" \
+        "${extra_args[@]}" \
         > /dev/null 2>"$attempt_log"; then
         log_event 'succeeded' "$attempt" 'none'
         exit 0

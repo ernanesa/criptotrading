@@ -2,9 +2,9 @@
 
 **Status:** Draft bloqueado; não autoriza ordens nem capital real.
 **Release/estratégia/config/RiskPolicy:** ainda não aprovadas; baseline Trend Following BTC/USDT.
-**Ambiente/conta/símbolo:** local / Binance Spot Testnet segregada / BTCUSDT (a confirmar)
-**Owner/aprovador:** pendente / pendente
-**Capital máximo e perda máxima:** não definidos; nenhum capital permitido neste snapshot.
+**Ambiente/conta/símbolo:** local / Binance Spot Testnet segregada / BTCUSDT
+**Owner/aprovador:** Ernane (Operator & Risk Owner) / pendente (Gate M3)
+**Capital máximo e parâmetros aprovados:** Teto de planejamento R$ 100,00 (conversão `USDTBRL <= 60s` com haircut de 2% e hard cap de 20,00 USDT; stop diário R$ 2,00; drawdown máximo R$ 5,00; risco por trade R$ 1,00; 1 posição Spot; reserva de taxas 10 bps + 25 bps; backup AES-256 a cada 15m com retenção 7d e fail-closed se disco < 2 GB ou < 10%); status Live estritamente **NO-GO** até signoff humano M3.
 
 ## Pré-condições bloqueantes
 

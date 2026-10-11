@@ -12,6 +12,23 @@ using Microsoft.Extensions.Options;
 using System.Text.Json;
 using CryptoTrading.Worker;
 
+if (args.Length > 0 && (string.Equals(args[0], "--health-probe", StringComparison.Ordinal) ||
+                        string.Equals(args[0], "--ready-probe", StringComparison.Ordinal)))
+{
+    var probePath = Environment.GetEnvironmentVariable("WORKER_PROBE_FILE_PATH") ?? "/tmp/cryptotrading-worker-probe.json";
+    var snapshot = await WorkerHealthProbe.ReadProbeSnapshotAsync(probePath).ConfigureAwait(false);
+    var result = string.Equals(args[0], "--ready-probe", StringComparison.Ordinal)
+        ? WorkerHealthProbe.EvaluateFinancialReadiness(snapshot, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(15))
+        : WorkerHealthProbe.EvaluateLiveness(snapshot, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(15));
+    Console.WriteLine(JsonSerializer.Serialize(new
+    {
+        status = result.Status.ToString(),
+        description = result.Description,
+        snapshot
+    }));
+    Environment.Exit(result.Status == Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy ? 1 : 0);
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
@@ -35,12 +52,14 @@ builder.Services.AddTradingConfiguration(builder.Configuration);
 // The worker's default PAPER/NO_TRADE mode does not require Binance credentials.
 // The authenticated account client is registered only when the explicit,
 // read-only reconciliation gate is enabled.
+var resolvedPostgresConnectionString = PostgresConnectionConfiguration.Resolve(builder.Configuration);
+
 builder.Services.AddOptions<WorkerRuntimeOptions>()
     .Configure(options =>
     {
         options.PersistenceEnabled = builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false);
         options.ApplyMigrations = builder.Configuration.GetValue("WORKER_APPLY_MIGRATIONS", false);
-        options.PostgresConnectionString = builder.Configuration["POSTGRES_CONNECTION_STRING"] ?? string.Empty;
+        options.PostgresConnectionString = resolvedPostgresConnectionString;
         options.ExecutionMode = builder.Configuration["WORKER_EXECUTION_MODE"] ?? "PAPER";
         options.NoTrade = builder.Configuration.GetValue("WORKER_NO_TRADE", true);
         options.TestnetExecutionAcknowledged = builder.Configuration.GetValue("WORKER_TESTNET_EXECUTION_ACKNOWLEDGED", false);
@@ -73,6 +92,9 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AlertWebhookUrl = builder.Configuration["WORKER_ALERT_WEBHOOK_URL"] ?? string.Empty;
         options.AlertWebhookAllowedHosts = builder.Configuration["WORKER_ALERT_WEBHOOK_ALLOWED_HOSTS"] ?? string.Empty;
         options.AlertWebhookTimeoutSeconds = builder.Configuration.GetValue("WORKER_ALERT_WEBHOOK_TIMEOUT_SECONDS", 5);
+        options.MinFreeDiskBytes = builder.Configuration.GetValue("WORKER_MIN_FREE_DISK_BYTES", 2_147_483_648L);
+        options.MinFreeDiskRatio = builder.Configuration.GetValue("WORKER_MIN_FREE_DISK_RATIO", 0.10m);
+        options.ProbeFilePath = builder.Configuration["WORKER_PROBE_FILE_PATH"] ?? "/tmp/cryptotrading-worker-probe.json";
     })
     .Validate(static options =>
     {
@@ -132,9 +154,11 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) ||
 }
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
-    _ = builder.Services.AddPostgresTradingStore(
-        builder.Configuration["POSTGRES_CONNECTION_STRING"]
-        ?? throw new InvalidOperationException("POSTGRES_CONNECTION_STRING is required when persistence is enabled."));
+    if (string.IsNullOrWhiteSpace(resolvedPostgresConnectionString))
+    {
+        throw new InvalidOperationException("POSTGRES_CONNECTION_STRING is required when persistence is enabled.");
+    }
+    _ = builder.Services.AddPostgresTradingStore(resolvedPostgresConnectionString);
     _ = builder.Services.AddSingleton<IRiskPolicyStore>(serviceProvider =>
         serviceProvider.GetRequiredService<PostgresTradingStore>());
     _ = builder.Services.AddSingleton<IAccountStreamEventStore>(serviceProvider =>
@@ -286,6 +310,20 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) &&
 {
     builder.Services.AddHostedService<ExpiredOrderCancellationHostedService>();
 }
+builder.Services.AddSingleton<DiskSpaceSafetyGuard>(serviceProvider =>
+{
+    var options = serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>().Value;
+    var opControl = serviceProvider.GetRequiredService<IOperationalControl>();
+    var logger = serviceProvider.GetRequiredService<ILogger<DiskSpaceSafetyGuard>>();
+    var targetPath = Path.GetDirectoryName(options.RuntimeAuditPath) ?? "/";
+    return new DiskSpaceSafetyGuard(
+        options.MinFreeDiskBytes,
+        options.MinFreeDiskRatio,
+        targetPath,
+        opControl,
+        logger);
+});
+
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();
 if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
 {
@@ -294,4 +332,4 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
 builder.Services.AddHostedService<ShadowDrillHostedService>();
 
 var host = builder.Build();
-host.Run();
+await host.RunAsync().ConfigureAwait(false);

@@ -58,6 +58,10 @@ check_loopback_ports "$observability_compose"
 
 reject_pattern '^[[:space:]]*BINANCE_API_(KEY|SECRET)([[:space:]]*:|[[:space:]]*=)' "$base_compose" \
     'base Compose contains a Binance API key or secret assignment.'
+reject_pattern '^[[:space:]]*POSTGRES_PASSWORD([[:space:]]*:|[[:space:]]*=)' "$base_compose" \
+    'base Compose contains a POSTGRES_PASSWORD assignment.'
+reject_pattern '^[[:space:]]*POSTGRES_CONNECTION_STRING([[:space:]]*:|[[:space:]]*=)' "$base_compose" \
+    'base Compose contains a POSTGRES_CONNECTION_STRING assignment.'
 
 require_pattern 'WORKER_EXECUTION_MODE: \$\{WORKER_EXECUTION_MODE:-PAPER\}' "$base_compose" \
     'Worker execution mode does not default to PAPER.'

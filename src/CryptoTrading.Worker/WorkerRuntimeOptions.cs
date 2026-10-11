@@ -99,6 +99,15 @@ public sealed class WorkerRuntimeOptions
 
     public int AlertWebhookTimeoutSeconds { get; set; } = 5;
 
+    /// <summary>Minimum free disk bytes required before latching to SafeMode (default 2 GB).</summary>
+    public long MinFreeDiskBytes { get; set; } = 2_147_483_648L;
+
+    /// <summary>Minimum free disk ratio (0.0 to 1.0) required before latching to SafeMode (default 10%).</summary>
+    public decimal MinFreeDiskRatio { get; set; } = 0.10m;
+
+    /// <summary>File path where the worker writes periodic JSON health/probe snapshots.</summary>
+    public string ProbeFilePath { get; set; } = "/tmp/cryptotrading-worker-probe.json";
+
     public void Validate()
     {
         var isPaper = string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase);
@@ -387,6 +396,24 @@ public sealed class WorkerRuntimeOptions
                 throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                     ["WORKER_ALERT_WEBHOOK_URL/ALLOWED_HOSTS configuration is unsafe or invalid."]);
             }
+        }
+
+        if (MinFreeDiskBytes <= 0)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_MIN_FREE_DISK_BYTES must be greater than zero."]);
+        }
+
+        if (MinFreeDiskRatio is <= 0m or >= 1m)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_MIN_FREE_DISK_RATIO must be strictly between 0 and 1."]);
+        }
+
+        if (string.IsNullOrWhiteSpace(ProbeFilePath))
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_PROBE_FILE_PATH cannot be empty."]);
         }
     }
 }

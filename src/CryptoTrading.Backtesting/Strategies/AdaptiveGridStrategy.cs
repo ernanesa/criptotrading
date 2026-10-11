@@ -162,15 +162,133 @@ public sealed record AdaptiveGridDecision(
 /// <summary>
 /// Pure Adaptive Grid evaluator. Manages geometric grid levels anchored to initial price,
 /// enforcing hard inventory caps and generating deterministic buy/sell level transitions.
+/// Implements IStatefulStrategy for fill-feedback-driven execution.
 /// </summary>
-public sealed class AdaptiveGridStrategy
+public sealed class AdaptiveGridStrategy : IStatefulStrategy
 {
+    private decimal? _anchorPrice;
+    private decimal _currentInventory;
+    private int _activeGridLevel;
+    private DateTimeOffset _lastTimestampUtc;
+
     public AdaptiveGridStrategy(AdaptiveGridParameters parameters)
     {
         Parameters = parameters ?? throw new ArgumentNullException(nameof(parameters));
     }
 
     public AdaptiveGridParameters Parameters { get; }
+
+    public decimal CurrentInventory => _currentInventory;
+
+    public int ActiveGridLevel => _activeGridLevel;
+
+    public decimal? AnchorPrice => _anchorPrice;
+
+    public StrategyExecutionSignal GenerateSignal(CloseBar bar, int barIndex)
+    {
+        ArgumentNullException.ThrowIfNull(bar);
+        if (_anchorPrice is null || barIndex == 0)
+        {
+            _anchorPrice = bar.ClosePrice.Value;
+            _activeGridLevel = 0;
+            _lastTimestampUtc = bar.CloseTimeUtc;
+            return new StrategyExecutionSignal(barIndex, StrategyExecutionAction.NoTrade, reasonCode: GridReason.Initialized.ToString());
+        }
+
+        var close = bar.ClosePrice.Value;
+        var anchor = _anchorPrice.Value;
+        var calculatedLevel = (int)Math.Floor((double)((close - anchor) / (anchor * Parameters.GridSpacingRate)));
+        calculatedLevel = Math.Clamp(calculatedLevel, -Parameters.MaxLevels, Parameters.MaxLevels);
+        _lastTimestampUtc = bar.CloseTimeUtc;
+
+        if (calculatedLevel < _activeGridLevel)
+        {
+            if (_currentInventory + Parameters.QuantityPerLevel <= Parameters.MaxInventoryQuantity)
+            {
+                _activeGridLevel = calculatedLevel;
+                return new StrategyExecutionSignal(
+                    barIndex,
+                    StrategyExecutionAction.BuyBaseQuantity,
+                    Parameters.QuantityPerLevel,
+                    reasonCode: GridReason.BuyLevelTriggered.ToString());
+            }
+
+            _activeGridLevel = calculatedLevel;
+            return new StrategyExecutionSignal(
+                barIndex,
+                StrategyExecutionAction.NoTrade,
+                reasonCode: GridReason.InventoryCapReached.ToString());
+        }
+
+        if (calculatedLevel > _activeGridLevel)
+        {
+            if (_currentInventory >= Parameters.QuantityPerLevel)
+            {
+                _activeGridLevel = calculatedLevel;
+                return new StrategyExecutionSignal(
+                    barIndex,
+                    StrategyExecutionAction.SellBaseQuantity,
+                    Parameters.QuantityPerLevel,
+                    reasonCode: GridReason.SellLevelTriggered.ToString());
+            }
+
+            _activeGridLevel = calculatedLevel;
+            return new StrategyExecutionSignal(
+                barIndex,
+                StrategyExecutionAction.NoTrade,
+                reasonCode: GridReason.InventoryDepleted.ToString());
+        }
+
+        return new StrategyExecutionSignal(
+            barIndex,
+            StrategyExecutionAction.NoTrade,
+            reasonCode: GridReason.BetweenLevels.ToString());
+    }
+
+    public void ApplyExecutionFeedback(StrategyExecutionFeedback feedback)
+    {
+        ArgumentNullException.ThrowIfNull(feedback);
+        _lastTimestampUtc = feedback.TimestampUtc;
+
+        if (feedback.ExecutedQuantity <= 0m)
+        {
+            return;
+        }
+
+        if (feedback.Action is StrategyExecutionAction.BuyBaseQuantity or StrategyExecutionAction.EnterLong)
+        {
+            _currentInventory = Math.Min(Parameters.MaxInventoryQuantity, _currentInventory + feedback.ExecutedQuantity);
+        }
+        else if (feedback.Action is StrategyExecutionAction.SellBaseQuantity or StrategyExecutionAction.ExitLong)
+        {
+            _currentInventory = Math.Max(0m, _currentInventory - feedback.ExecutedQuantity);
+        }
+    }
+
+    public StrategyStateSnapshot CaptureState() => new(
+        _lastTimestampUtc,
+        _currentInventory,
+        _activeGridLevel,
+        new Dictionary<string, string>
+        {
+            ["AnchorPrice"] = (_anchorPrice ?? 0m).ToString("G29", CultureInfo.InvariantCulture),
+            ["StrategyId"] = Parameters.StrategyId,
+            ["Version"] = Parameters.Version,
+        });
+
+    public void RestoreState(StrategyStateSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _currentInventory = snapshot.CurrentInventory;
+        _activeGridLevel = snapshot.ActiveLevel;
+        _lastTimestampUtc = snapshot.TimestampUtc;
+        if (snapshot.Metadata != null &&
+            snapshot.Metadata.TryGetValue("AnchorPrice", out var anchorText) &&
+            decimal.TryParse(anchorText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedAnchor))
+        {
+            _anchorPrice = parsedAnchor;
+        }
+    }
 
     public IReadOnlyList<AdaptiveGridDecision> Evaluate(IReadOnlyList<CloseBar> bars)
     {

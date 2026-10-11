@@ -28,6 +28,21 @@ public static class RiskReasonCodes
     public const string VolatilityLimit = "VOLATILITY_LIMIT";
     public const string LiquidityLimit = "LIQUIDITY_LIMIT";
     public const string RiskContextUnavailable = "RISK_CONTEXT_UNAVAILABLE";
+    public const string FxQuoteUnavailable = "FX_QUOTE_UNAVAILABLE";
+    public const string FxQuoteStale = "FX_QUOTE_STALE";
+    public const string BudgetCeilingExceeded = "BUDGET_CEILING_EXCEEDED";
+    public const string MaxOpenPositionsExceeded = "MAX_OPEN_POSITIONS_EXCEEDED";
+    public const string PerTradeRiskExceeded = "PER_TRADE_RISK_EXCEEDED";
+    public const string BelowMinimumOrderNotional = "BELOW_MINIMUM_ORDER_NOTIONAL";
+    public const string LockedUnknownCapitalActive = "LOCKED_UNKNOWN_CAPITAL_ACTIVE";
+    public const string DisallowedSymbol = "DISALLOWED_SYMBOL";
+    public const string MissingCapitalReservation = "MISSING_CAPITAL_RESERVATION";
+    public const string StaleWorkerFencingToken = "STALE_WORKER_FENCING_TOKEN";
+    public const string LiveExecutionUnauthorized = "LIVE_EXECUTION_UNAUTHORIZED";
+    public const string LiveTicketExpired = "LIVE_TICKET_EXPIRED";
+    public const string LiveTicketAlreadyUsed = "LIVE_TICKET_ALREADY_USED";
+    public const string LiveBoundaryRevoked = "LIVE_BOUNDARY_REVOKED";
+    public const string LiveCredentialsInvalid = "LIVE_CREDENTIALS_INVALID";
 }
 
 /// <summary>Immutable, versioned hard limits. Values are decimal quote-currency notional.</summary>
@@ -43,7 +58,8 @@ public sealed record RiskPolicy
         bool withdrawalsEnabled = false,
         decimal? maxSlippageBps = null,
         decimal? maxVolatilityBps = null,
-        decimal? minLiquidityNotional = null)
+        decimal? minLiquidityNotional = null,
+        BudgetPolicy? budgetPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
         if (version.Length > 100)
@@ -74,6 +90,7 @@ public sealed record RiskPolicy
         MaxSlippageBps = maxSlippageBps;
         MaxVolatilityBps = maxVolatilityBps;
         MinLiquidityNotional = minLiquidityNotional;
+        BudgetPolicy = budgetPolicy;
     }
 
     public string Version { get; }
@@ -100,6 +117,9 @@ public sealed record RiskPolicy
 
     /// <summary>Minimum available quote-currency liquidity, when configured.</summary>
     public decimal? MinLiquidityNotional { get; }
+
+    /// <summary>Optional operator BRL/USDT budget ceiling and FX safety contract.</summary>
+    public BudgetPolicy? BudgetPolicy { get; init; }
 
     private static void ValidatePositive(decimal value, string parameterName)
     {

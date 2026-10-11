@@ -72,6 +72,22 @@ Requisitos `SUPERSEDED` ficam preservados para auditoria, mas saem do retrieval 
 - registrar tokens de entrada/saída, cache hit, fontes recuperadas e custo estimado por tarefa;
 - Luna recebe packs limitados; modelos mais capazes recebem expansão de grafo somente para ambiguidade, arquitetura ou risco elevado.
 
+## Fronteira de tarefa e handoff compacto
+
+Cada tarefa começa com um context pack novo e mínimo, formado por:
+
+1. objetivo e restrições explícitas da última solicitação;
+2. decisões ativas e itens `SUPERSEDES` ainda relevantes;
+3. caminhos/IDs diretamente envolvidos e o commit-base;
+4. invariantes, comandos de validação e bloqueios conhecidos.
+
+Ao finalizar, o agente grava somente um handoff redigido com resultado, commit,
+arquivos, evidências, lacunas e próxima ação. Logs brutos, tentativas resolvidas
+e contexto conversacional não entram no pack seguinte. O índice preserva a
+proveniência para auditoria, mas o retrieval ativo exclui `SUPERSEDED` e fontes
+sem compatibilidade com o commit atual. Se uma tarefa mudar o escopo, a relação
+`SUPERSEDES` deve apontar para a decisão anterior e registrar o motivo.
+
 ## Confirmação contra o código atual
 
 Antes de qualquer recomendação de implementação, o agente deve:

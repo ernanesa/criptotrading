@@ -118,6 +118,14 @@ static object ToCompactStrategyResult(StrategyComparisonStrategyResult result) =
     state_sync_warning = result.FullPeriod.Metrics.HasSignalStateDivergence
         ? "At least one order signal was unfilled/rejected or partially filled; strategy internal position was not fed actual fills, so this result is not suitable for promotion."
         : null,
+    capacity_eligibility = result.CapacityEligibility is null ? null : new
+    {
+        is_eligible = result.CapacityEligibility.IsEligible,
+        exclusion_reason = result.CapacityEligibility.ExclusionReason,
+        total_budget_quote = result.CapacityEligibility.TotalBudgetQuote,
+        per_order_quote_notional = result.CapacityEligibility.PerOrderQuoteNotional,
+        minimum_order_notional_quote = result.CapacityEligibility.MinimumOrderNotionalQuote,
+    },
     rolling_windows = result.RollingWindows.Select(static window => new
     {
         window = window.Window.WindowNumber,

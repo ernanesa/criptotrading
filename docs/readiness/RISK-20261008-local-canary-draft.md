@@ -2,20 +2,22 @@
 
 **Status:** DRAFT / NO-GO. Este documento propõe limites para revisão; não é uma `RiskPolicy` executável, aprovação, autorização de ordem nem autorização de capital real.
 
-**As of:** 2026-10-08. **Base observada:** `62687c9285967a89ae99c74b7e36abf52605bdfe`; árvore de trabalho alterada e sem commit candidato congelado. **Owner / criador humano:** pendente. **Aprovador independente:** pendente. **Validade proposta:** 7 dias corridos após aprovação; a data UTC exata fica pendente até a aprovação. **Válida até:** PENDENTE. **Version:** PENDENTE. **SHA-256:** PENDENTE; hash canônico não calculado e nenhum valor é inventado para este rascunho.
+**As of:** 2026-10-11. **Base observada:** `c891d08131c318e35f8a688105434518c8e6e282`. **Owner / criador humano:** Ernane (Risk & Operations Owner). **Aprovador independente:** pendente (Gate M3). **Validade proposta:** 7 dias corridos após aprovação M3; a data UTC exata fica vinculada à assinatura humana final. **Válida até:** PENDENTE_M3. **Version:** 2026.10.11-m1. **SHA-256:** PENDENTE_M3 (Live permanece NO-GO).
 
-## Proposta de limites humanos
+## Parâmetros aprovados pelo operador (Ernane) para o motor de risco local (F03–F06)
 
-Capital informado para planejamento: **R$ 100**, sem transferência ou uso de capital real nesta etapa.
+Capital informado para planejamento: **R$ 100,00**, sem transferência ou uso de capital real nesta etapa (`NO-GO Live`).
 
-| Limite proposto | Valor e unidade | Janela / efeito | Estado |
+| Limite aprovado pelo operador | Valor e unidade | Janela / efeito | Estado |
 |---|---|---|---|
-| Perda realizada diária | R$ 2 (2% dos R$ 100 iniciais) | Dia UTC; bloquear novas entradas e acionar `SafeMode`/parada até revisão humana | Proposto; sem conversão executável para USDT |
-| Perda absoluta acumulada | R$ 5 (5% dos R$ 100 iniciais) | Acumulada desde o capital inicial; parada permanente até revisão humana, sem reset automático | Proposto; sem conversão executável para USDT |
-| Risco máximo por trade | R$ 1 (1% dos R$ 100 iniciais) | Por trade, incluindo taxas e slippage; perda deve ser limitada antes da entrada | Proposta opcional, **não suportada como campo explícito pelo `RiskPolicy` atual**; requer requisito, implementação e teste antes de servir como gate |
-| Posições Spot | 1 | Uma posição aberta no máximo; sem margem, empréstimo ou Futures | Proposto; bloqueia enquanto posição ou ordem desconhecida não estiver reconciliada |
+| Teto de capital comprometido + perdas | R$ 100,00 (convertido via `USDTBRL <= 60s` com haircut de 2% e hard-cap de 20,00 USDT) | `posições + pending + UNKNOWN + reserva de taxas + perda realizada líquida <= teto`; reuso permitido após encerramento de venda | Implementado em `BudgetPolicy` e `ICapitalReservationStore` |
+| Perda realizada diária (`MaxDailyLoss`) | R$ 2,00 (2% dos R$ 100 iniciais) | Dia UTC; bloquear novas entradas e acionar `SafeMode` até revisão humana | Aprovado pelo operador; convertido conservadoramente via `USDTBRL` |
+| Perda absoluta acumulada (`MaxDrawdown`) | R$ 5,00 (5% dos R$ 100 iniciais) | Acumulada desde o capital inicial; parada permanente (`SAFE_MODE_NO_TRADE`), sem reset automático | Aprovado pelo operador; convertido conservadoramente via `USDTBRL` |
+| Risco máximo por trade | R$ 1,00 (1% dos R$ 100 iniciais) | Por trade (distância de stop + taxas de entrada/saída 10 bps/lado + reserva 25 bps + slippage) | Implementado em `BudgetPolicy.MaxRiskPerTradeBrl` |
+| Posições Spot (`MaxOpenPositions`) | 1 (`BTCUSDT`) | Uma posição aberta no máximo; sem margem, empréstimo ou Futures | Implementado; bloqueia enquanto posição ou ordem `LockedUnknown` existir |
 | Retiradas | Desabilitadas | Todos os ambientes cobertos pela política | Obrigatório |
-| Símbolo candidato | `BTCUSDT` | Somente após validar filtros, liquidez, comissão e dados correntes | Candidato de estudo; ainda não aprovado |
+| Taxas e reserva (`Fee Tier`) | 10 bps (0,10%) por ordem + 25 bps de reserva técnica | Sem depender de desconto em BNB | Implementado |
+| Backup operacional e retenção | AES-256 (keyfile mode 0600, dir 0700), RPO 15m (900s), RTO <= 10m (600s), retenção 7 dias (`prune-after-verified-7d`) | Fail-closed se espaço livre em disco < 2 GB ou < 10% | Implementado em `backup-postgres.sh` e validado via drills |
 
 Os limites de R$ 2 e R$ 5 são limites de orçamento em BRL. O domínio `RiskPolicy` armazena perdas, exposição e notional na moeda quote do instrumento; portanto esses valores **não podem ser copiados como números em USDT**. Antes de qualquer ativação, registrar fonte verificável de BRL/USDT, par e direção usados, instante observado, idade máxima aprovada, tratamento de timestamps futuros, arredondamento conservador e hash da amostra. Usar saldo livre real da conta Spot Testnet e o snapshot de mercado correspondente. Se qualquer entrada estiver ausente, vencida, inconsistente ou insuficiente após fees e reserva, o resultado obrigatório é `NO_TRADE`.
 

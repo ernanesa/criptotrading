@@ -37,6 +37,22 @@ limitado a 24 horas. O lock deve ter exatamente o nome
 privado `0600` e uma execução concorrente falha de imediato.
 
 ```bash
+# Modo com criptografia AES-256 e retenção de 7 dias aprovada:
+bash scripts/backup-postgres-scheduled.sh \
+  --container <container-local> \
+  --database <database-local> \
+  --user <usuario-local> \
+  --output-directory "$HOME/cryptotrading-backups" \
+  --min-free-bytes 10737418240 \
+  --lock-file "$HOME/cryptotrading-backups/.backup-postgres-scheduled.lock" \
+  --attempt-timeout-seconds 900 \
+  --retry-count 2 \
+  --retry-delay-seconds 30 \
+  --encryption-policy aes256-keyfile \
+  --encryption-key-file "$HOME/.secrets/backup.key" \
+  --retention-policy prune-after-verified-7d
+
+# Modo unencrypted legível apenas localmente (legado/dev):
 bash scripts/backup-postgres-scheduled.sh \
   --container <container-local> \
   --database <database-local> \
@@ -51,36 +67,40 @@ bash scripts/backup-postgres-scheduled.sh \
   --retention-policy no-automatic-deletion-approved
 ```
 
-O evento final JSON contém somente timestamp, status, identificador de execução,
-tentativa, máximo de tentativas, duração e uma razão enumerada. Valores de
-container, banco, usuário, diretório e saída do processo filho não aparecem no
-evento. Os estados são `succeeded`, `retrying` e `failed`; as razões possíveis
-são `none`, `backup_command_failed`, `attempt_timed_out` e `lock_unavailable`.
-Os logs detalhados do filho ficam em arquivo temporário privado e são removidos
-ao encerrar a rotina.
+O evento final JSON contém timestamp, status, identificador de execução, tentativa,
+máximo de tentativas, duração, metas de `rpoTargetSeconds: 900` (15m) e
+`rtoTargetSeconds: 600` (10m), políticas ativas e razão enumerada. Valores de
+container, banco, usuário, diretório e chaves não aparecem no evento. Os estados são
+`succeeded`, `retrying` e `failed`; as razões possíveis são `none`,
+`backup_command_failed`, `attempt_timed_out` e `lock_unavailable`.
 
-## Decisões humanas obrigatórias
+## Políticas de criptografia e retenção
 
-O backup é plaintext dentro de um diretório local privado. Esta rotina não
-implementa criptografia e não aceita chaves. A opção
-`--encryption-policy local-private-unencrypted-approved` é uma confirmação
-explícita do responsável de que esta política local foi aprovada; ausência ou
-outro valor falha fechado. Para criptografia em repouso, gestão/rotação de
-chaves ou cópia offsite, defina e aprove uma política operacional separada e
-adicione uma implementação revisada antes de agendar backups.
+### Criptografia AES-256 (`aes256-keyfile`)
+Quando `--encryption-policy aes256-keyfile` é configurado:
+- `--encryption-key-file <caminho>` é obrigatório e deve apontar para arquivo regular não-simbólico, com permissões estritas `0600`, cujo diretório pai tenha modo `0700` e pertença ao `$UID` do usuário executor.
+- O backup lógico custom do PostgreSQL é primeiro verificado com `pg_restore --list`.
+- Em seguida, é criptografado com `openssl enc -aes-256-cbc -pbkdf2 -salt -pass "file:$encryption_key_file"`.
+- O dump em texto claro é removido imediatamente após a geração do artefato criptografado `backup.dump.enc`.
+- O manifesto `manifest.json` registra `encryptedSha256`, `dumpSha256` e `encryptionAlgorithm: "AES-256-CBC-PBKDF2"`.
+- Para descriptografar durante um restore:
+  ```bash
+  openssl enc -d -aes-256-cbc -pbkdf2 -salt -pass "file:<keyfile>" -in backup.dump.enc -out backup.dump
+  ```
 
-Não existe retenção automática: nenhum artefato é removido por esta rotina. A
-opção `--retention-policy no-automatic-deletion-approved` confirma essa decisão
-humana; ausência ou outro valor falha fechado. Não introduza exclusão de dumps
-sem uma política de retenção aprovada, requisitos de RPO/RTO e revisão de
-restauração.
+A opção alternativa `--encryption-policy local-private-unencrypted-approved` mantém o dump em formato custom unencrypted em diretório privado `0700`.
 
-O comando não substitui testes de restore. Antes de tratar o mecanismo como
-operacional, execute e retenha evidência de um drill autorizado e isolado com
-`bash scripts/test-postgres-backup-restore.sh`; esse drill não restaura o volume
-da aplicação. Escolha o scheduler, frequência, alertas, destino offsite,
-criptografia, retenção e procedimento de restauração somente por decisão humana
-registrada.
+### Retenção (`prune-after-verified-7d`)
+Quando `--retention-policy prune-after-verified-7d` é utilizado:
+- A remoção de artefatos antigos ocorre **apenas após** a publicação e verificação com sucesso do novo backup.
+- Diretórios de backup (`postgres-*`) no diretório de saída com idade superior a `${BACKUP_RETENTION_DAYS:-7}` dias são removidos.
+- A opção alternativa `--retention-policy no-automatic-deletion-approved` mantém todos os artefatos sem exclusão automática.
+
+O comando não substitui testes de restore. Execute periodicamente o drill isolado:
+```bash
+bash scripts/test-postgres-backup-restore.sh
+```
+O drill valida criptografia, integridade, detecção de corrupção, restauração determinística e asserta RTO <= 600s.
 
 ## Contrato offline
 

@@ -38,6 +38,65 @@ public sealed class OperationalApiEndpointsTests
     }
 
     [Fact]
+    public async Task GetHealthReadyReportsDegradedWhenOperationalModeIsSafeMode()
+    {
+        var events = new[]
+        {
+            new OperationalControlAuditEvent(
+                Guid.NewGuid(),
+                OperationalMode.Normal,
+                OperationalMode.SafeMode,
+                "worker",
+                "test-low-disk",
+                new IdempotencyKey("api-health-safe"),
+                DateTimeOffset.UtcNow,
+                null)
+        };
+        var store = new FakeOperationalControlAuditStore(events);
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IOperationalControlCurrentStateStore>(store);
+        }, postgresConnectionString: "Host=127.0.0.1;Port=5432;Database=cryptotrading;Username=cryptotrading;Password=secret");
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/health/ready", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        // Degraded health checks in ASP.NET Core return 200 OK by default
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var content = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("Degraded", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetHealthReadyReportsHealthyWhenOperationalModeIsNormal()
+    {
+        var events = new[]
+        {
+            new OperationalControlAuditEvent(
+                Guid.NewGuid(),
+                OperationalMode.SafeMode,
+                OperationalMode.Normal,
+                "worker",
+                "test-resumed",
+                new IdempotencyKey("api-health-normal"),
+                DateTimeOffset.UtcNow,
+                "approval-123")
+        };
+        var store = new FakeOperationalControlAuditStore(events);
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IOperationalControlCurrentStateStore>(store);
+        }, postgresConnectionString: "Host=127.0.0.1;Port=5432;Database=cryptotrading;Username=cryptotrading;Password=secret");
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/health/ready", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var content = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("Healthy", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetOperationalStatusFromLoopbackReturnsOkAndReadOnly()
     {
         var events = new[]
@@ -449,7 +508,8 @@ public sealed class OperationalApiEndpointsTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The caller disposes the created WebApplicationFactory.")]
     private static WebApplicationFactory<Program> CreateFactory(
         IPAddress remoteIp,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        string? postgresConnectionString = null)
     {
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
@@ -465,7 +525,7 @@ public sealed class OperationalApiEndpointsTests
                     ["BINANCE_API_SECRET"] = "test-api-secret",
                     ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
                     ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT",
-                    ["POSTGRES_CONNECTION_STRING"] = ""
+                    ["POSTGRES_CONNECTION_STRING"] = postgresConnectionString ?? ""
                 });
             });
 

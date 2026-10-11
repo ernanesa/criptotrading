@@ -113,6 +113,96 @@ public sealed class RiskPolicyTests
             new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.FromHours(-3)), DateTimeOffset.UtcNow));
     }
 
+    [Fact]
+    public void DefaultBrl100BudgetPolicyComputesEffectiveCeilingWithFxHaircutAndHardCap()
+    {
+        var now = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        var budget = BudgetPolicy.ApprovedMicroLiveDefault;
+
+        // At USDTBRL ask = 5.50 -> 100 / 5.50 * 0.98 = 17.81818181 USDT (< 20 USDT cap)
+        var fxQuoteNormal = new UsdtBrlFxQuote(5.50m, now.AddSeconds(-10));
+        var valuationNormal = budget.CalculateEffectiveCeiling(fxQuoteNormal, now);
+        Assert.True(valuationNormal.IsValid);
+        Assert.Equal(17.81818181m, valuationNormal.EffectiveBudgetCeilingUsdt);
+
+        // At USDTBRL ask = 4.50 -> 100 / 4.50 * 0.98 = 21.77 USDT -> capped at 20.00 USDT hard cap
+        var fxQuoteStrongBrl = new UsdtBrlFxQuote(4.50m, now.AddSeconds(-5));
+        var valuationCapped = budget.CalculateEffectiveCeiling(fxQuoteStrongBrl, now);
+        Assert.True(valuationCapped.IsValid);
+        Assert.Equal(20.00m, valuationCapped.EffectiveBudgetCeilingUsdt);
+    }
+
+    [Fact]
+    public void DefaultBrl100BudgetPolicyFailsClosedWhenUsdtBrlQuoteIsMissingOrStale()
+    {
+        var now = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        var budget = BudgetPolicy.ApprovedMicroLiveDefault;
+
+        var missing = budget.CalculateEffectiveCeiling(null, now);
+        Assert.False(missing.IsValid);
+        Assert.Equal(RiskReasonCodes.FxQuoteUnavailable, missing.ReasonCode);
+
+        var staleQuote = new UsdtBrlFxQuote(5.50m, now.AddSeconds(-61));
+        var stale = budget.CalculateEffectiveCeiling(staleQuote, now);
+        Assert.False(stale.IsValid);
+        Assert.Equal(RiskReasonCodes.FxQuoteStale, stale.ReasonCode);
+    }
+
+    [Fact]
+    public void DefaultBrl100BudgetPolicyEnforcesCommittedCapitalAndStickyLockedUnknownOrders()
+    {
+        var now = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+        var budget = BudgetPolicy.ApprovedMicroLiveDefault;
+        var fxQuote = new UsdtBrlFxQuote(4.90m, now.AddSeconds(-5)); // 20.00 USDT ceiling
+
+        // Within ceiling: 10 USDT candidate, 0 open, 0 pending, 0.05 USDT stop risk
+        var allowed = budget.EvaluateCommitment(
+            new BudgetCommitmentRequest(
+                requestedOrderNotionalUsdt: 10m,
+                openPositionsNotionalUsdt: 0m,
+                openPositionsCount: 0,
+                pendingOrdersReservedUsdt: 0m,
+                unknownOrdersLockedUsdt: 0m,
+                dailyRealizedLossUsdt: 0m,
+                cumulativeNetRealizedLossUsdt: 0m,
+                estimatedStopRiskUsdt: 0.05m,
+                evaluatedAtUtc: now,
+                fxQuote: fxQuote));
+        Assert.True(allowed.IsApproved);
+
+        // Exceeds ceiling when open + pending + candidate + fees > 20 USDT
+        var overBudget = budget.EvaluateCommitment(
+            new BudgetCommitmentRequest(
+                requestedOrderNotionalUsdt: 5m,
+                openPositionsNotionalUsdt: 0m,
+                openPositionsCount: 0,
+                pendingOrdersReservedUsdt: 16m,
+                unknownOrdersLockedUsdt: 0m,
+                dailyRealizedLossUsdt: 0m,
+                cumulativeNetRealizedLossUsdt: 0m,
+                estimatedStopRiskUsdt: 0.05m,
+                evaluatedAtUtc: now,
+                fxQuote: fxQuote));
+        Assert.False(overBudget.IsApproved);
+        Assert.Equal(RiskReasonCodes.BudgetCeilingExceeded, overBudget.ReasonCode);
+
+        // Any LockedUnknown order blocks new exposure immediately
+        var lockedUnknownBlocked = budget.EvaluateCommitment(
+            new BudgetCommitmentRequest(
+                requestedOrderNotionalUsdt: 5m,
+                openPositionsNotionalUsdt: 0m,
+                openPositionsCount: 0,
+                pendingOrdersReservedUsdt: 0m,
+                unknownOrdersLockedUsdt: 5m,
+                dailyRealizedLossUsdt: 0m,
+                cumulativeNetRealizedLossUsdt: 0m,
+                estimatedStopRiskUsdt: 0.05m,
+                evaluatedAtUtc: now,
+                fxQuote: fxQuote));
+        Assert.False(lockedUnknownBlocked.IsApproved);
+        Assert.Equal(RiskReasonCodes.LockedUnknownCapitalActive, lockedUnknownBlocked.ReasonCode);
+    }
+
     private static RiskEvaluationRequest Request(
         decimal requested,
         decimal current = 0m,
