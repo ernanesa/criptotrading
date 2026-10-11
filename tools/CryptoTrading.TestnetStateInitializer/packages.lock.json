@@ -140,6 +140,14 @@
           "Microsoft.Extensions.Diagnostics.HealthChecks": "[11.0.0-rc.1.26425.128, )",
           "Npgsql": "[10.0.0, )"
         }
+      },
+      "cryptotrading.reconciliation": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )",
+          "CryptoTrading.Exchange.Binance": "[1.0.0, )",
+          "CryptoTrading.Observability": "[1.0.0, )"
+        }
       }
     }
   }

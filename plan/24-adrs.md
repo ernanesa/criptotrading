@@ -21,39 +21,39 @@
 **Razão:** controle de recursos específicos, performance e ciclo de API. CCXT é referência, não core dependency.
 
 ## ADR-006 - Spot first
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** reduzir risco e complexidade. Futures adiciona liquidation, leverage, funding e margin.
 
 ## ADR-007 - Strategy cannot place orders
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** separação de responsabilidades e proteção central de capital.
 
 ## ADR-008 - PostgreSQL + Parquet + DuckDB
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** transactional reliability + formato analítico portátil + pesquisa eficiente sem cluster.
 
 ## ADR-009 - Docker multi-arch/provider agnostic
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** Docker Compose é o contrato do ambiente local, e imagens multi-arch evitam acoplamento ao hardware atual. Um hosting externo pode ser avaliado futuramente sem transformar qualquer provedor em requisito presente.
 
 ## ADR-010 - OpenTelemetry
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** traces/metrics/logs vendor-neutral e suporte .NET maduro.
 
 ## ADR-011 - No full Event Sourcing initially
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** journal crítico + state tables oferecem auditabilidade suficiente com menor complexidade.
 
 ## ADR-012 - Research before ML
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** baseline simples e validação rigorosa são necessários para provar valor incremental de modelos complexos.
 
 ## ADR-013 - No Timescale/Redis/Kafka by default
-**Status:** Accepted.  
+**Status:** Accepted.
 **Razão:** dependências adicionais só após métricas demonstrarem gargalo/caso de uso.
 
 ## ADR-014 - Two-week Sprints
-**Status:** Accepted initially.  
+**Status:** Accepted initially.
 **Razão:** adequado a desenvolvimento diário parcial; retrospectiva pode mudar a cadência.
 
 ## ADR-015 - R1.0 com uma única baseline

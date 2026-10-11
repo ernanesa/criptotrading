@@ -11,7 +11,8 @@ public sealed record StrategyComparisonStrategyResult(
     StrategyBacktestEvaluationResult FullPeriod,
     IReadOnlyList<StrategyComparisonWindowResult> RollingWindows,
     IReadOnlyList<StrategyMarketRegimeAttribution> MarketRegimeAttribution,
-    WalkForwardBenchmarkSummary AggregateBenchmarks);
+    WalkForwardBenchmarkSummary AggregateBenchmarks,
+    BudgetCapacityResult? CapacityEligibility = null);
 
 public enum StrategyMarketRegime
 {
@@ -160,6 +161,12 @@ public static class StrategyComparisonEvaluator
             signals,
             options);
         var rolling = EvaluateWindows(definition.StrategyId, fullPeriod, bars, windows, options);
+        var capacity = StrategyBudgetCapacityGate.Evaluate(
+            definition.StrategyId,
+            options.InitialCapital,
+            minimumOrderNotionalQuote: options.MinimumOrderNotionalQuote > 0m
+                ? options.MinimumOrderNotionalQuote
+                : StrategyBudgetCapacityGate.DefaultMinOrderNotionalUsdt);
         return new(
             definition.StrategyId,
             definition.StrategyVersion,
@@ -168,7 +175,8 @@ public static class StrategyComparisonEvaluator
             fullPeriod,
             rolling,
             CreateMarketRegimeAttribution(rolling),
-            BenchmarkComparisonEvaluator.AggregateOutOfSample(rolling));
+            BenchmarkComparisonEvaluator.AggregateOutOfSample(rolling),
+            capacity);
     }
 
     private static List<StrategyComparisonWindowResult> EvaluateWindows(

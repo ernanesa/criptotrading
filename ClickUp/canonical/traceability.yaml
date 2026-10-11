@@ -305,6 +305,49 @@ epics:
       - id: US-183
         status: deferred_option
         requirements: [RF-172]
+  - id: E-19
+    scope: active
+    stories:
+      - id: US-190
+        task: TASK-US-190-01
+        requirements: [RF-140, RF-170, RF-171]
+        acceptance: [AC-AUTONOMY-02]
+      - id: US-191
+        task: TASK-US-191-01
+        requirements: [RF-011, RF-014, RF-015, RF-151]
+        acceptance: [AC-AUTONOMY-03]
+      - id: US-192
+        task: TASK-US-192-01
+        requirements: [RF-050, RF-150, RF-155, RF-168]
+        acceptance: [AC-AUTONOMY-04]
+      - id: US-193
+        task: TASK-US-193-01
+        requirements: [RF-070, RF-071, RF-072, RF-073, RF-074, RF-075, RF-076, RF-077, RF-078, RF-079, RF-080, RF-166, RF-180, RF-181, RF-182]
+        acceptance: [AC-AUTONOMY-05, AC-FEE-01]
+      - id: US-194
+        task: TASK-US-194-01
+        requirements: [RF-032, RF-033, RF-034, RF-035, RF-036, RF-037, RF-038, RF-039, RF-040, RF-041, RF-042, RF-043]
+        acceptance: [AC-AUTONOMY-06]
+      - id: US-195
+        task: TASK-US-195-01
+        requirements: [RF-030, RF-031, RF-040, RF-041, RF-042, RF-170, RF-171]
+        acceptance: [AC-AUTONOMY-07]
+      - id: US-196
+        task: TASK-US-196-01
+        requirements: [RF-036, RF-037, RF-038, RF-039, RF-167, RF-181, RF-183]
+        acceptance: [AC-AUTONOMY-08, AC-FEE-01]
+      - id: US-197
+        task: TASK-US-197-01
+        requirements: [RF-145, RF-146, RF-147, RF-148, RF-170, RF-171]
+        acceptance: [AC-AUTONOMY-09]
+      - id: US-198
+        task: TASK-US-198-01
+        requirements: [RF-040, RF-041, RF-042, RF-141, RNF-040, RNF-041, RNF-042, RNF-043, RNF-044]
+        acceptance: [AC-AUTONOMY-10]
+      - id: US-199
+        task: TASK-US-199-01
+        requirements: [RF-150, RF-161, RF-162, RF-163, RF-170, RF-171]
+        acceptance: [AC-AUTONOMY-11]
 
 coverage_policy:
   every_backlog_epic_must_be_listed: true

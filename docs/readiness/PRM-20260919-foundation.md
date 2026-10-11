@@ -2,8 +2,9 @@
 
 **Candidato:** fundação local CryptoTrading / baseline Trend Following BTC/USDT
 **De → para:** implementação local → Paper (somente simulação)
-**Owner/revisor/aprovador:** Codex / pendente / pendente
-**Decisão:** **No-Go para Shadow, Canary e Live; Paper local permitido para desenvolvimento**
+**Owner/revisor/aprovador:** Ernane (Operator & Risk Owner) / pendente / pendente (Gate M3)
+**Decisão:** **No-Go para Shadow, Canary e Live; Paper local permitido para desenvolvimento (Live status estritamente NO-GO até signoff humano M3)**
+**Parâmetros aprovados pelo operador Ernane:** Planejamento de R$ 100,00; conversão USDTBRL <= 60s com haircut de 2%; hard cap de 20,00 USDT; 1 posição Spot; perda diária máxima R$ 2,00; drawdown máximo R$ 5,00; risco máximo por trade R$ 1,00; reserva de taxas 10 bps + 25 bps; backup operacional AES-256 a cada 15m (retenção 7d, fail-closed se disco livre < 2 GB ou < 10%).
 **Válida até:** 2026-09-19 (snapshot; expira ao mudar código, configuração, RiskPolicy ou dados)
 **Commit de referência:** `29291c1`
 

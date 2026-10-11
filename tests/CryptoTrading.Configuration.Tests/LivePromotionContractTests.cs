@@ -109,6 +109,88 @@ public sealed class LivePromotionContractTests
         Assert.Equal("FORK_AUTHORIZATION_UNSUPPORTED", Validate(forkAuthorized, rsa, CreateContext()).FailureCode);
     }
 
+    [Fact]
+    public void LiveExecutionBoundaryGuardDefaultsToNoTradeAndRejectsCredentialReuseOrUnsignedTickets()
+    {
+        using var rsa = RSA.Create(2048);
+        var signedManifest = Sign(rsa, CreateManifest());
+        var manifestValidation = Validate(signedManifest, rsa, CreateContext());
+        var manifestHash = Convert.ToHexString(SHA256.HashData(signedManifest.Json));
+        var validCredentials = new LiveExecutionCredentialBoundary(
+            TargetEnvironment: "LIVE",
+            LiveKeyFingerprintSha256: "1111111111111111111111111111111111111111111111111111111111111111",
+            TestnetKeyFingerprintSha256: "2222222222222222222222222222222222222222222222222222222222222222",
+            PaperKeyFingerprintSha256: "3333333333333333333333333333333333333333333333333333333333333333",
+            WithdrawalsPermitted: false,
+            MarginOrFuturesPermitted: false,
+            IpWhitelistEnforced: true);
+        var ticket = new LiveActionAuthorizationTicket(
+            TicketId: "ticket-001",
+            PromotionManifestSha256: manifestHash,
+            Symbol: "BTCUSDT",
+            ActionType: "SPOT_ORDER_SUBMIT",
+            MaxOrderNotionalUsdt: 15m,
+            NotBeforeUtc: Now.AddMinutes(-1),
+            ExpiresAtUtc: Now.AddMinutes(5),
+            OperatorId: "Ernane",
+            ApproverId: "independent-approver");
+        var ticketBytes = JsonSerializer.SerializeToUtf8Bytes(ticket, JsonOptions);
+        var ticketSignature = rsa.SignData(ticketBytes, HashAlgorithmName.SHA256, RSASignaturePadding.Pss);
+
+        // 1. Default gate disabled -> NO_TRADE
+        var defaultDecision = LiveExecutionBoundaryGuard.Evaluate(
+            liveExecutionGateEnabled: false,
+            manifestValidation,
+            signedManifest.Json,
+            validCredentials,
+            ticketBytes,
+            ticketSignature,
+            rsa.ExportSubjectPublicKeyInfoPem(),
+            "BTCUSDT",
+            10m,
+            20m,
+            Now);
+        Assert.False(defaultDecision.IsAuthorized);
+        Assert.Equal("NO_TRADE", defaultDecision.Mode);
+        Assert.Equal("LIVE_GATE_DISABLED_DEFAULT_NO_TRADE", defaultDecision.ReasonCode);
+
+        // 2. Testnet credential reuse -> NO_TRADE
+        var reusedTestnetCreds = validCredentials with
+        {
+            TestnetKeyFingerprintSha256 = validCredentials.LiveKeyFingerprintSha256,
+        };
+        var reusedDecision = LiveExecutionBoundaryGuard.Evaluate(
+            liveExecutionGateEnabled: true,
+            manifestValidation,
+            signedManifest.Json,
+            reusedTestnetCreds,
+            ticketBytes,
+            ticketSignature,
+            rsa.ExportSubjectPublicKeyInfoPem(),
+            "BTCUSDT",
+            10m,
+            20m,
+            Now);
+        Assert.False(reusedDecision.IsAuthorized);
+        Assert.Equal("CREDENTIAL_ISOLATION_VIOLATION_TESTNET_REUSE", reusedDecision.ReasonCode);
+
+        // 3. Valid isolated credentials + valid signed manifest + valid signed ticket within 20 USDT ceiling -> Authorized
+        var authorized = LiveExecutionBoundaryGuard.Evaluate(
+            liveExecutionGateEnabled: true,
+            manifestValidation,
+            signedManifest.Json,
+            validCredentials,
+            ticketBytes,
+            ticketSignature,
+            rsa.ExportSubjectPublicKeyInfoPem(),
+            "BTCUSDT",
+            10m,
+            20m,
+            Now);
+        Assert.True(authorized.IsAuthorized);
+        Assert.Equal("LIVE_AUTHORIZED", authorized.Mode);
+    }
+
     private static LivePromotionManifest CreateManifest() => new(
         ManifestVersion: 1,
         Environment: LivePromotionContractValidator.RequiredEnvironment,

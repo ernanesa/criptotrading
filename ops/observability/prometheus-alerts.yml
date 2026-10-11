@@ -22,3 +22,24 @@ groups:
           severity: warning
         annotations:
           summary: No worker heartbeat was observed.
+      - alert: CryptoTradingBackupStaleOrFailed
+        expr: (time() - cryptotrading_backup_last_success_timestamp_seconds) > 900 or cryptotrading_backup_last_run_failed > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL scheduled backup exceeded 15-minute RPO window or failed.
+      - alert: CryptoTradingLowDiskSpace
+        expr: cryptotrading_disk_free_bytes < 2147483648 or cryptotrading_disk_free_ratio < 0.10
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Host disk free space fell below 2 GB or 10% fail-closed threshold.
+      - alert: CryptoTradingSafeModeActivated
+        expr: sum(cryptotrading_safemode_active) > 0 or sum(increase(cryptotrading_safemode_transitions_total[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: SafeMode activation observed.

@@ -27,24 +27,31 @@ fi
 worker_assembly="$repo_root/src/CryptoTrading.Worker/bin/Release/net11.0/CryptoTrading.Worker.dll"
 [[ -f "$worker_assembly" ]] || { echo 'Worker Release assembly is required; run dotnet build before this startup harness.' >&2; exit 2; }
 
-compose=(docker compose --project-name "$compose_project" --file "$repo_root/compose.yaml")
+compose=(docker compose --env-file /dev/null --project-name "$compose_project" --file "$repo_root/compose.yaml")
 worker_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-worker-startup.XXXXXX")"
 restart_log="$(mktemp "${TMPDIR:-/tmp}/cryptotrading-worker-restart.XXXXXX")"
 worker_directory="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-worker-host.XXXXXX")"
+secrets_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-pg-secrets-$$.XXXXXX")"
 cleanup() {
     rm -f -- "$worker_log" "$restart_log"
     rm -rf -- "$worker_directory"
+    rm -rf -- "$secrets_dir"
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-export POSTGRES_DB="$postgres_db" POSTGRES_USER="$postgres_user" POSTGRES_PASSWORD="$password"
+chmod 0700 "$secrets_dir"
+printf '%s' "$password" > "$secrets_dir/postgres_password"
+chmod 0600 "$secrets_dir/postgres_password"
+
+export POSTGRES_DB="$postgres_db" POSTGRES_USER="$postgres_user"
 export POSTGRES_PORT="$postgres_port" POSTGRES_VOLUME_NAME="$volume_name"
+export POSTGRES_SECRETS_DIRECTORY="$secrets_dir"
 # This harness starts PostgreSQL only; it never starts API/Web.
 export API_INTERNAL_ACCESS_TOKEN_SOURCE="${API_INTERNAL_ACCESS_TOKEN_SOURCE:-/dev/null}"
 "${compose[@]}" up -d postgres >/dev/null
 for attempt in {1..30}; do
-    if "${compose[@]}" exec -T postgres pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then
+    if "${compose[@]}" exec -T postgres pg_isready -h 127.0.0.1 -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then
         break
     fi
     (( attempt == 30 )) && { echo 'PostgreSQL did not become ready.' >&2; exit 1; }

@@ -322,8 +322,8 @@ epics:
         acceptance: [AC-AUTONOMY-04]
       - id: US-193
         task: TASK-US-193-01
-        requirements: [RF-070, RF-071, RF-072, RF-073, RF-074, RF-075, RF-076, RF-077, RF-078, RF-079, RF-080, RF-166]
-        acceptance: [AC-AUTONOMY-05]
+        requirements: [RF-070, RF-071, RF-072, RF-073, RF-074, RF-075, RF-076, RF-077, RF-078, RF-079, RF-080, RF-166, RF-180, RF-181, RF-182]
+        acceptance: [AC-AUTONOMY-05, AC-FEE-01]
       - id: US-194
         task: TASK-US-194-01
         requirements: [RF-032, RF-033, RF-034, RF-035, RF-036, RF-037, RF-038, RF-039, RF-040, RF-041, RF-042, RF-043]
@@ -334,8 +334,8 @@ epics:
         acceptance: [AC-AUTONOMY-07]
       - id: US-196
         task: TASK-US-196-01
-        requirements: [RF-036, RF-037, RF-038, RF-039, RF-167]
-        acceptance: [AC-AUTONOMY-08]
+        requirements: [RF-036, RF-037, RF-038, RF-039, RF-167, RF-181, RF-183]
+        acceptance: [AC-AUTONOMY-08, AC-FEE-01]
       - id: US-197
         task: TASK-US-197-01
         requirements: [RF-145, RF-146, RF-147, RF-148, RF-170, RF-171]

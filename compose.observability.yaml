@@ -23,6 +23,14 @@ services:
       - "127.0.0.1:${OTEL_HEALTH_PORT:-13133}:13133"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 50
     logging: &json-logs
       driver: json-file
       options:
@@ -44,6 +52,11 @@ services:
       - "127.0.0.1:${LOKI_PORT:-3100}:3100"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 50
     logging: *json-logs
 
   prometheus:
@@ -58,6 +71,11 @@ services:
       - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 50
     logging: *json-logs
 
   alertmanager:
@@ -73,6 +91,11 @@ services:
       - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 50
     logging: *json-logs
 
   grafana:
@@ -90,6 +113,11 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 50
     logging: *json-logs
 
   tempo:
@@ -104,6 +132,15 @@ services:
       - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 50
     logging: *json-logs
 
 networks:

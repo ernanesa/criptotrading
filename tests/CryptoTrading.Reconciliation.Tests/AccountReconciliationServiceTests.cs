@@ -576,4 +576,72 @@ public sealed class AccountReconciliationServiceTests
         public Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceClockSnapshot(1, TimeSpan.Zero, true));
     }
+
+    [Fact]
+    public async Task LockedBalanceMatchingActiveCapitalReservationReconcilesCleanly()
+    {
+        var control = CreateControl();
+        var sink = new InMemoryReconciliationEventSink();
+        var lockedReader = new FakeLockedBalanceReader(
+            new Dictionary<string, LocalLockedBalanceExpectation>(StringComparer.Ordinal)
+            {
+                ["USDT"] = new("USDT", ExpectedLockedAmount: 12.50m, HasLockedUnknownReservation: false),
+            });
+        var service = new AccountReconciliationService(
+            new FakeSnapshotProvider(new ReconciliationSnapshot(Now, [new ReconciliationBalance("USDT", 7.50m, 12.50m)], [])),
+            new FakeBalanceReader(new Dictionary<string, decimal> { ["USDT"] = 20.00m }),
+            new NoKnownTradesReader(),
+            sink,
+            control,
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
+            new FixedTimeProvider(Now),
+            lockedBalanceReader: lockedReader);
+
+        var result = await service.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsHealthy);
+        Assert.IsType<BalanceReconciled>(Assert.Single(result.Events));
+        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task LockedBalanceDriftOrLockedUnknownReservationEntersSafeMode()
+    {
+        var control = CreateControl();
+        var sink = new InMemoryReconciliationEventSink();
+        var lockedReader = new FakeLockedBalanceReader(
+            new Dictionary<string, LocalLockedBalanceExpectation>(StringComparer.Ordinal)
+            {
+                ["USDT"] = new("USDT", ExpectedLockedAmount: 10.00m, HasLockedUnknownReservation: true),
+            });
+        var service = new AccountReconciliationService(
+            new FakeSnapshotProvider(new ReconciliationSnapshot(Now, [new ReconciliationBalance("USDT", 10.00m, 10.00m)], [])),
+            new FakeBalanceReader(new Dictionary<string, decimal> { ["USDT"] = 20.00m }),
+            new NoKnownTradesReader(),
+            sink,
+            control,
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
+            new FixedTimeProvider(Now),
+            lockedBalanceReader: lockedReader);
+
+        var result = await service.ReconcileAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsHealthy);
+        var mismatch = Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
+        Assert.Equal("LOCKED_UNKNOWN_CAPITAL_UNRESOLVED", mismatch.ReasonCode);
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    private sealed class FakeLockedBalanceReader(
+        IReadOnlyDictionary<string, LocalLockedBalanceExpectation> expectations) : ILocalLockedBalanceReader
+    {
+        public Task<LocalLockedBalanceExpectation> GetLockedExpectationAsync(
+            AccountId account,
+            string asset,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(
+                expectations.TryGetValue(asset, out var expectation)
+                    ? expectation
+                    : new LocalLockedBalanceExpectation(asset, 0m, false));
+    }
 }

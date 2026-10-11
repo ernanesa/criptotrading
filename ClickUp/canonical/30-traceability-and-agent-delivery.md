@@ -34,6 +34,20 @@ O revisor independente recebe fontes canônicas e não o parecer do primeiro rev
 
 Nenhum agente publica, altera risco/credenciais ou executa integração externa como consequência implícita de uma revisão.
 
+## Contrato de contexto dos agentes
+
+O agente executor recebe um envelope compacto por tarefa: `objective`,
+`constraints`, `allowed_paths`, `non_goals`, `invariants`, `base_commit`,
+`validation_commands` e `known_conflicts`. Ao concluir, devolve `commit`,
+`files_changed`, `validation_results`, `residual_risks`, `assumptions` e
+`next_action`. O consolidator recarrega os arquivos atuais antes de mesclar;
+nenhum resumo é considerado evidência suficiente.
+
+Entre tarefas, o contexto ativo é reiniciado a partir desse handoff. Decisões
+substituídas permanecem no histórico com `SUPERSEDES`, mas são excluídas do
+prompt e do RAG ativo. O RAG pode localizar fontes por IDs, hashes e caminhos,
+mas nunca autoriza ordens, risco, credenciais ou alterações externas.
+
 ## Validator e evidência
 
 O manifesto canônico é `traceability.yaml` e segue `templates/traceability-manifest.yaml`; intervalos como `US-001..012` não são referências válidas. O validator deve detectar:
@@ -49,6 +63,13 @@ O manifesto canônico é `traceability.yaml` e segue `templates/traceability-man
 - dependências cíclicas;
 - artefato crítico obrigatório ausente ou incompleto;
 - gate com threshold/período sem `RiskPolicy`, `PromotionReadinessMatrix` ou `CanaryPlan` vinculado.
+
+O primeiro validator executável está em `scripts/validate-traceability.sh` e é
+executado na quality gate. Ele valida, sem dependências externas, schema v2,
+IDs explícitos de epic/story/task, duplicatas, intervalos implícitos, tasks
+presentes no backlog e referências AC/RF/RNF presentes nas fontes canônicas.
+Validações de estado `Ready/Done`, ciclos, evidência de runtime e aprovação
+humana continuam gates semânticos separados e não são inferidas pelo script.
 
 Um item só pode ser Done com AC, boundary alterado ou motivo explícito de não aplicabilidade, teste/comando, resultado observado, revisão, documentação/migração e risco residual/rollback.
 

@@ -165,6 +165,11 @@ public sealed record RiskPolicyDocument
             NullableDecimal(policy.MinLiquidityNotional),
             CanonicalUtcTicks(effectiveFromUtc).ToString(CultureInfo.InvariantCulture),
             CanonicalUtcTicks(expiresAtUtc).ToString(CultureInfo.InvariantCulture));
+        if (policy.BudgetPolicy is not null)
+        {
+            canonical = string.Concat(canonical, "|", policy.BudgetPolicy.ToCanonicalComponent());
+        }
+
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 

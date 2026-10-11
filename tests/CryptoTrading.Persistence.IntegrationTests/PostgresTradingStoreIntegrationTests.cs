@@ -798,7 +798,10 @@ public sealed class PostgresTradingStoreIntegrationTests
 
         var eventId = Guid.NewGuid();
         var correlationId = Guid.NewGuid();
-        var occurredAtUtc = DateTimeOffset.UtcNow;
+        // timestamptz stores microseconds; the immutable envelope retains all
+        // original .NET ticks. Replay must compare the indexed timestamp using
+        // database precision without weakening the original payload digest.
+        var occurredAtUtc = new DateTimeOffset(2026, 10, 11, 0, 0, 0, TimeSpan.Zero).AddTicks(7);
         var payload = JsonSerializer.Serialize(new
         {
             schemaVersion = (short)1,
@@ -836,6 +839,25 @@ public sealed class PostgresTradingStoreIntegrationTests
         };
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             restartedProcess.AppendReconciliationEventAsync(conflictingRecord, cancellationToken: TestContext.Current.CancellationToken));
+
+        var changedTimestamp = occurredAtUtc.AddTicks(1);
+        var changedTimestampPayload = JsonSerializer.Serialize(new
+        {
+            schemaVersion = (short)1,
+            eventType = "BalanceReconciled",
+            eventId,
+            correlationId,
+            occurredAtUtc = changedTimestamp,
+            data = new { asset = "USDT", delta = 0m },
+        });
+        var timestampCollision = eventRecord with
+        {
+            OccurredAtUtc = changedTimestamp,
+            PayloadJson = changedTimestampPayload,
+            PayloadSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(changedTimestampPayload))),
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restartedProcess.AppendReconciliationEventAsync(timestampCollision, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -1012,6 +1034,109 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.True(File.Exists(bundle.ArtifactPath));
         Assert.True(File.Exists(bundle.ManifestPath));
         Assert.Contains("\"promotion_authorized\":false", bundle.ManifestJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CapitalReservationEnforcesAtomicCeilingFencingAndStickyLockedUnknownAcrossPostgres()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        var accountId = "spot-res-" + Guid.NewGuid().ToString("N")[..12];
+        var now = DateTimeOffset.UtcNow;
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var first = await store.TryReserveCapitalAsync(
+            new CapitalReservationRequest(
+                reservationId: $"res-1-{accountId}",
+                accountId: accountId,
+                symbol: "BTCUSDT",
+                clientOrderId: $"ord-1-{accountId}",
+                asset: "USDT",
+                requestedAmount: 12.00m,
+                effectiveBudgetCeilingAmount: 20.00m,
+                openPositionsCommittedAmount: 0m,
+                realizedLossesAmount: 0m,
+                workerInstanceId: "worker-primary",
+                fencingToken: 10L,
+                occurredAtUtc: now),
+            TestContext.Current.CancellationToken);
+        Assert.True(first.Succeeded);
+        Assert.Equal(12.00m, first.TotalActiveReservedAmount);
+
+        var overCeiling = await store.TryReserveCapitalAsync(
+            new CapitalReservationRequest(
+                reservationId: $"res-2-{accountId}",
+                accountId: accountId,
+                symbol: "BTCUSDT",
+                clientOrderId: $"ord-2-{accountId}",
+                asset: "USDT",
+                requestedAmount: 9.00m,
+                effectiveBudgetCeilingAmount: 20.00m,
+                openPositionsCommittedAmount: 0m,
+                realizedLossesAmount: 0m,
+                workerInstanceId: "worker-primary",
+                fencingToken: 10L,
+                occurredAtUtc: now),
+            TestContext.Current.CancellationToken);
+        Assert.False(overCeiling.Succeeded);
+        Assert.Equal("BUDGET_CEILING_EXCEEDED", overCeiling.ReasonCode);
+
+        var staleFence = await store.TryReserveCapitalAsync(
+            new CapitalReservationRequest(
+                reservationId: $"res-stale-{accountId}",
+                accountId: accountId,
+                symbol: "BTCUSDT",
+                clientOrderId: $"ord-stale-{accountId}",
+                asset: "USDT",
+                requestedAmount: 1.00m,
+                effectiveBudgetCeilingAmount: 20.00m,
+                openPositionsCommittedAmount: 0m,
+                realizedLossesAmount: 0m,
+                workerInstanceId: "worker-stale",
+                fencingToken: 9L,
+                occurredAtUtc: now),
+            TestContext.Current.CancellationToken);
+        Assert.False(staleFence.Succeeded);
+        Assert.Equal("STALE_WORKER_FENCING_TOKEN", staleFence.ReasonCode);
+
+        var lockedUnknown = await store.TransitionReservationAsync(
+            $"ord-1-{accountId}",
+            CapitalReservationStatus.LockedUnknown,
+            0m,
+            "worker-primary",
+            10L,
+            now.AddSeconds(1),
+            "EXCHANGE_SUBMIT_TIMEOUT",
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CapitalReservationStatus.LockedUnknown, lockedUnknown.Status);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.TransitionReservationAsync(
+                $"ord-1-{accountId}",
+                CapitalReservationStatus.Released,
+                0m,
+                "worker-primary",
+                10L,
+                now.AddSeconds(2),
+                "TTL_EXPIRED",
+                TestContext.Current.CancellationToken));
+
+        var reconciled = await store.ReconcileLockedUnknownAsync(
+            $"ord-1-{accountId}",
+            CapitalReservationStatus.Released,
+            0m,
+            "reconcile-corr-1",
+            now.AddSeconds(3),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CapitalReservationStatus.Released, reconciled.Status);
+        Assert.Empty(await store.ReadActiveReservationsAsync(accountId, TestContext.Current.CancellationToken));
     }
 
     private sealed class TemporaryDirectory : IDisposable

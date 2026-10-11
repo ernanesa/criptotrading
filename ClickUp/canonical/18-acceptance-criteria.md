@@ -164,6 +164,65 @@ Todo PBI deve atender DoD e seus critérios específicos. Para código live, acc
 
 **Given** uma iniciativa AWS futura explicitamente aprovada, **when** qualquer recurso pago puder ser criado, **then** eligibility/account plan/region/pricing, budget baixo, TTL, owner, estimativa e teardown estão aprovados; sem essa aprovação, nenhum recurso ou credencial AWS faz parte do ambiente.
 
+## AC-AUTONOMY-02 Lifecycle e readiness
+
+**Given** processo iniciado, dependências configuradas e conta conhecida, **when** ocorre startup, reconnect, falha transitória ou KillSwitch, **then** a máquina persistida percorre os estados permitidos, bloqueia entradas fora de `Ready`, registra motivo/versionamento e nunca sai automaticamente de `KillSwitch`.
+
+## AC-AUTONOMY-03 Market-data acionável
+
+**Given** stream público com snapshot/deltas e candles, **when** houver gap, duplicata, atraso ou clock drift, **then** o pipeline ordena/deduplica, rejeita o snapshot inválido, reaquece e não publica contexto acionável até a freshness mínima.
+
+## AC-AUTONOMY-04 Ciclo baseline idempotente
+
+**Given** snapshot BTCUSDT válido e candle fechado, **when** o trigger é processado uma ou várias vezes, **then** estratégia, target, risco e outbox são persistidos na mesma decisão determinística, e retries reutilizam `DecisionId`.
+
+## AC-AUTONOMY-05 Risk obrigatório
+
+**Given** execução Testnet habilitada, **when** RiskPolicy está ausente, expirada, incompatível ou qualquer guard está unhealthy, **then** startup falha seguro ou o ciclo retorna rejeição/SafeMode, sem aumentar target nem enviar ordem.
+
+## AC-AUTONOMY-06 OMS e projeções
+
+**Given** uma ordem autorizada e eventos REST/user-data duplicados ou fora de ordem, **when** a projeção é atualizada, **then** o OMS não regride, não gera overfill, mantém ledger idempotente e o outbox aguarda resultado externo durável.
+
+## AC-AUTONOMY-07 User stream e reconciliação
+
+**Given** `NO_TRADE=false` em Testnet, **when** startup, reconnect, intervalo, gap ou submit ambíguo ocorre, **then** account stream e reconciliation permanecem habilitados, mismatch entra em SafeMode e não há gates mutuamente incompatíveis.
+
+## AC-AUTONOMY-08 Planner determinístico
+
+**Given** target autorizado, preço/depth recentes e filtros exchangeInfo, **when** houver partial fill, timeout ou custo fora do limite, **then** passive limit é padrão, somente o residual é planejado, e cancel/replan usa attempt determinístico ou retorna `NO_TRADE`.
+
+## AC-AUTONOMY-09 Self-healing fail-safe
+
+**Given** stream, exchange, DB, fila, relógio ou estratégia falhando, **when** o supervisor classifica o incidente, **then** aplica retry/breaker somente onde permitido, entra em SafeMode quando necessário e preserva OMS/reconciliação.
+
+## AC-AUTONOMY-10 Prova de autonomia
+
+**Given** qualquer ciclo ou falha, **when** auditoria/operador consulta os dados, **then** encontra cadeia completa por `DecisionId`, versões, motivos, métricas, transições, evidência e intervenção, sem expor segredo.
+
+## AC-AUTONOMY-11 Promotion ladder A2
+
+**Given** uma fase A2 concluída, **when** os gates da próxima fase são avaliados, **then** só há promoção com critérios objetivos, evidence bundle, aprovação requerida, capability correta e rollback testado.
+
+## AC-FEE-01 Comissão efetiva e custo líquido
+
+**Given** uma decisão Spot Testnet com símbolo, lado e tática de execução definidos,
+**when** o runtime prepara o sizing e o custo esperado,
+**then** consulta uma tabela de comissão autenticada e vigente para o símbolo,
+seleciona a taxa aplicável (maker/taker e buyer/seller conforme o caso), registra
+fonte/timestamp/hash/validade e aplica uma reserva conservadora que não presume
+desconto BNB, rebate ou comissão especial sem evidência habilitante.
+
+**Given** a tabela está ausente, stale, incompleta, inconsistente ou o ativo da
+comissão não pode ser valorado,
+**when** o ciclo tenta criar nova exposição,
+**then** retorna `NO_TRADE`/`SafeMode`, não envia a ordem e registra o reason code.
+
+**Given** um fill contém comissão efetiva,
+**when** a contabilidade registra o evento,
+**then** preserva quantidade, ativo, valuation source/time, order/trade IDs e
+compara estimativa versus realizado para PnL líquido e execution-drift.
+
 ## Critério para release canary
 
 - todos os ACs críticos vinculados explicitamente na `PromotionReadinessMatrix`;

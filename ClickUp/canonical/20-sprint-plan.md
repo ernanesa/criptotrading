@@ -26,6 +26,10 @@ Sprints de 2 semanas. Como o projeto será desenvolvido um pouco por dia, cada S
 | S17 | Backup/restore, chaos e shadow soak |
 | S18 | Canary readiness review e CanaryPlan; sem capital |
 | S19+ | Canary observation, fixes e gradual promotion somente após aprovação explícita |
+| S20 | E-19 lifecycle/readiness, gates de RiskPolicy e compatibilidade account stream/reconciliation |
+| S21 | E-19 market-data acionável, baseline AutonomyCycle e persist-before-submit |
+| S22 | E-19 OMS/projeções, user stream, reconciliação e execution planner |
+| S23 | E-19 self-healing, observabilidade, chaos/soak e A2 promotion ladder |
 
 AWS, Oracle/VPS, Momentum/Breakout, Mean Reversion/Grid, Regime Detection e multi-strategy não possuem Sprint reservado antes do R1.0. Cloud/hosting só poderá ser planejado como iniciativa separada após decisão explícita; não é consequência automática de o runtime local ficar pronto.
 
@@ -41,6 +45,7 @@ Cada Sprint deve listar explicitamente US, `TASK-US-XXX-NN`, AC, teste/comando e
 | S10–S12 | US-050, US-051, US-052, US-053, US-054, US-055, US-060 e US-061 |
 | S13–S17 | US-073, US-080, US-081, US-082, US-091, US-093, US-094, US-100, US-101, US-102, US-103, US-110, US-111, US-112, US-113, US-114, US-181 e US-182 |
 | S18+ | US-092, US-130, US-131, US-132, US-133 e US-134, somente com matriz de evidências e aprovação explícita |
+| S20–S23 | US-190…US-199, AC-AUTONOMY-02…11; cada fase bloqueia a seguinte até validação observada |
 
 ## Sprint Planning policy
 

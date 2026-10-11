@@ -46,11 +46,12 @@ public sealed class PersistenceMigrationsTests
  "030_reconciliation_known_trade_composite_identity.down.sql", "030_reconciliation_known_trade_composite_identity.up.sql",
  "031_reconciliation_events.down.sql", "031_reconciliation_events.up.sql",
  "032_open_order_exchange_update_time.down.sql", "032_open_order_exchange_update_time.up.sql",
+ "033_capital_reservations.down.sql", "033_capital_reservations.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-    ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029", "030", "030", "031", "031", "032", "032"],
+    ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029", "030", "030", "031", "031", "032", "032", "033", "033"],
             migrations.Select(static migration => migration.Version));
     }
 
@@ -204,5 +205,83 @@ public sealed class PersistenceMigrationsTests
         Assert.Contains("reconciliation_events", upMigrations[30].Sql, StringComparison.Ordinal);
         Assert.Contains("append_only", upMigrations[30].Sql, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("exchange_updated_at", upMigrations[31].Sql, StringComparison.Ordinal);
+        Assert.Contains("capital_reservations", upMigrations[32].Sql, StringComparison.Ordinal);
+        Assert.Contains("capital_reservation_fences", upMigrations[32].Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ConcurrentCapitalReservationsNeverExceedEffectiveCeilingAndStickyLockedUnknownRequiresReconciliation()
+    {
+        var store = new InMemoryCapitalReservationStore();
+        var now = new DateTimeOffset(2026, 10, 11, 12, 0, 0, TimeSpan.Zero);
+
+        // 10 concurrent reservation requests of 6.00 USDT against a 20.00 USDT ceiling -> at most 3 can succeed (18.00 <= 20.00)
+        var tasks = Enumerable.Range(1, 10).Select(index =>
+            store.TryReserveCapitalAsync(
+                new CapitalReservationRequest(
+                    reservationId: $"res-{index}",
+                    accountId: "spot-main",
+                    symbol: "BTCUSDT",
+                    clientOrderId: $"order-{index}",
+                    asset: "USDT",
+                    requestedAmount: 6.00m,
+                    effectiveBudgetCeilingAmount: 20.00m,
+                    openPositionsCommittedAmount: 0m,
+                    realizedLossesAmount: 0m,
+                    workerInstanceId: "worker-1",
+                    fencingToken: 10L,
+                    occurredAtUtc: now),
+                TestContext.Current.CancellationToken));
+
+        var results = await Task.WhenAll(tasks);
+        Assert.Equal(3, results.Count(static r => r.Succeeded));
+        Assert.Equal(7, results.Count(static r => !r.Succeeded && r.ReasonCode == "BUDGET_CEILING_EXCEEDED"));
+
+        var active = await store.ReadActiveReservationsAsync("spot-main", TestContext.Current.CancellationToken);
+        Assert.Equal(18.00m, active.Sum(static item => item.RemainingLockedAmount));
+
+        // Stale fencing token (token 9 < 10) is rejected
+        var staleAttempt = await store.TryReserveCapitalAsync(
+            new CapitalReservationRequest(
+                "res-stale", "spot-main", "BTCUSDT", "order-stale", "USDT",
+                1.00m, 20.00m, 0m, 0m, "worker-old", 9L, now),
+            TestContext.Current.CancellationToken);
+        Assert.False(staleAttempt.Succeeded);
+        Assert.Equal("STALE_WORKER_FENCING_TOKEN", staleAttempt.ReasonCode);
+
+        // Transition first reservation to LockedUnknown
+        var firstOrderId = active[0].ClientOrderId;
+        var lockedUnknown = await store.TransitionReservationAsync(
+            firstOrderId,
+            CapitalReservationStatus.LockedUnknown,
+            0m,
+            "worker-1",
+            10L,
+            now.AddSeconds(5),
+            "EXCHANGE_TIMEOUT",
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CapitalReservationStatus.LockedUnknown, lockedUnknown.Status);
+
+        // Normal transition cannot release LockedUnknown without reconciliation
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.TransitionReservationAsync(
+                firstOrderId,
+                CapitalReservationStatus.Released,
+                0m,
+                "worker-1",
+                10L,
+                now.AddSeconds(10),
+                "TTL_EXPIRED",
+                TestContext.Current.CancellationToken));
+
+        // Authoritative reconciliation resolves LockedUnknown
+        var reconciled = await store.ReconcileLockedUnknownAsync(
+            firstOrderId,
+            CapitalReservationStatus.Released,
+            0m,
+            "corr-reconcile-01",
+            now.AddSeconds(15),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(CapitalReservationStatus.Released, reconciled.Status);
     }
 }

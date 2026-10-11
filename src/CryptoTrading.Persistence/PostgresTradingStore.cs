@@ -505,7 +505,7 @@ public sealed record ExperimentGovernanceSnapshot(
 /// PostgreSQL adapter for the durable journal, ledger projection and outbox.
 /// Every mutating operation owns one transaction and uses parameterized SQL.
 /// </summary>
-public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, IReconciliationEventStore, ILocalOpenOrderStore, IAccountStreamOrderProjectionStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, IAsyncDisposable
+public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecutionFeeStore, IExecutionSubmissionContextStore, IOrderCancellationStore, IRuntimeStateStore, IExecutionAttributionReportStore, IOrderLifecycleStore, IAutonomyCheckpointStore, IAutonomyDecisionCommitStore, IRiskPolicyStore, IAccountStreamEventStore, IReconciliationEventStore, ILocalOpenOrderStore, IAccountStreamOrderProjectionStore, IExecutionAccountingStore, IAutonomyRiskContextStore, IOperationalControlAuditStore, IExperimentGovernanceStore, ICapitalReservationStore, IAsyncDisposable
 {
     private const string MigrationLockKey = "cryptotrading:persistence:migrations";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1829,13 +1829,14 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         }
 
         await using var existingCommand = new NpgsqlCommand(
-            "SELECT correlation_id, occurred_at, event_type, schema_version, payload_sha256 " +
+            "SELECT correlation_id, occurred_at = @occurred_at, event_type, schema_version, payload_sha256 " +
             "FROM trading.reconciliation_events WHERE event_id = @event_id;", connection);
         existingCommand.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, record.EventId));
+        existingCommand.Parameters.Add(Parameter("occurred_at", NpgsqlDbType.TimestampTz, record.OccurredAtUtc.UtcDateTime));
         await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
             reader.GetGuid(0) != record.CorrelationId ||
-            new DateTimeOffset(reader.GetDateTime(1), TimeSpan.Zero) != record.OccurredAtUtc ||
+            !reader.GetBoolean(1) ||
             !string.Equals(reader.GetString(2), record.EventType.Trim(), StringComparison.Ordinal) ||
             reader.GetInt16(3) != record.SchemaVersion ||
             !string.Equals(reader.GetString(4).Trim(), record.PayloadSha256, StringComparison.OrdinalIgnoreCase))
@@ -3780,6 +3781,559 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         return (bool)(await ExecuteScalarAsync(connection, transaction, sql, parameters, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The existence query returned no value."));
     }
+
+    public async Task<CapitalReservationResult> TryReserveCapitalAsync(
+        CapitalReservationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+
+        await using (var fenceCheck = new NpgsqlCommand(
+            "SELECT worker_instance_id, fencing_token FROM trading.capital_reservation_fences WHERE account_id = @account_id FOR UPDATE;",
+            connection,
+            transaction))
+        {
+            fenceCheck.Parameters.Add(Parameter("account_id", NpgsqlDbType.Text, request.AccountId));
+            await using var fenceReader = await fenceCheck.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await fenceReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var currentWorker = fenceReader.GetString(0);
+                var currentToken = fenceReader.GetInt64(1);
+                if (request.FenceToken < currentToken ||
+                    (request.FenceToken == currentToken &&
+                     !string.Equals(request.WorkerInstanceId, currentWorker, StringComparison.Ordinal)))
+                {
+                    await fenceReader.CloseAsync().ConfigureAwait(false);
+                    var currentActive = await SumActiveReservedCapitalAsync(connection, transaction, request.AccountId, request.Asset, cancellationToken).ConfigureAwait(false);
+                    await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+                    return new CapitalReservationResult(false, null, currentActive, "STALE_WORKER_FENCING_TOKEN");
+                }
+            }
+        }
+
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.capital_reservation_fences (account_id, worker_instance_id, fencing_token, updated_at)
+            VALUES (@account_id, @worker_instance_id, @fencing_token, @updated_at)
+            ON CONFLICT (account_id) DO UPDATE
+            SET worker_instance_id = EXCLUDED.worker_instance_id,
+                fencing_token = EXCLUDED.fencing_token,
+                updated_at = EXCLUDED.updated_at;
+            """,
+            [
+                Parameter("account_id", NpgsqlDbType.Text, request.AccountId),
+                Parameter("worker_instance_id", NpgsqlDbType.Text, request.WorkerInstanceId),
+                Parameter("fencing_token", NpgsqlDbType.Bigint, request.FenceToken),
+                Parameter("updated_at", NpgsqlDbType.TimestampTz, request.OccurredAtUtc.UtcDateTime),
+            ],
+            cancellationToken).ConfigureAwait(false);
+
+        var existing = await ReadCapitalReservationByClientOrderIdAsync(connection, transaction, request.ClientOrderId, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            if (!string.Equals(existing.ReservationId, request.ReservationId, StringComparison.Ordinal) ||
+                !string.Equals(existing.AccountId, request.AccountId, StringComparison.Ordinal) ||
+                !string.Equals(existing.Symbol, request.Symbol, StringComparison.Ordinal) ||
+                !string.Equals(existing.Asset, request.Asset, StringComparison.Ordinal) ||
+                existing.ReservedAmount != request.RequestedAmount)
+            {
+                throw new InvalidOperationException("Capital reservation clientOrderId is already associated with different parameters.");
+            }
+
+            var currentActive = await SumActiveReservedCapitalAsync(connection, transaction, request.AccountId, request.Asset, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new CapitalReservationResult(true, existing, currentActive, "IDEMPOTENT_REPLAY");
+        }
+
+        var activeReserved = await SumActiveReservedCapitalAsync(connection, transaction, request.AccountId, request.Asset, cancellationToken).ConfigureAwait(false);
+        var hasLockedUnknown = await HasLockedUnknownReservationsAsync(connection, transaction, request.AccountId, request.Asset, cancellationToken).ConfigureAwait(false);
+        if (hasLockedUnknown)
+        {
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            return new CapitalReservationResult(false, null, activeReserved, "LOCKED_UNKNOWN_CAPITAL_ACTIVE");
+        }
+
+        var projectedCommitted = request.OpenPositionsCommittedAmount
+            + activeReserved
+            + request.RequestedAmount
+            + request.NewOrderFeeReserveAmount
+            + request.RealizedLossesAmount;
+
+        if (projectedCommitted > request.EffectiveBudgetCeilingAmount)
+        {
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            return new CapitalReservationResult(false, null, activeReserved, "BUDGET_CEILING_EXCEEDED");
+        }
+
+        if (request.OpenPositionsCount + 1 > request.MaxOpenPositions)
+        {
+            await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            return new CapitalReservationResult(false, null, activeReserved, "MAX_OPEN_POSITIONS_EXCEEDED");
+        }
+
+        var record = new CapitalReservationRecord(
+            request.ReservationId,
+            request.AccountId,
+            request.Symbol,
+            request.ClientOrderId,
+            request.Asset,
+            request.RequestedAmount,
+            0m,
+            CapitalReservationState.Pending,
+            request.WorkerInstanceId,
+            request.FenceToken,
+            request.OccurredAtUtc,
+            request.OccurredAtUtc,
+            "INITIAL_RESERVATION",
+            request.Environment);
+
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.capital_reservations
+                (reservation_id, account_id, symbol, client_order_id, asset, reserved_amount, consumed_amount,
+                 status, worker_instance_id, fencing_token, created_at, updated_at, reason)
+            VALUES
+                (@reservation_id, @account_id, @symbol, @client_order_id, @asset, @reserved_amount, 0,
+                 @status, @worker_instance_id, @fencing_token, @created_at, @updated_at, @reason);
+            """,
+            [
+                Parameter("reservation_id", NpgsqlDbType.Text, record.ReservationId),
+                Parameter("account_id", NpgsqlDbType.Text, record.AccountId),
+                Parameter("symbol", NpgsqlDbType.Text, record.Symbol),
+                Parameter("client_order_id", NpgsqlDbType.Text, record.ClientOrderId),
+                Parameter("asset", NpgsqlDbType.Text, record.Asset),
+                Parameter("reserved_amount", NpgsqlDbType.Numeric, record.ReservedAmount),
+                Parameter("status", NpgsqlDbType.Text, record.Status.ToString()),
+                Parameter("worker_instance_id", NpgsqlDbType.Text, record.WorkerInstanceId),
+                Parameter("fencing_token", NpgsqlDbType.Bigint, record.FenceToken),
+                Parameter("created_at", NpgsqlDbType.TimestampTz, record.CreatedAtUtc.UtcDateTime),
+                Parameter("updated_at", NpgsqlDbType.TimestampTz, record.UpdatedAtUtc.UtcDateTime),
+                Parameter("reason", NpgsqlDbType.Text, record.Reason),
+            ],
+            cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new CapitalReservationResult(true, record, activeReserved + request.RequestedAmount, "RESERVED");
+    }
+
+    public async Task<CapitalReservationRecord> ReserveCapitalAsync(
+        CapitalReservationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await TryReserveCapitalAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded || result.Reservation is null)
+        {
+            throw new InvalidOperationException($"Failed to reserve capital: {result.ReasonCode}");
+        }
+
+        return result.Reservation;
+    }
+
+    public async Task<CapitalReservationRecord> TransitionReservationAsync(
+        string clientOrderId,
+        CapitalReservationStatus targetStatus,
+        decimal consumedAmount,
+        string workerInstanceId,
+        long fencingToken,
+        DateTimeOffset occurredAtUtc,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workerInstanceId);
+        ArgumentOutOfRangeException.ThrowIfNegative(consumedAmount);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(fencingToken, 0L);
+        if (occurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Transition timestamp must be UTC.", nameof(occurredAtUtc));
+        }
+
+        var normalizedId = clientOrderId.Trim();
+        var normalizedWorker = workerInstanceId.Trim();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+
+        var existing = await ReadCapitalReservationByClientOrderIdAsync(connection, transaction, normalizedId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Capital reservation '{normalizedId}' was not found.");
+
+        await using (var fenceCheck = new NpgsqlCommand(
+            "SELECT worker_instance_id, fencing_token FROM trading.capital_reservation_fences WHERE account_id = @account_id FOR UPDATE;",
+            connection,
+            transaction))
+        {
+            fenceCheck.Parameters.Add(Parameter("account_id", NpgsqlDbType.Text, existing.AccountId));
+            await using var fenceReader = await fenceCheck.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await fenceReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var currentWorker = fenceReader.GetString(0);
+                var currentToken = fenceReader.GetInt64(1);
+                if (fencingToken < currentToken ||
+                    (fencingToken == currentToken && !string.Equals(normalizedWorker, currentWorker, StringComparison.Ordinal)))
+                {
+                    throw new InvalidOperationException("STALE_WORKER_FENCING_TOKEN");
+                }
+            }
+        }
+
+        if (existing.State == CapitalReservationState.LockedUnknown)
+        {
+            throw new InvalidOperationException("LOCKED_UNKNOWN_REQUIRES_RECONCILIATION");
+        }
+
+        if (existing.State == CapitalReservationState.Released && targetStatus != CapitalReservationStatus.Released)
+        {
+            throw new InvalidOperationException("Cannot transition a released capital reservation.");
+        }
+
+        if (consumedAmount > existing.ReservedAmount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(consumedAmount), "Consumed amount cannot exceed reserved amount.");
+        }
+
+        await ExecuteAsync(connection, transaction,
+            """
+            INSERT INTO trading.capital_reservation_fences (account_id, worker_instance_id, fencing_token, updated_at)
+            VALUES (@account_id, @worker_instance_id, @fencing_token, @updated_at)
+            ON CONFLICT (account_id) DO UPDATE
+            SET worker_instance_id = EXCLUDED.worker_instance_id,
+                fencing_token = EXCLUDED.fencing_token,
+                updated_at = EXCLUDED.updated_at;
+            """,
+            [
+                Parameter("account_id", NpgsqlDbType.Text, existing.AccountId),
+                Parameter("worker_instance_id", NpgsqlDbType.Text, normalizedWorker),
+                Parameter("fencing_token", NpgsqlDbType.Bigint, fencingToken),
+                Parameter("updated_at", NpgsqlDbType.TimestampTz, occurredAtUtc.UtcDateTime),
+            ],
+            cancellationToken).ConfigureAwait(false);
+
+        await ExecuteAsync(connection, transaction,
+            """
+            UPDATE trading.capital_reservations
+            SET status = @status,
+                consumed_amount = @consumed_amount,
+                worker_instance_id = @worker_instance_id,
+                fencing_token = @fencing_token,
+                updated_at = @updated_at,
+                reason = @reason
+            WHERE client_order_id = @client_order_id;
+            """,
+            [
+                Parameter("status", NpgsqlDbType.Text, targetStatus.ToString()),
+                Parameter("consumed_amount", NpgsqlDbType.Numeric, consumedAmount),
+                Parameter("worker_instance_id", NpgsqlDbType.Text, normalizedWorker),
+                Parameter("fencing_token", NpgsqlDbType.Bigint, fencingToken),
+                Parameter("updated_at", NpgsqlDbType.TimestampTz, occurredAtUtc.UtcDateTime),
+                Parameter("reason", NpgsqlDbType.Text, reason),
+                Parameter("client_order_id", NpgsqlDbType.Text, normalizedId),
+            ],
+            cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var targetState = targetStatus switch
+        {
+            CapitalReservationStatus.Reserved => CapitalReservationState.Pending,
+            CapitalReservationStatus.CommittedToExchange => CapitalReservationState.Active,
+            CapitalReservationStatus.PartiallyFilled => CapitalReservationState.PartiallyFilled,
+            CapitalReservationStatus.Released => CapitalReservationState.Released,
+            CapitalReservationStatus.LockedUnknown => CapitalReservationState.LockedUnknown,
+            _ => CapitalReservationState.Pending,
+        };
+        return existing with
+        {
+            State = targetState,
+            ConsumedAmount = consumedAmount,
+            WorkerInstanceId = normalizedWorker,
+            FenceToken = fencingToken,
+            UpdatedAtUtc = occurredAtUtc,
+            Reason = reason,
+        };
+    }
+
+    public Task<CapitalReservationRecord> TransitionReservationStateAsync(
+        string clientOrderId,
+        CapitalReservationState targetState,
+        decimal consumedAmount,
+        string workerInstanceId,
+        long fenceToken,
+        DateTimeOffset occurredAtUtc,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        var targetStatus = targetState switch
+        {
+            CapitalReservationState.Pending => CapitalReservationStatus.Reserved,
+            CapitalReservationState.Active => CapitalReservationStatus.CommittedToExchange,
+            CapitalReservationState.PartiallyFilled => CapitalReservationStatus.PartiallyFilled,
+            CapitalReservationState.Released => CapitalReservationStatus.Released,
+            CapitalReservationState.LockedUnknown => CapitalReservationStatus.LockedUnknown,
+            _ => CapitalReservationStatus.Reserved,
+        };
+
+        return TransitionReservationAsync(
+            clientOrderId,
+            targetStatus,
+            consumedAmount,
+            workerInstanceId,
+            fenceToken,
+            occurredAtUtc,
+            reason,
+            cancellationToken);
+    }
+
+    public Task<CapitalReservationRecord> ReleaseReservationOnTerminalOrderAsync(
+        string clientOrderId,
+        decimal consumedAmount,
+        string workerInstanceId,
+        long fenceToken,
+        DateTimeOffset occurredAtUtc,
+        string? reason = null,
+        CancellationToken cancellationToken = default) =>
+        TransitionReservationStateAsync(
+            clientOrderId,
+            CapitalReservationState.Released,
+            consumedAmount,
+            workerInstanceId,
+            fenceToken,
+            occurredAtUtc,
+            reason ?? "TERMINAL_ORDER_RELEASE",
+            cancellationToken);
+
+    public Task<CapitalReservationRecord> MarkReservationLockedUnknownAsync(
+        string clientOrderId,
+        string workerInstanceId,
+        long fenceToken,
+        DateTimeOffset occurredAtUtc,
+        string? reason = null,
+        CancellationToken cancellationToken = default) =>
+        TransitionReservationStateAsync(
+            clientOrderId,
+            CapitalReservationState.LockedUnknown,
+            0m,
+            workerInstanceId,
+            fenceToken,
+            occurredAtUtc,
+            reason ?? "ORDER_STATE_LOCKED_UNKNOWN",
+            cancellationToken);
+
+    public async Task<CapitalReservationRecord> ReconcileLockedUnknownAsync(
+        string clientOrderId,
+        CapitalReservationStatus resolvedStatus,
+        decimal consumedAmount,
+        string reconciliationCorrelationId,
+        DateTimeOffset occurredAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reconciliationCorrelationId);
+        ArgumentOutOfRangeException.ThrowIfNegative(consumedAmount);
+        if (occurredAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("Reconciliation timestamp must be UTC.", nameof(occurredAtUtc));
+        }
+
+        if (resolvedStatus is CapitalReservationStatus.Reserved or CapitalReservationStatus.LockedUnknown)
+        {
+            throw new ArgumentException("Reconciliation must resolve LockedUnknown to CommittedToExchange, PartiallyFilled, or Released.", nameof(resolvedStatus));
+        }
+
+        var normalizedId = clientOrderId.Trim();
+        var reason = $"RECONCILED:{reconciliationCorrelationId.Trim()}";
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+
+        var existing = await ReadCapitalReservationByClientOrderIdAsync(connection, transaction, normalizedId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException($"Capital reservation '{normalizedId}' was not found.");
+
+        if (consumedAmount > existing.ReservedAmount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(consumedAmount), "Consumed amount cannot exceed reserved amount.");
+        }
+
+        await ExecuteAsync(connection, transaction,
+            """
+            UPDATE trading.capital_reservations
+            SET status = @status,
+                consumed_amount = @consumed_amount,
+                updated_at = @updated_at,
+                reason = @reason
+            WHERE client_order_id = @client_order_id;
+            """,
+            [
+                Parameter("status", NpgsqlDbType.Text, resolvedStatus.ToString()),
+                Parameter("consumed_amount", NpgsqlDbType.Numeric, consumedAmount),
+                Parameter("updated_at", NpgsqlDbType.TimestampTz, occurredAtUtc.UtcDateTime),
+                Parameter("reason", NpgsqlDbType.Text, reason),
+                Parameter("client_order_id", NpgsqlDbType.Text, normalizedId),
+            ],
+            cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var resolvedState = resolvedStatus switch
+        {
+            CapitalReservationStatus.Reserved => CapitalReservationState.Pending,
+            CapitalReservationStatus.CommittedToExchange => CapitalReservationState.Active,
+            CapitalReservationStatus.PartiallyFilled => CapitalReservationState.PartiallyFilled,
+            CapitalReservationStatus.Released => CapitalReservationState.Released,
+            CapitalReservationStatus.LockedUnknown => CapitalReservationState.LockedUnknown,
+            _ => CapitalReservationState.Pending,
+        };
+        return existing with
+        {
+            State = resolvedState,
+            ConsumedAmount = consumedAmount,
+            UpdatedAtUtc = occurredAtUtc,
+            Reason = reason,
+        };
+    }
+
+    public Task<CapitalReservationRecord> ReconcileLockedUnknownAsync(
+        string clientOrderId,
+        CapitalReservationState resolvedState,
+        decimal consumedAmount,
+        string reconciliationCorrelationId,
+        DateTimeOffset occurredAtUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var resolvedStatus = resolvedState switch
+        {
+            CapitalReservationState.Active => CapitalReservationStatus.CommittedToExchange,
+            CapitalReservationState.PartiallyFilled => CapitalReservationStatus.PartiallyFilled,
+            CapitalReservationState.Released => CapitalReservationStatus.Released,
+            _ => throw new ArgumentException("Reconciliation must resolve LockedUnknown to Active, PartiallyFilled, or Released.", nameof(resolvedState)),
+        };
+
+        return ReconcileLockedUnknownAsync(
+            clientOrderId,
+            resolvedStatus,
+            consumedAmount,
+            reconciliationCorrelationId,
+            occurredAtUtc,
+            cancellationToken);
+    }
+
+    public Task<IReadOnlyList<CapitalReservationRecord>> GetActiveReservationsAsync(
+        string accountId,
+        CancellationToken cancellationToken = default) =>
+        ReadActiveReservationsAsync(accountId, cancellationToken);
+
+    public async Task<IReadOnlyList<CapitalReservationRecord>> ReadActiveReservationsAsync(
+        string accountId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT reservation_id, account_id, symbol, client_order_id, asset,
+                   reserved_amount, consumed_amount, status, worker_instance_id,
+                   fencing_token, created_at, updated_at, reason
+            FROM trading.capital_reservations
+            WHERE account_id = @account_id
+              AND status IN ('Reserved', 'CommittedToExchange', 'PartiallyFilled', 'LockedUnknown')
+            ORDER BY created_at, reservation_id;
+            """,
+            connection);
+        command.Parameters.Add(Parameter("account_id", NpgsqlDbType.Text, accountId.Trim()));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new List<CapitalReservationRecord>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(MapCapitalReservation(reader));
+        }
+
+        return result;
+    }
+
+    private static async Task<bool> HasLockedUnknownReservationsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string accountId,
+        string asset,
+        CancellationToken cancellationToken)
+    {
+        return await ExistsAsync(connection, transaction,
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM trading.capital_reservations
+                WHERE account_id = @account_id
+                  AND asset = @asset
+                  AND status = 'LockedUnknown'
+            );
+            """,
+            [
+                Parameter("account_id", NpgsqlDbType.Text, accountId),
+                Parameter("asset", NpgsqlDbType.Text, asset),
+            ],
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<decimal> SumActiveReservedCapitalAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string accountId,
+        string asset,
+        CancellationToken cancellationToken)
+    {
+        var scalar = await ExecuteScalarAsync(connection, transaction,
+            """
+            SELECT COALESCE(SUM(reserved_amount - consumed_amount), 0)
+            FROM trading.capital_reservations
+            WHERE account_id = @account_id
+              AND asset = @asset
+              AND status IN ('Reserved', 'CommittedToExchange', 'PartiallyFilled', 'LockedUnknown');
+            """,
+            [
+                Parameter("account_id", NpgsqlDbType.Text, accountId),
+                Parameter("asset", NpgsqlDbType.Text, asset),
+            ],
+            cancellationToken).ConfigureAwait(false);
+
+        return scalar is decimal sum ? sum : 0m;
+    }
+
+    private static async Task<CapitalReservationRecord?> ReadCapitalReservationByClientOrderIdAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string clientOrderId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT reservation_id, account_id, symbol, client_order_id, asset,
+                   reserved_amount, consumed_amount, status, worker_instance_id,
+                   fencing_token, created_at, updated_at, reason
+            FROM trading.capital_reservations
+            WHERE client_order_id = @client_order_id
+            FOR UPDATE;
+            """,
+            connection,
+            transaction);
+        command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Text, clientOrderId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? MapCapitalReservation(reader)
+            : null;
+    }
+
+    private static CapitalReservationRecord MapCapitalReservation(NpgsqlDataReader reader) =>
+        new(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetDecimal(5),
+            reader.GetDecimal(6),
+            Enum.Parse<CapitalReservationStatus>(reader.GetString(7), ignoreCase: false),
+            reader.GetString(8),
+            reader.GetInt64(9),
+            Utc(reader.GetFieldValue<DateTime>(10)),
+            Utc(reader.GetFieldValue<DateTime>(11)),
+            reader.IsDBNull(12) ? null : reader.GetString(12));
 }
 
 /// <summary>
@@ -3891,6 +4445,8 @@ public static class PostgresServiceCollectionExtensions
         services.AddSingleton<IAutonomyRiskContextStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddSingleton<IDurableSubmissionStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgresTradingStore>());
+        services.AddSingleton<ICapitalReservationStore>(serviceProvider =>
             serviceProvider.GetRequiredService<PostgresTradingStore>());
         services.AddHealthChecks().AddCheck<PostgresHealthCheck>(
             "postgres",

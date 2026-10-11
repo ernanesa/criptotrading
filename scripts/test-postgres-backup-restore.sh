@@ -18,6 +18,8 @@ report_dir="$repo_root/artifacts/recovery"
 run_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_file="$report_dir/postgres-rpo-rto-$run_stamp-$$.md"
 backup_cli_output_directory="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-backup-cli.XXXXXX")"
+secrets_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-secrets.XXXXXX")"
+key_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-backup-key.XXXXXX")"
 password="$(openssl rand -hex 32)"
 compose=(docker compose --env-file /dev/null --project-name "$compose_project" --file "$repo_root/compose.yaml")
 
@@ -25,13 +27,18 @@ cleanup() {
     "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
     rm -f -- "$backup_file"
     rm -f -- "$checksum_file" "$corrupt_backup_file" "$source_manifest" "$restored_manifest"
-    rm -rf -- "$backup_cli_output_directory"
+    rm -rf -- "$backup_cli_output_directory" "$secrets_dir" "$key_dir"
 }
 trap cleanup EXIT
 
 mkdir -p -- "$report_dir"
 umask 077
-chmod 0700 "$backup_cli_output_directory"
+chmod 0700 "$backup_cli_output_directory" "$secrets_dir" "$key_dir"
+printf '%s' "$password" > "$secrets_dir/postgres_password"
+chmod 0600 "$secrets_dir/postgres_password"
+backup_key_file="$key_dir/postgres_backup.key"
+openssl rand -base64 32 > "$backup_key_file"
+chmod 0600 "$backup_key_file"
 
 now_ns() { date +%s%N; }
 elapsed_ms() { printf '%s' "$(( ($2 - $1) / 1000000 ))"; }
@@ -39,6 +46,7 @@ elapsed_ms() { printf '%s' "$(( ($2 - $1) / 1000000 ))"; }
 export POSTGRES_DB="$postgres_db"
 export POSTGRES_USER="$postgres_user"
 export POSTGRES_PASSWORD="$password"
+export POSTGRES_SECRETS_DIRECTORY="$secrets_dir"
 export POSTGRES_PORT="$postgres_port"
 export POSTGRES_VOLUME_NAME="$volume_name"
 # This harness starts PostgreSQL only; it never starts API/Web.
@@ -99,9 +107,8 @@ if (( $(wc -l < "$source_manifest") < 20 )) || ! awk '$1 == "journal_entries" &&
     exit 1
 fi
 
-# Exercise the operational CLI against only this ephemeral PostgreSQL fixture.
-# The CLI itself runs pg_restore --list before atomically publishing its dump;
-# this drill keeps the existing full restore and corruption probes below.
+# Exercise the operational CLI with AES-256 keyfile encryption against this ephemeral PostgreSQL fixture.
+# The CLI itself runs pg_restore --list before encryption and publishes an encrypted archive atomically.
 postgres_container_id="$("${compose[@]}" ps -q postgres)"
 [[ -n "$postgres_container_id" ]] || { echo 'Ephemeral PostgreSQL container ID is unavailable.' >&2; exit 1; }
 "$repo_root/scripts/backup-postgres.sh" \
@@ -109,35 +116,59 @@ postgres_container_id="$("${compose[@]}" ps -q postgres)"
     --database "$postgres_db" \
     --user "$postgres_user" \
     --output-directory "$backup_cli_output_directory" \
-    --min-free-bytes 1048576 >/dev/null
+    --min-free-bytes 1048576 \
+    --encryption-policy aes256-keyfile \
+    --encryption-key-file "$backup_key_file" >/dev/null
 backup_cli_artifact="$(find "$backup_cli_output_directory" -mindepth 1 -maxdepth 1 -type d -name 'postgres-*' -print -quit)"
-[[ -n "$backup_cli_artifact" && -s "$backup_cli_artifact/backup.dump" && -s "$backup_cli_artifact/backup.dump.sha256" && -s "$backup_cli_artifact/manifest.json" ]] || {
-    echo 'Operational backup CLI did not publish a complete verified artifact.' >&2
+[[ -n "$backup_cli_artifact" && -s "$backup_cli_artifact/backup.dump.enc" && -s "$backup_cli_artifact/backup.dump.enc.sha256" && -s "$backup_cli_artifact/manifest.json" ]] || {
+    echo 'Operational backup CLI did not publish a complete verified encrypted artifact.' >&2
     exit 1
 }
-[[ "$(stat -c '%a' "$backup_cli_artifact")" == 700 && "$(stat -c '%a' "$backup_cli_artifact/backup.dump")" == 600 ]]
-(cd "$backup_cli_artifact" && sha256sum --check backup.dump.sha256 >/dev/null)
+[[ ! -e "$backup_cli_artifact/backup.dump" ]]
+[[ "$(stat -c '%a' "$backup_cli_artifact")" == 700 && "$(stat -c '%a' "$backup_cli_artifact/backup.dump.enc")" == 600 ]]
+(cd "$backup_cli_artifact" && sha256sum --check backup.dump.enc.sha256 >/dev/null)
 grep -Fq '"verification":"pg_restore_list"' "$backup_cli_artifact/manifest.json"
+grep -Fq '"encryptionAlgorithm":"AES-256-CBC-PBKDF2"' "$backup_cli_artifact/manifest.json"
+grep -Fq '"encryptedSha256"' "$backup_cli_artifact/manifest.json"
+grep -Fq '"dumpSha256"' "$backup_cli_artifact/manifest.json"
 
-backup_started_ns="$(now_ns)"
-"${compose[@]}" exec -T postgres pg_dump -U "$postgres_user" -d "$postgres_db" --format=custom > "$backup_file"
-backup_finished_ns="$(now_ns)"
-backup_sha256="$(sha256sum "$backup_file" | awk '{print $1}')"
-printf '%s  %s\n' "$backup_sha256" "$backup_file" > "$checksum_file"
-sha256sum --check "$checksum_file" >/dev/null
+backup_source_enc="$backup_cli_artifact/backup.dump.enc"
+backup_enc_sha256="$(sha256sum "$backup_source_enc" | awk '{print $1}')"
+backup_bytes="$(wc -c < "$backup_source_enc" | tr -d '[:space:]')"
 
-# A corrupted artifact must be rejected before any restore attempt. This is a
-# local tamper-detection probe; the source dump remains untouched.
-cp -- "$backup_file" "$corrupt_backup_file"
+# A corrupted encrypted artifact must be rejected before any restore attempt.
+# This tests both SHA-256 tamper-detection and OpenSSL decryption failure.
+cp -- "$backup_source_enc" "$corrupt_backup_file"
 printf 'x' | dd of="$corrupt_backup_file" bs=1 seek=0 conv=notrunc status=none
-if sha256sum --check <(printf '%s  %s\n' "$backup_sha256" "$corrupt_backup_file") >/dev/null 2>&1; then
-    echo "Corrupted backup unexpectedly passed checksum validation." >&2
+if sha256sum --check <(printf '%s  %s\n' "$backup_enc_sha256" "$corrupt_backup_file") >/dev/null 2>&1; then
+    echo "Corrupted encrypted backup unexpectedly passed checksum validation." >&2
     exit 1
 fi
-"${compose[@]}" exec -T postgres createdb -U "$postgres_user" cryptotrading_restore
+if openssl enc -d -aes-256-cbc -pbkdf2 -salt -pass "file:$backup_key_file" -in "$corrupt_backup_file" -out /dev/null >/dev/null 2>&1; then
+    echo "Corrupted encrypted backup unexpectedly passed decryption." >&2
+    exit 1
+fi
+
+# Decrypt the verified encrypted artifact and restore into scratch PostgreSQL container
 restore_started_ns="$(now_ns)"
-"${compose[@]}" exec -T postgres pg_restore -U "$postgres_user" --dbname=cryptotrading_restore < "$backup_file"
+decrypted_dump="$backup_cli_output_directory/restored.dump"
+if ! openssl enc -d -aes-256-cbc -pbkdf2 -salt -pass "file:$backup_key_file" -in "$backup_source_enc" -out "$decrypted_dump" 2>/dev/null; then
+    echo "Decryption of verified backup artifact failed." >&2
+    exit 1
+fi
+chmod 0600 "$decrypted_dump"
+decrypted_sha256="$(sha256sum "$decrypted_dump" | awk '{print $1}')"
+manifest_dump_sha256="$(grep -o '"dumpSha256":"[^"]*"' "$backup_cli_artifact/manifest.json" | head -n1 | cut -d'"' -f4)"
+if [[ "$decrypted_sha256" != "$manifest_dump_sha256" ]]; then
+    echo "Decrypted dump SHA-256 ($decrypted_sha256) does not match manifest dumpSha256 ($manifest_dump_sha256)." >&2
+    exit 1
+fi
+
+"${compose[@]}" exec -T postgres createdb -U "$postgres_user" cryptotrading_restore
+"${compose[@]}" exec -T postgres pg_restore -U "$postgres_user" --dbname=cryptotrading_restore < "$decrypted_dump"
 restore_finished_ns="$(now_ns)"
+rm -f -- "$decrypted_dump"
+
 verify_started_ns="$(now_ns)"
 table_manifest cryptotrading_restore "$restored_manifest"
 verify_finished_ns="$(now_ns)"
@@ -148,11 +179,15 @@ if ! cmp -s "$source_manifest" "$restored_manifest"; then
 fi
 
 drill_finished_ns="$(now_ns)"
-backup_ms="$(elapsed_ms "$backup_started_ns" "$backup_finished_ns")"
 restore_ms="$(elapsed_ms "$restore_started_ns" "$restore_finished_ns")"
+restore_seconds=$(( (restore_finished_ns - restore_started_ns) / 1000000000 ))
+if (( restore_seconds > 600 )); then
+    echo "Measured RTO (${restore_seconds}s) exceeded 600s target." >&2
+    exit 1
+fi
+
 verify_ms="$(elapsed_ms "$verify_started_ns" "$verify_finished_ns")"
 total_ms="$(elapsed_ms "$drill_started_ns" "$drill_finished_ns")"
-backup_bytes="$(wc -c < "$backup_file" | tr -d '[:space:]')"
 table_count="$(wc -l < "$source_manifest" | tr -d '[:space:]')"
 financial_rows="$(awk '{ total += $2 } END { print total + 0 }' "$source_manifest")"
 
@@ -161,17 +196,20 @@ cat > "$report_file" <<EOF
 
 - Scope: ephemeral local PostgreSQL backup/restore only.
 - Environment: local Docker Compose; no Binance credentials, exchange calls, or application volume targeted.
-- Backup artifact size: ${backup_bytes} bytes.
-- Backup SHA-256: ${backup_sha256} (verified before restore).
-- Corruption probe: altered copy rejected by SHA-256 verification before restore.
-- Backup duration: ${backup_ms} ms.
-- Restore duration (RTO probe): ${restore_ms} ms.
+- Encryption: AES-256-CBC-PBKDF2 via local keyfile (mode 0600, parent dir mode 0700 owned by UID $(id -u)).
+- Backup artifact size (encrypted): ${backup_bytes} bytes.
+- Backup SHA-256 (encrypted): ${backup_enc_sha256} (verified before restore).
+- Backup SHA-256 (decrypted dump): ${decrypted_sha256} (matched manifest dumpSha256).
+- Corruption probe: altered encrypted archive rejected by SHA-256 verification and OpenSSL decryption before restore.
+- Restore duration (measured RTO): ${restore_ms} ms (${restore_seconds}s; target <= 600s: PASS).
+- Target RPO: 900s (15m).
+- Target RTO: 600s (10m).
 - Verification duration: ${verify_ms} ms.
 - Total drill duration: ${total_ms} ms.
 - Financial state verification: ${financial_rows} rows across ${table_count} trading tables; per-table row counts and canonical row hashes matched before and after restore.
 - RPO probe: 0 seeded financial rows lost in the restored snapshot; this is a deterministic local result, not a production RPO guarantee.
 - Verification: complete trading schema data manifest matched.
-- Cleanup: ephemeral containers, volume, restore database, and dump file were removed.
+- Cleanup: ephemeral containers, volume, restore database, and dump files were removed.
 EOF
 chmod 600 "$report_file"
 echo "PostgreSQL backup/restore drill passed; RPO/RTO report: $report_file"

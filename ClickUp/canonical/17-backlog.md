@@ -345,3 +345,41 @@ Tasks: backup/restore; corrupt-state scenario; RPO/RTO measurement; runbook auto
 
 ### US-183 Quero primary/standby futuro sem double-trading.
 Tasks: leader election design; fencing token; standby state sync; failover simulation; chaos test.
+
+## EPIC E-19 - Closed-loop Autonomous Runtime Integration (R1.0-A2)
+
+O épico fecha a lacuna entre componentes já planejados: lifecycle/readiness,
+market-data acionável, ciclo baseline, Risk obrigatório, OMS/projeções,
+user-stream/reconciliação, execution planner, self-healing, observabilidade e
+promotion ladder. O detalhamento operacional, cinco tasks e três subtasks por
+task está em `ClickUp/07-autonomous-runtime-completion.md`.
+
+### US-190…US-199
+
+US-190 lifecycle/readiness; US-191 market-data acionável; US-192 ciclo baseline;
+US-193 risk obrigatório e comissão efetiva; US-194 OMS/projeções; US-195 user
+stream e reconciliação; US-196 execution planner e custo líquido; US-197
+self-healing/fail-safe; US-198 prova de autonomia; US-199 Paper→Shadow→Testnet
+com gates e rollback.
+
+O E-19 também exige que a comissão efetiva por símbolo seja consultada e
+versionada antes da exposição, que descontos/fees especiais não sejam presumidos
+e que o desvio entre comissão estimada e fill real alimente PnL líquido,
+execution drift e `NO_TRADE`/`SafeMode` quando não for explicável.
+
+**Critério de entrada:** nenhuma story é Ready sem contrato, invariantes,
+dependências, comandos de validação e condição explícita de não concluído.
+**Critério de saída do épico:** A2 opera em Testnet com reconciliação, account
+stream, RiskPolicy obrigatória, OMS/projeções idempotentes e evidence bundle.
+
+Registro de tasks do E-19 (o detalhamento pai/subtask fica no pacote ClickUp):
+`TASK-US-190-01`, `TASK-US-190-02`, `TASK-US-190-03`, `TASK-US-190-04`, `TASK-US-190-05`;
+`TASK-US-191-01`, `TASK-US-191-02`, `TASK-US-191-03`, `TASK-US-191-04`, `TASK-US-191-05`;
+`TASK-US-192-01`, `TASK-US-192-02`, `TASK-US-192-03`, `TASK-US-192-04`, `TASK-US-192-05`;
+`TASK-US-193-01`, `TASK-US-193-02`, `TASK-US-193-03`, `TASK-US-193-04`, `TASK-US-193-05`;
+`TASK-US-194-01`, `TASK-US-194-02`, `TASK-US-194-03`, `TASK-US-194-04`, `TASK-US-194-05`;
+`TASK-US-195-01`, `TASK-US-195-02`, `TASK-US-195-03`, `TASK-US-195-04`, `TASK-US-195-05`;
+`TASK-US-196-01`, `TASK-US-196-02`, `TASK-US-196-03`, `TASK-US-196-04`, `TASK-US-196-05`;
+`TASK-US-197-01`, `TASK-US-197-02`, `TASK-US-197-03`, `TASK-US-197-04`, `TASK-US-197-05`;
+`TASK-US-198-01`, `TASK-US-198-02`, `TASK-US-198-03`, `TASK-US-198-04`, `TASK-US-198-05`;
+`TASK-US-199-01`, `TASK-US-199-02`, `TASK-US-199-03`, `TASK-US-199-04`, `TASK-US-199-05`.

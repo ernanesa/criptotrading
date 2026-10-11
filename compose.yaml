@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cryptotrading}
       POSTGRES_USER: ${POSTGRES_USER:-cryptotrading}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the shell before starting PostgreSQL}
+      POSTGRES_PASSWORD_FILE: /run/cryptotrading-postgres-secrets/postgres_password
     ports:
       # Keep the database reachable only from this machine.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
@@ -15,6 +15,7 @@ services:
       # PostgreSQL 18 stores the cluster in a versioned subdirectory below
       # this mount, which keeps major-version upgrades explicit and safe.
       - cryptotrading-postgres-data:/var/lib/postgresql
+      - ${POSTGRES_SECRETS_DIRECTORY:?Set POSTGRES_SECRETS_DIRECTORY to the mode-0700 PostgreSQL secret directory.}:/run/cryptotrading-postgres-secrets:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -23,6 +24,18 @@ services:
       start_period: 10s
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+      - FOWNER
+      - SETGID
+      - SETUID
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 100
     logging: &json-logs
       driver: json-file
       options:
@@ -45,7 +58,11 @@ services:
       - "127.0.0.1:${API_PORT:-5000}:5000"
     environment:
       ASPNETCORE_ENVIRONMENT: ${APP_ENVIRONMENT:-Development}
-      POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-cryptotrading};Username=${POSTGRES_USER:-cryptotrading};Password=${POSTGRES_PASSWORD:-}"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-cryptotrading}
+      POSTGRES_USER: ${POSTGRES_USER:-cryptotrading}
+      POSTGRES_PASSWORD_FILE: /run/cryptotrading-postgres-secrets/postgres_password
       TRADING_ENVIRONMENT: ${TRADING_ENVIRONMENT:-TESTNET}
       BINANCE_REST_BASE_URL: ${BINANCE_REST_BASE_URL:-https://testnet.binance.vision/api}
       BINANCE_WS_BASE_URL: ${BINANCE_WS_BASE_URL:-wss://testnet.binance.vision/ws}
@@ -58,8 +75,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - ${POSTGRES_SECRETS_DIRECTORY:?Set POSTGRES_SECRETS_DIRECTORY to the mode-0700 PostgreSQL secret directory.}:/run/cryptotrading-postgres-secrets:ro
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/5000 && printf 'GET /health/live HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 100
     secrets:
       - api_internal_access_token
     networks:
@@ -78,7 +108,11 @@ services:
     restart: unless-stopped
     environment:
       DOTNET_ENVIRONMENT: ${APP_ENVIRONMENT:-Development}
-      POSTGRES_CONNECTION_STRING: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-cryptotrading};Username=${POSTGRES_USER:-cryptotrading};Password=${POSTGRES_PASSWORD:-}"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-cryptotrading}
+      POSTGRES_USER: ${POSTGRES_USER:-cryptotrading}
+      POSTGRES_PASSWORD_FILE: /run/cryptotrading-postgres-secrets/postgres_password
       TRADING_ENVIRONMENT: ${TRADING_ENVIRONMENT:-TESTNET}
       WORKER_EXECUTION_MODE: ${WORKER_EXECUTION_MODE:-PAPER}
       WORKER_NO_TRADE: ${WORKER_NO_TRADE:-true}
@@ -94,6 +128,7 @@ services:
       WORKER_AUTONOMY_INTERVAL: ${WORKER_AUTONOMY_INTERVAL:-1m}
       WORKER_RUNTIME_AUDIT_PATH: /var/lib/cryptotrading/audit/runtime-transitions.jsonl
       WORKER_ALERT_FILE_DIRECTORY: /var/lib/cryptotrading/audit/alerts
+      WORKER_PROBE_FILE_PATH: /tmp/cryptotrading-worker-probe.json
       BINANCE_REST_BASE_URL: ${BINANCE_REST_BASE_URL:-https://testnet.binance.vision/api}
       BINANCE_WS_BASE_URL: ${BINANCE_WS_BASE_URL:-wss://testnet.binance.vision/ws}
       BINANCE_USER_STREAM_WS_API_BASE_URL: ${BINANCE_USER_STREAM_WS_API_BASE_URL:-wss://ws-api.testnet.binance.vision/ws-api/v3}
@@ -103,14 +138,26 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    volumes:
+      - cryptotrading-worker-audit:/var/lib/cryptotrading/audit
+      - ${POSTGRES_SECRETS_DIRECTORY:?Set POSTGRES_SECRETS_DIRECTORY to the mode-0700 PostgreSQL secret directory.}:/run/cryptotrading-postgres-secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/cryptotrading-worker-probe.json && grep -q '\"processAlive\":true' /tmp/cryptotrading-worker-probe.json"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 1024m
+    cpus: 1.0
+    pids_limit: 100
     networks:
       default:
       observability:
     logging: *json-logs
-    volumes:
-      - cryptotrading-worker-audit:/var/lib/cryptotrading/audit
 
   cryptotrading-web:
     build:
@@ -123,8 +170,19 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${WEB_PORT:-8082}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 50
     secrets:
       - api_internal_access_token
     depends_on:

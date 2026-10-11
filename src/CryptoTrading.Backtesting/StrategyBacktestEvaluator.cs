@@ -313,6 +313,182 @@ public static class StrategyBacktestEvaluator
             trades);
     }
 
+    public static StrategyBacktestEvaluationResult EvaluateWithFeedback(
+        string strategyId,
+        string strategyVersion,
+        string strategyConfigurationFingerprint,
+        IReadOnlyList<CloseBar> bars,
+        IStatefulStrategy strategy,
+        StrategyBacktestOptions options)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyVersion);
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyConfigurationFingerprint);
+        ArgumentNullException.ThrowIfNull(bars);
+        ArgumentNullException.ThrowIfNull(strategy);
+        ArgumentNullException.ThrowIfNull(options);
+        if (bars.Count == 0)
+        {
+            throw new ArgumentException("At least one bar is required.", nameof(bars));
+        }
+
+        var signals = new List<StrategyExecutionSignal>(bars.Count);
+        var equityCurve = new List<EquityCurvePoint>(bars.Count);
+        var trades = new List<StrategyBacktestTrade>();
+        var cash = options.InitialCapital;
+        var baseQuantity = 0m;
+        var previousEquity = options.InitialCapital;
+        var peakEquity = options.InitialCapital;
+        var maxDrawdown = 0m;
+        var fees = 0m;
+        var spreadCosts = 0m;
+        var slippageCosts = 0m;
+        var turnover = 0m;
+        var inMarketBars = 0;
+        var unfilledSignals = 0;
+        var unfilledFixedQuantitySignals = 0;
+        var rejectedMinimumNotionalSignals = 0;
+        var maximumGrossExposure = 0m;
+        var returns = new List<double>(bars.Count);
+
+        for (var currentBarIndex = 0; currentBarIndex < bars.Count; currentBarIndex++)
+        {
+            var decisionIndex = currentBarIndex - options.ExecutionDelayBars;
+            if (decisionIndex >= 0)
+            {
+                var signal = signals[decisionIndex];
+                if (signal.Action != StrategyExecutionAction.NoTrade)
+                {
+                    var filled = TryFillWithOutcome(
+                        signal, decisionIndex, currentBarIndex, bars[currentBarIndex], options,
+                        ref cash, ref baseQuantity, out var trade, out var outcome);
+
+                    var requestedQty = signal.BaseQuantity ?? (trade?.RequestedBaseQuantity ?? 0m);
+                    var executedQty = filled && trade is not null ? trade.BaseQuantity : 0m;
+                    var executedPrice = filled && trade is not null ? trade.ExecutedPrice : bars[currentBarIndex].ClosePrice.Value;
+                    var fee = filled && trade is not null ? trade.Fee : 0m;
+
+                    var feedback = new StrategyExecutionFeedback(
+                        decisionIndex,
+                        currentBarIndex,
+                        bars[currentBarIndex].CloseTimeUtc,
+                        signal.Action,
+                        outcome,
+                        requestedQty,
+                        executedQty,
+                        executedPrice,
+                        fee,
+                        signal.ReasonCode);
+                    strategy.ApplyExecutionFeedback(feedback);
+
+                    if (!filled || trade is null)
+                    {
+                        unfilledSignals++;
+                        if (signal.Action is StrategyExecutionAction.BuyBaseQuantity or StrategyExecutionAction.SellBaseQuantity)
+                        {
+                            unfilledFixedQuantitySignals++;
+                        }
+
+                        if (outcome == StrategyExecutionOutcome.RejectedMinimumNotional)
+                        {
+                            rejectedMinimumNotionalSignals++;
+                        }
+                    }
+                    else
+                    {
+                        trades.Add(trade);
+                        fees += trade.Fee;
+                        spreadCosts += trade.SpreadCost;
+                        slippageCosts += trade.SlippageCost;
+                        turnover += trade.BaseQuantity * trade.ReferencePrice;
+                    }
+                }
+            }
+
+            var currentSignal = strategy.GenerateSignal(bars[currentBarIndex], currentBarIndex);
+            signals.Add(currentSignal);
+
+            var referencePrice = bars[currentBarIndex].ClosePrice.Value;
+            maximumGrossExposure = Math.Max(maximumGrossExposure, baseQuantity * referencePrice);
+            var equity = cash + (baseQuantity * referencePrice);
+            var periodReturn = previousEquity == 0m ? 0m : (equity / previousEquity) - 1m;
+            peakEquity = Math.Max(peakEquity, equity);
+            var drawdown = peakEquity == 0m ? 0m : 1m - (equity / peakEquity);
+            maxDrawdown = Math.Max(maxDrawdown, drawdown);
+            if (baseQuantity > 0m)
+            {
+                inMarketBars++;
+            }
+
+            returns.Add((double)periodReturn);
+            equityCurve.Add(new EquityCurvePoint(
+                bars[currentBarIndex].CloseTimeUtc,
+                equity,
+                cash,
+                baseQuantity,
+                referencePrice,
+                baseQuantity > 0m,
+                periodReturn));
+            previousEquity = equity;
+        }
+
+        for (var decisionIndex = Math.Max(0, bars.Count - options.ExecutionDelayBars); decisionIndex < signals.Count; decisionIndex++)
+        {
+            if (signals[decisionIndex].Action != StrategyExecutionAction.NoTrade)
+            {
+                unfilledSignals++;
+                if (signals[decisionIndex].Action is StrategyExecutionAction.BuyBaseQuantity or StrategyExecutionAction.SellBaseQuantity)
+                {
+                    unfilledFixedQuantitySignals++;
+                }
+            }
+        }
+
+        var finalEquity = equityCurve.Count == 0 ? options.InitialCapital : equityCurve[^1].Equity;
+        var metrics = new StrategyBacktestMetrics(
+            options.InitialCapital,
+            finalEquity,
+            (finalEquity / options.InitialCapital) - 1m,
+            fees,
+            spreadCosts,
+            slippageCosts,
+            turnover,
+            turnover / options.InitialCapital,
+            maxDrawdown,
+            CalculateSharpe(returns, options),
+            returns.Count,
+            trades.Count,
+            trades.Count(static trade => trade.IsPartialFill),
+            rejectedMinimumNotionalSignals,
+            unfilledFixedQuantitySignals,
+            unfilledSignals,
+            returns.Count == 0 ? 0m : (decimal)inMarketBars / returns.Count,
+            baseQuantity > 0m,
+            trades.Any(static trade => trade.IsPartialFill),
+            trades.Any(static trade => trade.IsPartialFill) || unfilledFixedQuantitySignals > 0,
+            trades.Any(static trade => trade.IsPartialFill) || unfilledSignals > 0,
+            maximumGrossExposure);
+
+        var evaluationFingerprint = CreateFingerprint(
+            strategyId,
+            strategyVersion,
+            strategyConfigurationFingerprint,
+            bars,
+            signals,
+            options);
+
+        return new StrategyBacktestEvaluationResult(
+            strategyId,
+            strategyVersion,
+            strategyConfigurationFingerprint,
+            evaluationFingerprint,
+            DescribeExecutionAssumption(options),
+            options,
+            metrics,
+            equityCurve,
+            trades);
+    }
+
     private static bool TryFill(
         StrategyExecutionSignal signal,
         int decisionIndex,
@@ -324,14 +500,33 @@ public static class StrategyBacktestEvaluator
         out StrategyBacktestTrade trade,
         out bool rejectedByMinimumNotional)
     {
+        var result = TryFillWithOutcome(
+            signal, decisionIndex, fillIndex, fillBar, options,
+            ref cash, ref position, out trade, out var outcome);
+        rejectedByMinimumNotional = outcome == StrategyExecutionOutcome.RejectedMinimumNotional;
+        return result;
+    }
+
+    private static bool TryFillWithOutcome(
+        StrategyExecutionSignal signal,
+        int decisionIndex,
+        int fillIndex,
+        CloseBar fillBar,
+        StrategyBacktestOptions options,
+        ref decimal cash,
+        ref decimal position,
+        out StrategyBacktestTrade trade,
+        out StrategyExecutionOutcome outcome)
+    {
         trade = null!;
-        rejectedByMinimumNotional = false;
+        outcome = StrategyExecutionOutcome.NoTrade;
         var referencePrice = fillBar.ClosePrice.Value;
         var adverseRate = options.HalfSpreadRate + options.SlippageRate;
         if (signal.Action is StrategyExecutionAction.EnterLong or StrategyExecutionAction.BuyBaseQuantity)
         {
             if (signal.Action == StrategyExecutionAction.EnterLong && position > 0m)
             {
+                outcome = StrategyExecutionOutcome.RejectedRiskCap;
                 return false;
             }
 
@@ -345,13 +540,14 @@ public static class StrategyBacktestEvaluator
             var quantity = Math.Min(requestedQuantity, maximumExecutableQuantity);
             if (quantity <= 0m)
             {
+                outcome = cash <= 0m ? StrategyExecutionOutcome.RejectedInsufficientLiquidity : StrategyExecutionOutcome.RejectedRiskCap;
                 return false;
             }
 
             var executedNotional = quantity * executedPrice;
             if (executedNotional < options.MinimumOrderNotionalQuote)
             {
-                rejectedByMinimumNotional = true;
+                outcome = StrategyExecutionOutcome.RejectedMinimumNotional;
                 return false;
             }
 
@@ -360,6 +556,8 @@ public static class StrategyBacktestEvaluator
             var slippageCost = quantity * referencePrice * options.SlippageRate;
             cash -= executedNotional + fee;
             position += quantity;
+            var isPartial = signal.Action == StrategyExecutionAction.BuyBaseQuantity && quantity < requestedQuantity;
+            outcome = isPartial ? StrategyExecutionOutcome.PartiallyFilled : StrategyExecutionOutcome.Filled;
             trade = new(
                 decisionIndex,
                 fillIndex,
@@ -370,7 +568,7 @@ public static class StrategyBacktestEvaluator
                 executedPrice,
                 quantity,
                 requestedQuantity,
-                signal.Action == StrategyExecutionAction.BuyBaseQuantity && quantity < requestedQuantity,
+                isPartial,
                 fee,
                 spreadCost,
                 slippageCost);
@@ -385,6 +583,7 @@ public static class StrategyBacktestEvaluator
             var quantity = Math.Min(requestedQuantity, position);
             if (quantity <= 0m)
             {
+                outcome = StrategyExecutionOutcome.RejectedInsufficientLiquidity;
                 return false;
             }
 
@@ -392,7 +591,7 @@ public static class StrategyBacktestEvaluator
             var executedNotional = quantity * executedPrice;
             if (executedNotional < options.MinimumOrderNotionalQuote)
             {
-                rejectedByMinimumNotional = true;
+                outcome = StrategyExecutionOutcome.RejectedMinimumNotional;
                 return false;
             }
 
@@ -401,6 +600,8 @@ public static class StrategyBacktestEvaluator
             var slippageCost = quantity * referencePrice * options.SlippageRate;
             cash += executedNotional - fee;
             position -= quantity;
+            var isPartial = signal.Action == StrategyExecutionAction.SellBaseQuantity && quantity < requestedQuantity;
+            outcome = isPartial ? StrategyExecutionOutcome.PartiallyFilled : StrategyExecutionOutcome.Filled;
             trade = new(
                 decisionIndex,
                 fillIndex,
@@ -411,7 +612,7 @@ public static class StrategyBacktestEvaluator
                 executedPrice,
                 quantity,
                 requestedQuantity,
-                signal.Action == StrategyExecutionAction.SellBaseQuantity && quantity < requestedQuantity,
+                isPartial,
                 fee,
                 spreadCost,
                 slippageCost);

@@ -22,8 +22,13 @@ token_file="$work_dir/api-internal-access-token"
 umask 077
 openssl rand -hex 32 > "$token_file"
 password="$(openssl rand -hex 32)"
+pg_secrets_dir="$work_dir/postgres-secrets"
+mkdir -m 0700 "$pg_secrets_dir"
+printf '%s' "$password" > "$pg_secrets_dir/postgres_password"
+chmod 0600 "$pg_secrets_dir/postgres_password"
 
 export API_INTERNAL_ACCESS_TOKEN_SOURCE="$token_file"
+export POSTGRES_SECRETS_DIRECTORY="$pg_secrets_dir"
 export LOCAL_UID="$(id -u)"
 export LOCAL_GID="$(id -g)"
 export API_PORT="$api_port"
@@ -38,7 +43,6 @@ export LOKI_PORT="$((62000 + ($$ % 500)))"
 export OBSERVABILITY_NETWORK_NAME="$network_name"
 export POSTGRES_DB=cryptotrading
 export POSTGRES_USER=cryptotrading
-export POSTGRES_PASSWORD="$password"
 export POSTGRES_PORT="$((61500 + ($$ % 500)))"
 export POSTGRES_VOLUME_NAME="$postgres_volume"
 export APP_ENVIRONMENT=Production

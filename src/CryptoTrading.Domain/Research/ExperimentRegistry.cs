@@ -80,6 +80,23 @@ public sealed class HoldoutContaminationException : InvalidOperationException
     }
 }
 
+public sealed class HoldoutAlreadyEvaluatedException : InvalidOperationException
+{
+    public HoldoutAlreadyEvaluatedException()
+    {
+    }
+
+    public HoldoutAlreadyEvaluatedException(string message)
+        : base(message)
+    {
+    }
+
+    public HoldoutAlreadyEvaluatedException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
 /// <summary>
 /// Immutable preregistration contract. Its digest is calculated before any
 /// result exists and therefore binds the hypothesis, search space and budget
@@ -397,6 +414,7 @@ public interface IExperimentRegistry
     ExperimentRegistrationResult Register(ExperimentPreregistration preregistration);
     ExperimentTrialResult RecordTrial(ExperimentId experimentId, ExperimentTrial trial);
     HoldoutAccessResult AccessHoldout(ExperimentId experimentId, HoldoutAccessRequest request);
+    HoldoutAccessResult AccessHoldoutStrict(ExperimentId experimentId, HoldoutAccessRequest request);
     ExperimentRecord ContaminateHoldout(
         ExperimentId experimentId,
         string actor,
@@ -515,6 +533,32 @@ public sealed class InMemoryExperimentRegistry : IExperimentRegistry
             entry.Accesses.Add(audit);
             entry.AccessesByKey.Add(request.IdempotencyKey, audit);
             return new(Clone(entry), audit, false);
+        }
+    }
+
+    public HoldoutAccessResult AccessHoldoutStrict(ExperimentId experimentId, HoldoutAccessRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        lock (gate)
+        {
+            var entry = Find(experimentId);
+            if (entry.AccessesByKey.TryGetValue(request.IdempotencyKey, out var replay))
+            {
+                return new(Clone(entry), replay, true);
+            }
+
+            if (entry.HoldoutStatus == HoldoutStatus.Contaminated)
+            {
+                throw new HoldoutContaminationException("Holdout is contaminated and cannot be strictly evaluated.");
+            }
+
+            if (entry.Accesses.Any(static a => a.Outcome == HoldoutAccessOutcome.Granted))
+            {
+                throw new HoldoutAlreadyEvaluatedException(
+                    $"Holdout for experiment {experimentId.Value:D} has already been evaluated and is strictly locked.");
+            }
+
+            return AccessHoldout(experimentId, request);
         }
     }
 
