@@ -343,6 +343,15 @@ public sealed class AdaptiveDecisionCycle
 
                 finalExecution = OrderExecutionPipeline.Evaluate(finalIntent, request.RiskPolicy, request.OperationalControl);
             }
+            else
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    nettingProposal,
+                    plan.NoTradeReason ?? ExecutionPlanner.MarketDataUnavailable,
+                    tacticRecommendation);
+            }
         }
 
         var trace = JsonSerializer.Serialize(new

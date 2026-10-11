@@ -94,6 +94,71 @@ public sealed class PaperSoakChaosTests
         Assert.All(store.AttemptCounts, attempts => Assert.InRange(attempts, 1, 3));
     }
 
+    [Fact]
+    [Trait("Category", "PaperChaos")]
+    public async Task PersistentPaperFailuresAreBoundedAndDeadLetteredWithoutExposure()
+    {
+        const int maxAttempts = 3;
+        var store = new ChaosOutboxStore();
+        var command = NewCommand(101, DateTimeOffset.UtcNow);
+        var exchange = new PersistentlyFailingPaperExchange();
+        var executor = new PaperOutboxMessageExecutor(
+            exchange,
+            Options.Create(new WorkerRuntimeOptions { ExecutionMode = "PAPER", NoTrade = false }),
+            NullLogger<PaperOutboxMessageExecutor>.Instance);
+
+        await store.EnqueueAsync(NewRecord(command, 101), TestContext.Current.CancellationToken);
+        await DispatchUntilTerminalAsync(store, executor, maxAttempts);
+
+        Assert.Equal(maxAttempts, exchange.SubmitCalls);
+        Assert.Equal(0, store.ProcessedCount);
+        Assert.Equal(1, store.DeadLetteredCount);
+        Assert.Equal("IOException", store.LastTerminalFailure);
+        Assert.Empty(exchange.OpenOrders);
+        Assert.Equal(0, await store.CountClaimableAsync(DateTimeOffset.UtcNow.AddMinutes(1)));
+    }
+
+    [Fact]
+    [Trait("Category", "PaperChaos")]
+    public async Task TimeoutAfterPaperAcceptanceConvergesWithoutASecondSubmission()
+    {
+        var store = new ChaosOutboxStore();
+        var command = NewCommand(102, DateTimeOffset.UtcNow);
+        var exchange = new SubmitThenTimeoutPaperExchange();
+        var executor = new PaperOutboxMessageExecutor(
+            exchange,
+            Options.Create(new WorkerRuntimeOptions { ExecutionMode = "PAPER", NoTrade = false }),
+            NullLogger<PaperOutboxMessageExecutor>.Instance);
+
+        await store.EnqueueAsync(NewRecord(command, 102), TestContext.Current.CancellationToken);
+        await DispatchUntilTerminalAsync(store, executor, maxAttempts: 3);
+
+        Assert.Equal(1, exchange.SubmitCalls);
+        Assert.Equal(1, store.ProcessedCount);
+        Assert.Equal(0, store.DeadLetteredCount);
+        var order = Assert.Single(exchange.OpenOrders);
+        Assert.Equal(command.ClientOrderId, order.ClientOrderId);
+        Assert.Equal(0, await store.CountClaimableAsync(DateTimeOffset.UtcNow.AddMinutes(1)));
+    }
+
+    [Fact]
+    [Trait("Category", "PaperChaos")]
+    public async Task UnknownOutcomeIsQuarantinedWithoutBlindRedispatch()
+    {
+        var store = new ChaosOutboxStore();
+        var command = NewCommand(103, DateTimeOffset.UtcNow);
+        var executor = new UnknownOutcomePaperExecutor(command.ClientOrderId.Value);
+
+        await store.EnqueueAsync(NewRecord(command, 103), TestContext.Current.CancellationToken);
+        await DispatchUntilTerminalAsync(store, executor, maxAttempts: 3);
+
+        Assert.Equal(1, executor.DispatchCalls);
+        Assert.Equal(0, store.ProcessedCount);
+        Assert.Equal(1, store.DeadLetteredCount);
+        Assert.StartsWith("ORDER_OUTCOME_UNKNOWN:", store.LastTerminalFailure, StringComparison.Ordinal);
+        Assert.Equal(0, await store.CountClaimableAsync(DateTimeOffset.UtcNow.AddMinutes(1)));
+    }
+
     private static SubmitOrderCommand NewCommand(int index, DateTimeOffset createdAtUtc) => new(
         new OrderId(Guid.Parse($"10000000-0000-0000-0000-{index + 1:D12}")),
         new ClientOrderId($"paper-chaos-{index:D4}"),
@@ -107,6 +172,48 @@ public sealed class PaperSoakChaosTests
         new IdempotencyKey($"paper-chaos-key-{index:D4}"),
         "paper-chaos-v1",
         createdAtUtc);
+
+    private static OutboxRecord NewRecord(SubmitOrderCommand command, int index) => new(
+        Guid.Parse($"30000000-0000-0000-0000-{index + 1:D12}"),
+        OrderExecutionPipeline.SubmitOrderMessageType,
+        command.CorrelationId,
+        command.IdempotencyKey,
+        command.PolicyVersion,
+        command,
+        OutboxRecordStatus.Pending,
+        command.CreatedAtUtc);
+
+    private static async Task DispatchUntilTerminalAsync(
+        ChaosOutboxStore store,
+        IOutboxMessageExecutor executor,
+        int maxAttempts)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var dispatcher = new OutboxDispatcher(
+            [store],
+            [executor],
+            Options.Create(new WorkerRuntimeOptions
+            {
+                ExecutionMode = "PAPER",
+                NoTrade = false,
+                PollIntervalMilliseconds = 100,
+                BatchSize = 1,
+                LeaseSeconds = 1,
+                MaxOutboxAttempts = maxAttempts
+            }),
+            NullLogger<OutboxDispatcher>.Instance);
+
+        await dispatcher.StartAsync(cancellation.Token).ConfigureAwait(false);
+        try
+        {
+            await store.Terminal.Task.WaitAsync(TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await cancellation.CancelAsync().ConfigureAwait(false);
+            await dispatcher.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+    }
 
     private sealed class PlannedFaultPaperExchange : IPaperExchange
     {
@@ -162,6 +269,69 @@ public sealed class PaperSoakChaosTests
         public IReadOnlyList<PaperFill> Replay(IEnumerable<PaperMarketTick> ticks) => inner.Replay(ticks);
     }
 
+    private sealed class PersistentlyFailingPaperExchange : IPaperExchange
+    {
+        public int SubmitCalls { get; private set; }
+
+        public IReadOnlyCollection<PaperOrderSnapshot> OpenOrders => [];
+
+        public IReadOnlyCollection<PaperFill> Fills => [];
+
+        public PaperSubmitResult Submit(PaperOrderRequest request, IdempotencyKey idempotencyKey)
+        {
+            SubmitCalls++;
+            throw new IOException("deterministic persistent paper dispatch failure");
+        }
+
+        public PaperOrderSnapshot GetOrder(ClientOrderId clientOrderId) => throw new KeyNotFoundException();
+
+        public PaperCancelResult Cancel(ClientOrderId clientOrderId, IdempotencyKey idempotencyKey) => throw new NotSupportedException();
+
+        public IReadOnlyList<PaperFill> Apply(PaperMarketTick tick) => throw new NotSupportedException();
+
+        public IReadOnlyList<PaperFill> Replay(IEnumerable<PaperMarketTick> ticks) => throw new NotSupportedException();
+    }
+
+    private sealed class SubmitThenTimeoutPaperExchange : IPaperExchange
+    {
+        private readonly PaperExchange inner = new();
+
+        public int SubmitCalls { get; private set; }
+
+        public IReadOnlyCollection<PaperOrderSnapshot> OpenOrders => inner.OpenOrders;
+
+        public IReadOnlyCollection<PaperFill> Fills => inner.Fills;
+
+        public PaperSubmitResult Submit(PaperOrderRequest request, IdempotencyKey idempotencyKey)
+        {
+            SubmitCalls++;
+            _ = inner.Submit(request, idempotencyKey);
+            throw new TimeoutException("deterministic response loss after paper acceptance");
+        }
+
+        public PaperOrderSnapshot GetOrder(ClientOrderId clientOrderId) => inner.GetOrder(clientOrderId);
+
+        public PaperCancelResult Cancel(ClientOrderId clientOrderId, IdempotencyKey idempotencyKey) => inner.Cancel(clientOrderId, idempotencyKey);
+
+        public IReadOnlyList<PaperFill> Apply(PaperMarketTick tick) => inner.Apply(tick);
+
+        public IReadOnlyList<PaperFill> Replay(IEnumerable<PaperMarketTick> ticks) => inner.Replay(ticks);
+    }
+
+    private sealed class UnknownOutcomePaperExecutor(string clientOrderId) : IOutboxMessageExecutor
+    {
+        public string MessageType => OrderExecutionPipeline.SubmitOrderMessageType;
+
+        public int DispatchCalls { get; private set; }
+
+        public Task ExecuteAsync(LeasedOutboxMessage message, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DispatchCalls++;
+            throw new OrderOutcomeUnknownException(clientOrderId);
+        }
+    }
+
     private sealed class ChaosOutboxStore : IOutboxStore
     {
         private readonly Dictionary<IdempotencyKey, ChaosEntry> entries = [];
@@ -169,6 +339,12 @@ public sealed class PaperSoakChaosTests
         public int Count => entries.Count;
 
         public int ProcessedCount => entries.Values.Count(entry => entry.Processed);
+
+        public int DeadLetteredCount => entries.Values.Count(entry => entry.DeadLettered);
+
+        public string? LastTerminalFailure { get; private set; }
+
+        public TaskCompletionSource Terminal { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IEnumerable<int> AttemptCounts => entries.Values.Select(entry => entry.Attempts);
 
@@ -199,6 +375,7 @@ public sealed class PaperSoakChaosTests
             cancellationToken.ThrowIfCancellationRequested();
             var entry = entries.Values
                 .Where(candidate => !candidate.Processed
+                    && !candidate.DeadLettered
                     && candidate.Record.CreatedAtUtc <= nowUtc
                     && (candidate.LockedUntil is null || candidate.LockedUntil <= nowUtc))
                 .OrderBy(candidate => candidate.Record.CreatedAtUtc)
@@ -240,6 +417,7 @@ public sealed class PaperSoakChaosTests
 
             entry.Processed = true;
             entry.LockedUntil = null;
+            Terminal.TrySetResult();
             return Task.FromResult(true);
         }
 
@@ -277,6 +455,8 @@ public sealed class PaperSoakChaosTests
 
             entry.DeadLettered = true;
             entry.LockedUntil = null;
+            LastTerminalFailure = failure;
+            Terminal.TrySetResult();
             return Task.FromResult(true);
         }
 

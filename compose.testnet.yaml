@@ -1,0 +1,23 @@
+name: cryptotrading
+
+# Explicitly opt-in Testnet credential mount. Apply only with compose.yaml:
+# docker compose --env-file .env.testnet -f compose.yaml -f compose.testnet.yaml …
+# This override remains PAPER/NO_TRADE and does not enable mutable Testnet work.
+services:
+  cryptotrading-worker:
+    environment:
+      BINANCE_API_KEY_FILE: /run/cryptotrading-testnet-secrets/binance_api_key
+      BINANCE_API_SECRET_FILE: /run/cryptotrading-testnet-secrets/binance_api_secret
+      BINANCE_WITHDRAWALS_ENABLED: "false"
+      WORKER_EXECUTION_MODE: PAPER
+      WORKER_NO_TRADE: "true"
+      WORKER_TESTNET_EXECUTION_ACKNOWLEDGED: "false"
+      WORKER_TESTNET_ORDER_EXECUTION_ENABLED: "false"
+    volumes:
+      # A directory bind preserves the mode-700 parent and mode-600 files
+      # enforced by the runtime resolver. Docker secret mounts are read-only
+      # mode 0444 by default and would fail that fail-closed contract.
+      - type: bind
+        source: ${BINANCE_TESTNET_SECRETS_DIRECTORY:?Set BINANCE_TESTNET_SECRETS_DIRECTORY in .env.testnet to the private Testnet secret directory.}
+        target: /run/cryptotrading-testnet-secrets
+        read_only: true

@@ -96,27 +96,7 @@ public sealed class AdaptiveDecisionCycleTests
     {
         var cycle = new AdaptiveDecisionCycle();
         // Flat bars then dip to 95 -> oversold range
-        var bars = Bars(100m, 100m, 100m, 100m, 100m, 95m);
-        var request = new AdaptiveDecisionCycleRequest(
-            bars,
-            CreatePortfolio(),
-            CreateRiskPolicy(),
-            OperationalControlSnapshot.Initial,
-            EntryTargetNotional: 500m,
-            EvaluatedAtUtc: TestTime) with
-        {
-            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime),
-            ExecutionMarketMaxAge = TimeSpan.FromMinutes(5),
-            AvailableAccountLiquidityNotional = 10_000m,
-            EffectiveCommission = new EffectiveCommissionSnapshot(
-                BtcUsdt, "testnet", "account",
-                new CommissionRateSet(.004m, .002m, 0m, 0m),
-                new CommissionRateSet(0m, 0m, 0m, 0m),
-                new CommissionRateSet(0m, 0m, 0m, 0m),
-                false, false, null, null, false, TestTime),
-            CommissionMaximumAge = TimeSpan.FromMinutes(1),
-            UseConservativeCommissionReserve = true,
-        };
+        var request = CreateDispatchableRequest();
 
         var result = cycle.Evaluate(request);
 
@@ -128,6 +108,50 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
         Assert.NotNull(result.TacticRecommendation);
         Assert.Contains("mean-reversion-btcusdt", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailsClosedWhenExecutionPlannerRejectsIncompleteMarketData()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime, isComplete: false),
+        };
+
+        AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.MarketDataUnavailable);
+    }
+
+    [Fact]
+    public void FailsClosedWhenExecutionPlannerRejectsStaleMarketData()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime.AddMinutes(-6)),
+        };
+
+        AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.MarketDataStale);
+    }
+
+    [Fact]
+    public void FailsClosedWhenExecutionPlannerRejectsInsufficientLiquidity()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 1m, TestTime),
+        };
+
+        AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.LiquidityUnavailable);
+    }
+
+    [Fact]
+    public void FailsClosedWhenExecutionPlannerRejectsStaleCommission()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            EffectiveCommission = CreateCommission(TestTime.AddMinutes(-2)),
+        };
+
+        AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.CommissionUnavailable);
     }
 
     [Fact]
@@ -152,6 +176,43 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal(MarketRegime.BullTrend, result.Regime.Regime);
         Assert.NotNull(result.NettingProposal);
         Assert.True(result.NettingProposal.NettedQuantity > 0m);
+    }
+
+    private static AdaptiveDecisionCycleRequest CreateDispatchableRequest() => new(
+        Bars(100m, 100m, 100m, 100m, 100m, 95m),
+        CreatePortfolio(),
+        CreateRiskPolicy(),
+        OperationalControlSnapshot.Initial,
+        EntryTargetNotional: 500m,
+        EvaluatedAtUtc: TestTime)
+    {
+        ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime),
+        ExecutionMarketMaxAge = TimeSpan.FromMinutes(5),
+        AvailableAccountLiquidityNotional = 10_000m,
+        EffectiveCommission = CreateCommission(TestTime),
+        CommissionMaximumAge = TimeSpan.FromMinutes(1),
+        UseConservativeCommissionReserve = true,
+    };
+
+    private static EffectiveCommissionSnapshot CreateCommission(DateTimeOffset observedAtUtc) => new(
+        BtcUsdt, "testnet", "account",
+        new CommissionRateSet(.004m, .002m, 0m, 0m),
+        new CommissionRateSet(0m, 0m, 0m, 0m),
+        new CommissionRateSet(0m, 0m, 0m, 0m),
+        false, false, null, null, false, observedAtUtc);
+
+    private static void AssertPlannerRejectionFailsClosed(
+        AdaptiveDecisionCycleRequest request,
+        string expectedReason)
+    {
+        var result = new AdaptiveDecisionCycle().Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Null(result.Intent);
+        Assert.Null(result.Execution);
+        Assert.Equal(expectedReason, result.NoTradeReason);
+        Assert.Contains("\"Outcome\":\"NO_TRADE\"", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Contains(expectedReason, result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
     private static List<CloseBar> Bars(params decimal[] prices)

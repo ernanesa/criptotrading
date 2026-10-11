@@ -287,10 +287,19 @@ internal sealed class AutonomyCycleHostedService(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Fallback gracefully if rules provider is temporarily unavailable
+                // The execution market remains incomplete below, so a new exposure fails closed.
             }
         }
-        var executionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker, rules);
+        var mappedExecutionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker, rules);
+        var hasCompleteTradingRules = HasCompleteTradingRules(rules, runtime.AutonomySymbol);
+        var executionMarket = new ExecutionMarketSnapshot(
+            mappedExecutionMarket.BestBid,
+            mappedExecutionMarket.BestAsk,
+            mappedExecutionMarket.AvailableLiquidityNotional,
+            mappedExecutionMarket.ObservedAtUtc,
+            isComplete: mappedExecutionMarket.IsComplete && hasCompleteTradingRules,
+            quantityStepSize: mappedExecutionMarket.QuantityStepSize,
+            priceTickSize: mappedExecutionMarket.PriceTickSize);
         var positionBasisConsistent = btcQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
             : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m;
@@ -377,18 +386,24 @@ internal sealed class AutonomyCycleHostedService(
                 await driftStore.RecordDriftObservationAsync(driftObs, driftEval, cancellationToken).ConfigureAwait(false);
             }
 
-            var adaptiveOutbox = adaptiveResult.Execution is { IsDispatchable: true } exec ? exec.OutboxRecord : null;
-            var adaptiveOutcome = adaptiveResult.IsNoTrade ? "NO_TRADE" : adaptiveOutbox is not null ? "DISPATCHABLE" : "BLOCKED";
-            var adaptiveReason = adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
+            var adaptiveOutbox = hasCompleteTradingRules && adaptiveResult.Execution is { IsDispatchable: true } exec
+                ? exec.OutboxRecord
+                : null;
+            var adaptiveOutcome = !hasCompleteTradingRules || adaptiveResult.IsNoTrade
+                ? "NO_TRADE"
+                : adaptiveOutbox is not null ? "DISPATCHABLE" : "BLOCKED";
+            var adaptiveReason = !hasCompleteTradingRules
+                ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
+                : adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
 
             await decisionCommitStore.CommitAsync(
                 CreateAdaptiveDecisionCommit(runtime, adaptiveCheckpointScope, featureSnapshot, adaptiveResult, adaptiveOutcome, adaptiveReason, adaptiveOutbox, replanCandidate),
                 cancellationToken).ConfigureAwait(false);
 
             lastProcessedCloseUtc = latest.CloseTimeUtc;
-            if (adaptiveResult.IsNoTrade)
+            if (!hasCompleteTradingRules || adaptiveResult.IsNoTrade)
             {
-                AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, adaptiveResult.NoTradeReason ?? "UNSPECIFIED");
+                AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, adaptiveReason);
                 return;
             }
 
@@ -423,16 +438,20 @@ internal sealed class AutonomyCycleHostedService(
             featureSnapshot,
             UseConservativeCommissionReserve: true);
         var result = cycle.Evaluate(request);
-        var outbox = GetDispatchableOutbox(result);
-        var outcome = result.IsNoTrade ? "NO_TRADE" : outbox is not null ? "DISPATCHABLE" : "BLOCKED";
-        var reason = result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
+        var outbox = hasCompleteTradingRules ? GetDispatchableOutbox(result) : null;
+        var outcome = !hasCompleteTradingRules || result.IsNoTrade
+            ? "NO_TRADE"
+            : outbox is not null ? "DISPATCHABLE" : "BLOCKED";
+        var reason = !hasCompleteTradingRules
+            ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
+            : result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
         await decisionCommitStore.CommitAsync(
             CreateDecisionCommit(runtime, checkpointScope, featureSnapshot, result, outcome, reason, outbox, replanCandidate),
             cancellationToken).ConfigureAwait(false);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
-        if (result.IsNoTrade)
+        if (!hasCompleteTradingRules || result.IsNoTrade)
         {
-            AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, result.NoTradeReason ?? "UNSPECIFIED");
+            AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, reason);
             return;
         }
 
@@ -517,6 +536,20 @@ internal sealed class AutonomyCycleHostedService(
 
     private static OutboxRecord? GetDispatchableOutbox(BaselineDecisionCycleResult result) =>
         result.Execution is { IsDispatchable: true } execution ? execution.OutboxRecord : null;
+
+    private static bool HasCompleteTradingRules(BinanceSymbolTradingRules? rules, string symbol) =>
+        rules is
+        {
+            Status: "TRADING",
+            MinimumPrice: >= 0m,
+            MaximumPrice: >= 0m,
+            PriceTickSize: > 0m,
+            MinimumQuantity: > 0m,
+            MaximumQuantity: >= 0m,
+            QuantityStepSize: > 0m,
+            MinimumNotional: > 0m,
+            MaximumNotional: >= 0m
+        } && string.Equals(rules.Symbol, symbol, StringComparison.OrdinalIgnoreCase);
 
     private static decimal ParseBalance(string? value)
     {

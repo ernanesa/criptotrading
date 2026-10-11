@@ -6,9 +6,7 @@
 using System.Globalization;
 using CryptoTrading.Configuration;
 using CryptoTrading.Domain.Accounting;
-using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
-using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.Configuration;
@@ -26,59 +24,32 @@ if (string.IsNullOrWhiteSpace(connectionString))
 }
 
 await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
-await store.ApplyMigrationsAsync();
 
 var now = DateTimeOffset.UtcNow;
-Console.WriteLine($"[1/3] Connected to PostgreSQL at {now:u}. Checking RiskPolicy...");
+Console.WriteLine($"[1/2] Connected to PostgreSQL at {now:u}. Checking RiskPolicy...");
 
 var existingPolicy = await store.GetActiveRiskPolicyAsync(now);
-if (existingPolicy is not null)
+if (existingPolicy is null)
 {
-    Console.WriteLine($"Active RiskPolicy already exists: {existingPolicy.Policy.Version} (hash: {existingPolicy.DocumentHash})");
-}
-else
-{
-    try
-    {
-        var activated = await store.ActivateRiskPolicyAsync("v1.0.0-autonomy", DateTimeOffset.UtcNow);
-        Console.WriteLine($"Activated existing RiskPolicy: {activated.Policy.Version} at {DateTimeOffset.UtcNow:u}");
-    }
-    catch
-    {
-        var policy = new RiskPolicy(
-            version: "v1.0.0-autonomy",
-            maxOrderNotional: 100m,
-            maxExposureNotional: 500m,
-            maxDailyLoss: 50m,
-            maxDrawdown: 100m,
-            maxMarketDataAge: TimeSpan.FromSeconds(60),
-            withdrawalsEnabled: false,
-            maxSlippageBps: 50m,
-            maxVolatilityBps: 200m,
-            minLiquidityNotional: 1000m);
-
-        var draft = RiskPolicyDocument.CreateDraft(
-            policy,
-            effectiveFromUtc: now.AddMinutes(-5),
-            expiresAtUtc: now.AddDays(30),
-            createdBy: "risk-officer-author");
-
-        await store.SaveRiskPolicyAsync(draft);
-        var approved = await store.ApproveRiskPolicyAsync(
-            draft.Policy.Version,
-            approvalId: "approval-testnet-init-001",
-            approver: "trading-director-approver",
-            approvedAtUtc: now);
-
-        var activated = await store.ActivateRiskPolicyAsync(
-            approved.Policy.Version,
-            activatedAtUtc: now.AddSeconds(1));
-
-        Console.WriteLine($"Created, approved and activated RiskPolicy: {activated.Policy.Version} (hash: {activated.DocumentHash})");
-    }
+    Console.Error.WriteLine("Error: an active RiskPolicy is required before Testnet balance reconciliation. This tool will not create, approve, or activate a policy.");
+    return 1;
 }
 
-Console.WriteLine("[2/3] Checking Ledger Balances for account 'exchange-wallet'...");
+Console.WriteLine($"Active RiskPolicy: {existingPolicy.Policy.Version} (hash: {existingPolicy.DocumentHash})");
+
+if (!(bool.TryParse(configuration["TESTNET_STATE_INITIALIZER_RECONCILE_BALANCES"], out var reconcileBalances) && reconcileBalances))
+{
+    Console.WriteLine("Testnet balance reconciliation is disabled. Set TESTNET_STATE_INITIALIZER_RECONCILE_BALANCES=true to explicitly enable it.");
+    return 0;
+}
+
+if (!string.Equals(configuration["TRADING_ENVIRONMENT"], "TESTNET", StringComparison.OrdinalIgnoreCase))
+{
+    Console.Error.WriteLine("Error: TRADING_ENVIRONMENT must be TESTNET for balance reconciliation.");
+    return 1;
+}
+
+Console.WriteLine("[2/2] Checking Ledger Balances for account 'exchange-wallet'...");
 var existingAssets = await store.GetAssetsAsync(new AccountId("exchange-wallet"));
 if (existingAssets.Count > 0)
 {
@@ -103,6 +74,7 @@ else
         RestBaseAddress = new Uri(restBaseUrl.EndsWith('/', StringComparison.Ordinal) ? restBaseUrl : restBaseUrl + "/"),
         ApiKey = apiKey,
         ApiSecret = apiSecret,
+        // Accept the read-only account capability field; this client exposes only GET endpoints.
         AllowTestnetWithdrawCapability = true
     };
 
@@ -149,62 +121,7 @@ else
     }
 }
 
-Console.WriteLine("[3/4] Ensuring Position Cost Basis and reconciling unrecorded trade executions...");
-var btcBalance = await store.GetBalanceAsync(new AccountId("exchange-wallet"), new Asset("BTC"));
-if (btcBalance.Amount > 0)
-{
-    // If position_cost_basis is empty, seed it with the initial balance
-    await using var conn = new Npgsql.NpgsqlConnection(connectionString);
-    await conn.OpenAsync();
-    await using var cmd = new Npgsql.NpgsqlCommand(
-        """
-        INSERT INTO trading.position_cost_basis (symbol, base_asset, quote_asset, quantity, cost_quote)
-        VALUES ('BTCUSDT', 'BTC', 'USDT', @quantity, @cost)
-        ON CONFLICT (symbol) DO NOTHING;
-        """, conn);
-    cmd.Parameters.AddWithValue("quantity", btcBalance.Amount);
-    cmd.Parameters.AddWithValue("cost", btcBalance.Amount * 84290.01m);
-    var rows = await cmd.ExecuteNonQueryAsync();
-    if (rows > 0)
-    {
-        Console.WriteLine($"Seeded trading.position_cost_basis with {btcBalance.Amount} BTC at 84290.01 USDT.");
-    }
-}
-
-// Check if trade 1787584 is already known
-var knownTrades = await store.GetKnownTradeIdsAsync();
-if (!knownTrades.Contains(new KnownReconciliationTrade("BTCUSDT", 1787584)))
-{
-    Console.WriteLine("Trade 1787584 not yet recorded in execution fills. Recording now...");
-    var executionId = "trade:1787584";
-    var digest = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(executionId));
-    var ledgerId = new LedgerEntryId(new Guid(digest.AsSpan(0, 16)));
-    var correlationId = new CorrelationId(new Guid(digest.AsSpan(16, 16)));
-    var idempotency = new IdempotencyKey($"account-execution-{Convert.ToHexString(digest[..16])}");
-    var cmdRecord = new ExecutionAccountingCommand(
-        executionId,
-        1787584,
-        6799063,
-        new Symbol("BTCUSDT"),
-        new Asset("BTC"),
-        new Asset("USDT"),
-        OrderSide.Sell,
-        new Quantity(0.00038000m),
-        new Price(84290.01000000m),
-        new Money(0m, new Asset("USDT")),
-        new AccountId("exchange-wallet"),
-        new AccountId("exchange-wallet:trading-fees"),
-        ledgerId,
-        correlationId,
-        idempotency,
-        DateTimeOffset.FromUnixTimeMilliseconds(1790461461213),
-        "ctp-F8A123C4150DA89A11CE72B17854BC27");
-
-    var res = await store.RecordExecutionAsync(cmdRecord);
-    Console.WriteLine($"Successfully recorded execution 1787584: Realized PnL: {res.RealizedPnlQuote}, Avg Cost: {res.AverageCostQuote}");
-}
-
-Console.WriteLine("[4/4] Verification:");
+Console.WriteLine("Verification:");
 var checkPolicy = await store.GetActiveRiskPolicyAsync(DateTimeOffset.UtcNow);
 Console.WriteLine($"Active RiskPolicy: {checkPolicy?.Policy.Version ?? "NONE"} (Valid: {checkPolicy?.IsValidAt(DateTimeOffset.UtcNow) ?? false})");
 

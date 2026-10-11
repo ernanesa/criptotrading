@@ -66,10 +66,114 @@ for reference_prefix in AC RF RNF; do
     done < <(grep -E '^[[:space:]]*(requirements|acceptance):' "$manifest" | grep -oE "${reference_prefix}-[A-Z0-9-]+" | sort -u)
 done
 
+done_item_count=0
+while IFS=$'\t' read -r done_id field value; do
+    if [[ "$field" == 'code' ]]; then
+        ((done_item_count += 1))
+    fi
+
+    case "$field" in
+        code|tests|review|evidence|residual_risk|rollback)
+            if [[ -z "${value//[[:space:]]/}" || "$value" == '[]' ]]; then
+                errors+=("Done item $done_id is missing required link: $field")
+                continue
+            fi
+
+            link_values="${value//[\[\],]/ }"
+            read -r -a links <<<"$link_values"
+            if (( ${#links[@]} == 0 )); then
+                errors+=("Done item $done_id is missing required link: $field")
+                continue
+            fi
+
+            for link in "${links[@]}"; do
+                link="${link#\"}"
+                link="${link%\"}"
+                link="${link#\'}"
+                link="${link%\'}"
+                case "$link" in
+                    ''|/*|*://*|../*|*/../*|..)
+                        errors+=("Done item $done_id has an invalid $field link")
+                        continue
+                        ;;
+                esac
+
+                resolved_link="$(realpath -e -- "$repo_root/$link" 2>/dev/null || true)"
+                if [[ "$resolved_link" != "$repo_root/"* ]]; then
+                    errors+=("Done item $done_id has a non-existent $field link")
+                fi
+            done
+            ;;
+        command|observed_result)
+            if [[ -z "${value//[[:space:]]/}" || "$value" == '[]' ]]; then
+                errors+=("Done item $done_id is missing required field: $field")
+            fi
+            ;;
+        *)
+            errors+=("Done item $done_id is missing required field: $field")
+            ;;
+    esac
+done < <(
+    awk '
+        function trim(value) {
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            return value
+        }
+        function flush() {
+            if (current_id != "" && tolower(status) == "done") {
+                for (field_index = 1; field_index <= required_count; field_index++) {
+                    field = required_fields[field_index]
+                    printf "%s\t%s\t%s\n", current_id, field, fields[field]
+                }
+            }
+            delete fields
+            current_id = ""
+            status = ""
+        }
+        BEGIN {
+            required_count = split("code tests command observed_result review evidence residual_risk rollback", required_fields, " ")
+        }
+        /^[[:space:]]*-[[:space:]]+id:[[:space:]]*/ {
+            flush()
+            current_indent = match($0, /^[[:space:]]*/)
+            current_indent = RLENGTH
+            current_id = $0
+            sub(/^[[:space:]]*-[[:space:]]+id:[[:space:]]*/, "", current_id)
+            current_id = trim(current_id)
+            next
+        }
+        current_id != "" {
+            field_indent = match($0, /^[[:space:]]*/)
+            field_indent = RLENGTH
+            if (field_indent != current_indent + 2) {
+                next
+            }
+
+            field = $0
+            sub(/^[[:space:]]*/, "", field)
+            if (field !~ /^(status|code|tests|command|observed_result|review|evidence|residual_risk|rollback):/) {
+                next
+            }
+
+            value = field
+            sub(/^[^:]*:[[:space:]]*/, "", value)
+            sub(/:.*/, "", field)
+            fields[field] = trim(value)
+            if (field == "status") {
+                status = fields[field]
+            }
+        }
+        END {
+            flush()
+        }
+    ' "$manifest"
+)
+
 if (( ${#errors[@]} > 0 )); then
     echo "Traceability validation failed:" >&2
     printf ' - %s\n' "${errors[@]}" >&2
     exit 1
 fi
 
-printf 'Traceability validation passed: %d explicit item IDs, schema v2, no duplicate/orphan references.\n' "${#item_ids[@]}"
+printf 'Traceability validation passed: %d explicit item IDs, schema v2, no duplicate/orphan references, %d Done items with complete local evidence links.\n' "${#item_ids[@]}" "$done_item_count"

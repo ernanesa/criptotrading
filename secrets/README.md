@@ -4,21 +4,29 @@ This directory is intentionally ignored by Git. Do not place credentials in
 the repository, ClickUp exports, logs, shell history, Dockerfiles, images,
 fixtures, screenshots or CI variables.
 
-## Selected local `.env` contract
+## Compose isolation contract
 
-For the initial local Testnet setup, use the ignored repository file `.env`:
+The base `compose.yaml` is PAPER/NO_TRADE and never passes Binance API keys,
+secrets, or credential-file paths to a container. Start it on its own for
+normal local work.
 
-```text
-BINANCE_API_KEY=<new-testnet-key>
-BINANCE_API_SECRET=<new-testnet-secret>
+The tracked `compose.testnet.yaml` is an explicit, future Testnet opt-in. It
+bind-mounts one private directory into the Worker and passes only the two
+in-container file paths. It does not enable Testnet execution, orders,
+reconciliation, account streaming, autonomy, or withdrawals. Use it only
+after the independent Testnet gates have been approved:
+
+```bash
+cp .env.testnet.example .env.testnet
+# Set BINANCE_TESTNET_SECRETS_DIRECTORY to the private directory created below.
+docker compose --env-file .env.testnet -f compose.yaml -f compose.testnet.yaml --profile worker up
 ```
 
-Create it from the tracked template with `cp .env.example .env`, fill the two
-values locally, and keep its permissions at `600`. Never commit or send the
-populated file. The repository `.gitignore` ignores `.env` and `.env.*`.
-The local loader ignores a group/world-readable `.env` (and symbolic links on
-Linux/macOS); process environment variables remain available, but missing
-validated credentials fail closed.
+`.env.testnet` is ignored by Git and contains a directory path only; never put
+credential values, `BINANCE_API_KEY`, or `BINANCE_API_SECRET` in it. For a
+direct host-only command, the separate ignored `.env` may contain only the
+absolute `BINANCE_API_KEY_FILE` and `BINANCE_API_SECRET_FILE` paths. The base
+Compose file does not consume either path.
 
 ## Stronger alternative: external secret files
 
@@ -30,8 +38,10 @@ Use an external directory owned by the local user, for example:
 ```
 
 The directory must be mode `700` and each file mode `600`. The application
-should receive file paths, not secret values, and fail closed when the path,
-environment, endpoint or permissions do not match.
+receives file paths, not secret values, and fails closed when the path,
+environment, endpoint or permissions do not match. The Compose override
+bind-mounts the entire private directory because the runtime verifies both the
+file and its parent permissions.
 
 O runtime implementa `BINANCE_API_KEY_FILE` e `BINANCE_API_SECRET_FILE`. Os
 caminhos precisam ser absolutos; em Linux/macOS, o arquivo não pode ter bits de
@@ -53,15 +63,10 @@ The helper reads values without echoing them, never prints their contents and
 does not accept values as command-line arguments. Do not run it with values
 embedded in shell history.
 
-## Environment contract
+## Testnet file contract
 
 ```text
-TRADING_ENVIRONMENT=TESTNET
-BINANCE_REST_BASE_URL=https://testnet.binance.vision/api
-BINANCE_WS_BASE_URL=wss://testnet.binance.vision/ws
-BINANCE_API_KEY_FILE=/home/ernane/.config/cryptotrading/testnet/binance_api_key
-BINANCE_API_SECRET_FILE=/home/ernane/.config/cryptotrading/testnet/binance_api_secret
-BINANCE_WITHDRAWALS_ENABLED=false
+BINANCE_TESTNET_SECRETS_DIRECTORY=/home/ernane/.config/cryptotrading/testnet
 ```
 
 The Testnet key must be separate from any future production key. Withdrawals,
