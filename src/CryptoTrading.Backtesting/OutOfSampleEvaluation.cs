@@ -162,7 +162,12 @@ public static class WalkForwardEvaluator
                     netReturn,
                     maximumDrawdown,
                     oosPoints.Length,
-                    oosBars)));
+                    oosBars,
+                    benchmarkEntryPrice: window.OutOfSampleStartIndex == 0
+                        ? oosBars[0].ClosePrice.Value
+                        : bars[window.OutOfSampleStartIndex - 1].ClosePrice.Value,
+                    feeRate: parameters.FeeRate,
+                    slippageRate: parameters.SlippageRate)));
         }
 
         return new WalkForwardEvaluationResult(

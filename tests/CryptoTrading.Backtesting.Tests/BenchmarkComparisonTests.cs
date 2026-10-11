@@ -32,6 +32,41 @@ public sealed class BenchmarkComparisonTests
     }
 
     [Fact]
+    public void OutOfSampleBuyAndHoldUsesSamePriorCloseAndSymmetricCostsAsStrategy()
+    {
+        var (_, allBars) = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var bars = new[]
+        {
+            new CloseBar(allBars[0].Symbol, allBars[0].CloseTimeUtc, 110m),
+            new CloseBar(allBars[0].Symbol, allBars[0].CloseTimeUtc.AddDays(1), 120m),
+        };
+
+        var comparison = BenchmarkComparisonEvaluator.CompareOutOfSample(
+            "test/1",
+            initialCapital: 1_000m,
+            finalEquity: 1_100m,
+            strategyNetReturn: 0.1m,
+            strategyMaximumDrawdown: 0.05m,
+            periodCount: bars.Length,
+            bars,
+            benchmarkEntryPrice: 100m,
+            feeRate: 0.01m,
+            halfSpreadRate: 0.01m,
+            slippageRate: 0.02m);
+
+        var entryPrice = 100m * 1.03m;
+        var quantity = 1_000m / (entryPrice * 1.01m);
+        var exitPrice = 120m * 0.97m;
+        var expectedFinalEquity = quantity * exitPrice * 0.99m;
+        Assert.Equal(expectedFinalEquity, comparison.BuyAndHold.FinalEquity);
+        Assert.Equal(expectedFinalEquity / 1_000m - 1m, comparison.BuyAndHold.NetReturn);
+        Assert.Equal(100m, comparison.BuyAndHold.ReferenceEntryPrice);
+        Assert.Equal(2, comparison.BuyAndHold.PeriodCount);
+        Assert.True(comparison.BuyAndHold.MaximumDrawdown > 0m);
+        Assert.Contains("fee=1.00%", comparison.BuyAndHold.CostModel, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FingerprintAndOrderingAreDeterministic()
     {
         var (_, bars) = SyntheticMarketDataset.CreateBtcUsdtV1();
