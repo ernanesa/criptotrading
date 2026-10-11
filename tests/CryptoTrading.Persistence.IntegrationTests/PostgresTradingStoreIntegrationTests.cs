@@ -7,6 +7,9 @@ using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Runtime;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Npgsql;
 using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Strategies;
@@ -693,13 +696,146 @@ public sealed class PostgresTradingStoreIntegrationTests
         await using var verificationProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
         Assert.Empty(await verificationProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
 
-        // A later authoritative open-order snapshot may recreate the identity;
-        // this verifies that removal is a projection state transition, not a
-        // destructive loss of the ability to replay the order.
+        // A projection upsert cannot revive an identity after removal. REST
+        // resolution uses its separate timestamp-conditional active-row path.
         await verificationProcess.UpsertOpenOrderAsync(updated, cancellationToken: TestContext.Current.CancellationToken);
-        var replayedAfterRemoval = Assert.Single(await verificationProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal(updated, replayedAfterRemoval);
-        await verificationProcess.RemoveOpenOrderAsync(clientOrderId, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Empty(await verificationProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task AccountStreamTerminalTombstoneRejectsDelayedActiveReportAcrossRestart()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        var clientOrderId = "t-" + Guid.NewGuid().ToString("N");
+        var observedAtUtc = DateTimeOffset.UtcNow;
+        var initial = new LocalOpenOrderRecord(
+            "BTCUSDT", 7_000_000_002, clientOrderId, "NEW", observedAtUtc, 0.01m, 0m);
+        var terminal = initial with
+        {
+            Status = "CANCELED",
+            UpdatedAtUtc = observedAtUtc.AddMilliseconds(2),
+            CumulativeExecutedQuantity = 0.005m,
+            ExchangeUpdatedAtUtc = observedAtUtc.AddMilliseconds(2),
+        };
+
+        await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
+        {
+            await firstProcess.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            await firstProcess.UpsertOpenOrderAsync(initial, cancellationToken: TestContext.Current.CancellationToken);
+            var partialFill = initial with
+            {
+                Status = "PARTIALLY_FILLED",
+                UpdatedAtUtc = observedAtUtc.AddMilliseconds(1),
+                CumulativeExecutedQuantity = 0.005m,
+                ExchangeUpdatedAtUtc = observedAtUtc.AddMilliseconds(1),
+            };
+            Assert.True(await firstProcess.ApplyAccountStreamExecutionReportAsync(
+                partialFill, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
+            var staleNew = partialFill with { Status = "NEW" };
+            Assert.False(await firstProcess.ApplyAccountStreamExecutionReportAsync(
+                staleNew, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
+            var newStatusWithHigherFill = staleNew with { CumulativeExecutedQuantity = 0.006m };
+            Assert.False(await firstProcess.ApplyAccountStreamExecutionReportAsync(
+                newStatusWithHigherFill, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Equal("PARTIALLY_FILLED", Assert.Single(await firstProcess.ReadOpenOrdersAsync(
+                cancellationToken: TestContext.Current.CancellationToken)).Status);
+            Assert.True(await firstProcess.ApplyAccountStreamExecutionReportAsync(
+                terminal, isTerminal: true, cancellationToken: TestContext.Current.CancellationToken));
+        }
+
+        await using var restartedProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var delayedActive = initial with
+        {
+            Status = "PARTIALLY_FILLED",
+            UpdatedAtUtc = observedAtUtc.AddMilliseconds(1),
+            CumulativeExecutedQuantity = 0.005m,
+            ExchangeUpdatedAtUtc = observedAtUtc.AddMilliseconds(1),
+        };
+        Assert.False(await restartedProcess.ApplyAccountStreamExecutionReportAsync(
+            delayedActive, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Empty(await restartedProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
+
+        // A REST snapshot must never reactivate an identity with a durable
+        // terminal account-stream tombstone, even if its timestamp claims to be newer.
+        var staleRestSnapshot = initial with
+        {
+            Status = "NEW",
+            UpdatedAtUtc = observedAtUtc.AddMilliseconds(3),
+            ExchangeUpdatedAtUtc = observedAtUtc.AddMilliseconds(1),
+        };
+        Assert.False(await restartedProcess.ApplyAuthoritativeOpenOrderSnapshotAsync(
+            staleRestSnapshot, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Empty(await restartedProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
+
+        // Reconciliation cannot undo a terminal event; conflicting external state
+        // remains a SafeMode mismatch for an operator to investigate.
+        var freshRestSnapshot = staleRestSnapshot with
+        {
+            UpdatedAtUtc = observedAtUtc.AddMilliseconds(4),
+            ExchangeUpdatedAtUtc = observedAtUtc.AddMilliseconds(3),
+        };
+        Assert.False(await restartedProcess.ApplyAuthoritativeOpenOrderSnapshotAsync(
+            freshRestSnapshot, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Empty(await restartedProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
+        await restartedProcess.RemoveOpenOrderAsync(clientOrderId, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ReconciliationEventsAreDurableIdempotentAndRejectIdentityCollision()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip(
+                "POSTGRES_CONNECTION_STRING must be supplied by scripts/test-postgres-integration.sh.");
+        }
+
+        var eventId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var occurredAtUtc = DateTimeOffset.UtcNow;
+        var payload = JsonSerializer.Serialize(new
+        {
+            schemaVersion = (short)1,
+            eventType = "BalanceReconciled",
+            eventId,
+            correlationId,
+            occurredAtUtc,
+            data = new { asset = "USDT", delta = 0m },
+        });
+        var eventRecord = new ReconciliationEventRecord(
+            eventId, correlationId, occurredAtUtc, "BalanceReconciled", 1,
+            payload, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))));
+        await using (var firstProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString)))
+        {
+            await firstProcess.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.True(await firstProcess.AppendReconciliationEventAsync(eventRecord, cancellationToken: TestContext.Current.CancellationToken));
+        }
+
+        await using var restartedProcess = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        Assert.False(await restartedProcess.AppendReconciliationEventAsync(eventRecord, cancellationToken: TestContext.Current.CancellationToken));
+
+        var conflictingPayload = JsonSerializer.Serialize(new
+        {
+            schemaVersion = (short)1,
+            eventType = "BalanceReconciled",
+            eventId,
+            correlationId,
+            occurredAtUtc,
+            data = new { asset = "USDT", delta = 1m },
+        });
+        var conflictingRecord = eventRecord with
+        {
+            PayloadJson = conflictingPayload,
+            PayloadSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(conflictingPayload))),
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            restartedProcess.AppendReconciliationEventAsync(conflictingRecord, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]

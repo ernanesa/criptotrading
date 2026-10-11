@@ -23,7 +23,7 @@ internal sealed class AccountStreamHostedService(
     IOptions<WorkerRuntimeOptions> options,
     IBinanceUserDataStreamClient streamClient,
     IAccountStreamEventStore eventStore,
-    ILocalOpenOrderStore openOrderStore,
+    IAccountStreamOrderProjectionStore openOrderStore,
     IExecutionAccountingStore executionAccountingStore,
     IExpectedExecutionFeeStore expectedExecutionFeeStore,
     IExecutionFeeAssetValuationProvider feeAssetValuationProvider,

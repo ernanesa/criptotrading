@@ -111,6 +111,36 @@ uma projeção atualizável, alimentada pelo futuro OMS, usada apenas para compa
 Qualquer ordem externa desconhecida, ausente localmente ou com status divergente
 entra em SafeMode.
 
+Migration `031_reconciliation_events` adiciona a trilha append-only de eventos
+de reconciliação. `IReconciliationEventStore` persiste o tipo/schema do evento,
+correlação, instante observado, JSONB e SHA-256 do payload. Repetir o mesmo
+`event_id` e conteúdo é idempotente; reutilizar a identidade com conteúdo ou
+metadados diferentes falha fechado. O Worker seleciona o sink PostgreSQL quando
+a persistência está habilitada; falha ao gravar evidência força SafeMode antes
+de propagar a falha.
+
+A projeção de ordens abertas aplica eventos do account stream por um upsert SQL
+atômico, condicionado ao timestamp e à monotonicidade do preenchimento. Eventos
+terminais deixam uma tombstone inativa com o estado final; um `NEW` ou
+`PARTIALLY_FILLED` atrasado não pode reativar a mesma identidade após restart.
+Uma leitura REST autoritativa não reativa uma linha inativa; ela só pode atualizar
+uma identidade já ativa no caminho explícito de resolução. O teste de integração
+`AccountStreamTerminalTombstoneRejectsDelayedActiveReportAcrossRestart` prova
+esse comportamento com PostgreSQL real quando executado pelo harness local.
+
+Migration `032_open_order_exchange_update_time` guarda o `updateTime` da exchange
+separadamente do instante local de observação. A resolução REST de uma ordem
+ambígua exige esse timestamp e só atualiza uma linha ainda ativa cuja versão não
+seja mais nova. Projeções locais não reativam linhas inativas e uma tombstone
+terminal permanece terminal; uma visão da exchange que contradiga isso gera
+mismatch/SafeMode para investigação em vez de sobrescrever evidência.
+Para account-stream, `updated_at` é o instante local de recebimento e
+`exchange_updated_at` é o event-time da Binance; decisões de ordenação usam o
+último e não comparam relógios locais e da exchange quando ambos estão
+disponíveis. Relatórios ativos com event-time igual não regridem status sem um
+avanço de quantidade executada; relatórios terminais prevalecem sobre ativos
+com o mesmo timestamp.
+
 Migration `010_operational_control_audit` adiciona a tabela append-only de
 transições de `KillSwitch`/`SafeMode`. Cada linha preserva o schema versionado,
 os modos anterior e seguinte, ator, motivo, chave de idempotência, eventual
@@ -150,6 +180,9 @@ O Worker registra o `PostgresTradingStore` somente quando
 `WORKER_APPLY_MIGRATIONS=true`; portanto, iniciar o processo com defaults não
 abre conexão nem altera o banco. A connection string deve ser fornecida por
 `POSTGRES_CONNECTION_STRING` em ambiente local e nunca deve ser commitada.
+Com persistência habilitada, o Worker também registra
+`PostgresReconciliationEventSink`; sem persistência, reconciliation habilitada
+falha na composição em vez de descartar silenciosamente eventos de auditoria.
 
 O dispatcher usa `FOR UPDATE SKIP LOCKED`, lease por mensagem e retry com
 backoff exponencial limitado. O executor registrado nesta etapa é PAPER; o
