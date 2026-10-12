@@ -17,7 +17,9 @@ public sealed record ExecutionMarketSnapshot
         DateTimeOffset observedAtUtc,
         bool isComplete = true,
         decimal? quantityStepSize = null,
-        decimal? priceTickSize = null)
+        decimal? priceTickSize = null,
+        decimal? bidQuantity = null,
+        decimal? askQuantity = null)
     {
         if (bestAsk.Value < bestBid.Value)
         {
@@ -38,6 +40,8 @@ public sealed record ExecutionMarketSnapshot
         IsComplete = isComplete;
         QuantityStepSize = quantityStepSize;
         PriceTickSize = priceTickSize;
+        BidQuantity = bidQuantity;
+        AskQuantity = askQuantity;
     }
 
     public Price BestBid { get; }
@@ -47,6 +51,12 @@ public sealed record ExecutionMarketSnapshot
     public bool IsComplete { get; }
     public decimal? QuantityStepSize { get; }
     public decimal? PriceTickSize { get; }
+    public decimal? BidQuantity { get; }
+    public decimal? AskQuantity { get; }
+    public decimal OrderBookImbalance =>
+        BidQuantity is { } bidQty && AskQuantity is { } askQty && (bidQty + askQty) > 0m
+            ? Math.Round((bidQty - askQty) / (bidQty + askQty), 4)
+            : 0m;
 }
 
 /// <summary>Inputs for one deterministic execution attempt.</summary>
@@ -250,13 +260,18 @@ public static class ExecutionPlanner
         var limitPrice = intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk;
         if (market.PriceTickSize is { } tickSize && tickSize > 0m)
         {
-            var ticks = intent.Side is OrderSide.Buy
-                ? Math.Floor(limitPrice.Value / tickSize)
-                : Math.Ceiling(limitPrice.Value / tickSize);
+            var tickSource = intent.Side is OrderSide.Buy && intent.Type is OrderType.Market
+                ? market.BestAsk.Value * 1.00015m
+                : intent.Side is OrderSide.Sell
+                    ? market.BestBid.Value * 0.99985m
+                    : market.BestBid.Value;
+            var ticks = Math.Floor(tickSource / tickSize);
             limitPrice = new Price(ticks * tickSize);
         }
 
-        var rawQuantity = decision.AuthorizedTargetNotional / limitPrice.Value;
+        var rawQuantity = intent.Side is OrderSide.Sell && market.QuantityStepSize is not null && intent.RiskEvaluation.RequestedTargetNotional > 0m
+            ? decimal.Round(intent.Quantity.Value * Math.Min(1m, decision.AuthorizedTargetNotional / intent.RiskEvaluation.RequestedTargetNotional), 8)
+            : decision.AuthorizedTargetNotional / limitPrice.Value;
         if (market.QuantityStepSize is { } stepSize && stepSize > 0m)
         {
             var steps = Math.Floor(rawQuantity / stepSize);

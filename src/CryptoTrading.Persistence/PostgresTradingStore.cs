@@ -1924,7 +1924,71 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         command.Parameters.Add(Parameter("cumulative_executed_quantity", NpgsqlDbType.Numeric, order.CumulativeExecutedQuantity.HasValue ? order.CumulativeExecutedQuantity.Value : DBNull.Value));
         command.Parameters.Add(Parameter("active", NpgsqlDbType.Boolean, !isTerminal));
         command.Parameters.Add(Parameter("exchange_updated_at", NpgsqlDbType.TimestampTz, (order.ExchangeUpdatedAtUtc ?? order.UpdatedAtUtc).UtcDateTime));
-        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+        var updated = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+        var mappedLifecycleStatus = order.Status.Trim().ToUpperInvariant() switch
+        {
+            "FILLED" => "Filled",
+            "PARTIALLY_FILLED" => "PartiallyFilled",
+            "CANCELED" or "CANCELLED" => "Cancelled",
+            "REJECTED" => "Rejected",
+            "EXPIRED" or "EXPIRED_IN_MATCH" => "Expired",
+            "PENDING_CANCEL" => "CancelPending",
+            "NEW" => "Acknowledged",
+            _ => null
+        };
+        if (mappedLifecycleStatus is not null)
+        {
+            var exchangeOrderIdText = order.OrderId?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var streamIdempotencyKey = $"stream:{order.ClientOrderId.Trim()}:{mappedLifecycleStatus}:{exchangeOrderIdText ?? "none"}";
+            await using var lifecycleCommand = new NpgsqlCommand(
+                """
+                INSERT INTO trading.order_lifecycle_events
+                    (event_id, client_order_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id)
+                SELECT
+                    @event_id,
+                    @client_order_id,
+                    latest.to_status,
+                    @to_status,
+                    @idempotency_key,
+                    @occurred_at,
+                    @exchange_order_id
+                FROM (
+                    SELECT to_status
+                    FROM trading.order_lifecycle_events
+                    WHERE client_order_id = @client_order_id
+                    ORDER BY occurred_at DESC, event_id DESC
+                    LIMIT 1
+                ) AS latest
+                WHERE latest.to_status <> @to_status
+                  AND latest.to_status NOT IN ('Filled', 'Cancelled', 'Rejected', 'Expired')
+                ON CONFLICT (idempotency_key) DO NOTHING;
+                """,
+                connection);
+            lifecycleCommand.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, Guid.NewGuid()));
+            lifecycleCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+            lifecycleCommand.Parameters.Add(Parameter("to_status", NpgsqlDbType.Varchar, mappedLifecycleStatus));
+            lifecycleCommand.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, streamIdempotencyKey));
+            lifecycleCommand.Parameters.Add(Parameter("occurred_at", NpgsqlDbType.TimestampTz, (order.ExchangeUpdatedAtUtc ?? order.UpdatedAtUtc).UtcDateTime));
+            lifecycleCommand.Parameters.Add(Parameter("exchange_order_id", NpgsqlDbType.Varchar, exchangeOrderIdText));
+            _ = await lifecycleCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (isTerminal)
+        {
+            await using var releaseCommand = new NpgsqlCommand(
+                """
+                UPDATE trading.capital_reservations
+                SET status = 'Released',
+                    updated_at = transaction_timestamp(),
+                    reason = 'TERMINAL_ORDER_RELEASE'
+                WHERE client_order_id = @client_order_id
+                  AND status IN ('Reserved', 'CommittedToExchange', 'PartiallyFilled');
+                """,
+                connection);
+            releaseCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+            _ = await releaseCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return updated;
     }
 
     public async Task<bool> ApplyAuthoritativeOpenOrderSnapshotAsync(
@@ -1999,6 +2063,21 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         command.Parameters.Add(Parameter("cumulative_executed_quantity", NpgsqlDbType.Numeric, order.CumulativeExecutedQuantity.HasValue ? order.CumulativeExecutedQuantity.Value : DBNull.Value));
         command.Parameters.Add(Parameter("exchange_updated_at", NpgsqlDbType.TimestampTz, order.ExchangeUpdatedAtUtc.HasValue ? order.ExchangeUpdatedAtUtc.Value.UtcDateTime : DBNull.Value));
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (string.Equals(order.Status.Trim(), "UNKNOWN", StringComparison.OrdinalIgnoreCase))
+        {
+            await using var unknownCommand = new NpgsqlCommand(
+                """
+                UPDATE trading.capital_reservations
+                SET status = 'LockedUnknown',
+                    updated_at = transaction_timestamp(),
+                    reason = 'ORDER_STATE_LOCKED_UNKNOWN'
+                WHERE client_order_id = @client_order_id
+                  AND status IN ('Reserved', 'CommittedToExchange', 'PartiallyFilled');
+                """,
+                connection);
+            unknownCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+            _ = await unknownCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task RemoveOpenOrderAsync(string clientOrderId, CancellationToken cancellationToken = default)
@@ -2006,7 +2085,15 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
-            "UPDATE trading.reconciliation_open_orders SET active = FALSE, updated_at = transaction_timestamp() WHERE client_order_id = @client_order_id;",
+            """
+            UPDATE trading.reconciliation_open_orders SET active = FALSE, updated_at = transaction_timestamp() WHERE client_order_id = @client_order_id;
+            UPDATE trading.capital_reservations
+            SET status = 'Released',
+                updated_at = transaction_timestamp(),
+                reason = 'TERMINAL_ORDER_RELEASE'
+            WHERE client_order_id = @client_order_id
+              AND status IN ('Reserved', 'CommittedToExchange', 'PartiallyFilled');
+            """,
             connection);
         command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
         _ = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -2415,6 +2502,16 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         await InsertLifecycleEventAsync(connection, transaction, resolution.LifecycleEvent, cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction,
             "UPDATE trading.reconciliation_open_orders SET active = FALSE, updated_at = transaction_timestamp() WHERE client_order_id = @client_order_id;",
+            [Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value)], cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction,
+            """
+            UPDATE trading.capital_reservations
+            SET status = 'Released',
+                reason = 'TERMINAL_ORDER_RELEASE',
+                updated_at = transaction_timestamp()
+            WHERE client_order_id = @client_order_id
+              AND status IN ('Reserved', 'PartiallyConsumed', 'LockedUnknown');
+            """,
             [Parameter("client_order_id", NpgsqlDbType.Varchar, command.ClientOrderId.Value)], cancellationToken).ConfigureAwait(false);
 
         ExecutionReplanCandidate? candidate = null;

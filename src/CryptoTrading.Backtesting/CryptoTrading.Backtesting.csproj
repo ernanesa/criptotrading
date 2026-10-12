@@ -8,4 +8,10 @@
   <ItemGroup>
     <ProjectReference Include="../CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML" Version="6.0.0-preview.26457.2" />
+    <PackageReference Include="Microsoft.ML.FastTree" Version="6.0.0-preview.26457.2" />
+    <PackageReference Include="Microsoft.ML.TimeSeries" Version="6.0.0-preview.26457.2" />
+  </ItemGroup>
 </Project>

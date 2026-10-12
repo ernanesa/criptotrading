@@ -20,5 +20,8 @@ public sealed class BinanceExecutionMarketSnapshotMapperTests
         Assert.Equal(100m, snapshot.BestBid.Value);
         Assert.Equal(101m, snapshot.BestAsk.Value);
         Assert.Equal(101m, snapshot.AvailableLiquidityNotional);
+        Assert.Equal(2m, snapshot.BidQuantity);
+        Assert.Equal(1m, snapshot.AskQuantity);
+        Assert.Equal(0.3333m, snapshot.OrderBookImbalance);
     }
 }

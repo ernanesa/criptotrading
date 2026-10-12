@@ -56,6 +56,19 @@ public sealed class ContextualMetaAllocator
         }
     }
 
+    public StrategyRegimePerformance? GetPerformance(string strategyId, MarketRegime regime)
+    {
+        if (string.IsNullOrWhiteSpace(strategyId))
+        {
+            return null;
+        }
+
+        lock (_lock)
+        {
+            return _performances.TryGetValue((strategyId, regime), out var perf) ? perf : null;
+        }
+    }
+
     /// <summary>Hydrates durable aggregate performance before making contextual allocations.</summary>
     public void LoadPerformances(IEnumerable<StrategyRegimePerformance> performances)
     {

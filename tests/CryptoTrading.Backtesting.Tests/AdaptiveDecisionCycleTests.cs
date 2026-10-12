@@ -178,6 +178,151 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.True(result.NettingProposal.NettedQuantity > 0m);
     }
 
+    [Fact]
+    public void BlocksMeanReversionFallingKnifeEntryDuringIntradayBreakdown()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 24 intraday 1m bars drifting down and breaking below the 6-bar Donchian channel low on the final bar
+        var bars = Bars(
+            84_300m, 84_290m, 84_280m, 84_270m, 84_260m, 84_250m,
+            84_240m, 84_230m, 84_220m, 84_210m, 84_200m, 84_190m,
+            84_180m, 84_170m, 84_160m, 84_150m, 84_140m, 84_130m,
+            84_120m, 84_115m, 84_110m, 84_108m, 84_105m, 84_000m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        var meanRevCandidate = Assert.Single(result.Candidates, c => c.StrategyId == "mean-reversion-btcusdt");
+        Assert.Null(meanRevCandidate.RecommendedSide);
+        Assert.Equal("FallingKnifeBreakdownBlocked", meanRevCandidate.Reason);
+    }
+
+    [Fact]
+    public void BlocksBreakoutEntryInMeanRevertingRangeOnIntradayWindow()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 24 intraday 1m bars oscillating in a flat MeanRevertingRange and poking slightly above the 12-bar high on the final bar
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_199m, 84_200m, 84_201m, 84_200m, 84_201m, 84_205m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal(MarketRegime.MeanRevertingRange, result.Regime.Regime);
+        var breakoutCandidate = Assert.Single(result.Candidates, c => c.StrategyId == "breakout-momentum-btcusdt");
+        Assert.Null(breakoutCandidate.RecommendedSide);
+        Assert.Equal("BreakoutEntryBlockedOutsideBullTrend", breakoutCandidate.Reason);
+    }
+
+    [Fact]
+    public void AllowsNormalMeanReversionDipInRangeOnIntradayWindow()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 24 intraday 1m bars in a flat MeanRevertingRange with a normal ~3.5 bps oversold dip on the final bar
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(MarketRegime.MeanRevertingRange, result.Regime.Regime);
+        Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenOrderBookImbalanceIsSeverelyAdverseOnIntradayWindow()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_169m),
+                new Price(84_171m),
+                10_000m,
+                TestTime,
+                bidQuantity: 0.05m,
+                askQuantity: 1.95m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("ADVERSE_ORDER_BOOK_IMBALANCE", result.NoTradeReason);
+        Assert.Contains("\"OrderBookImbalance\":-0.95", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenModerateOrderBookImbalanceAndLowMlWinProbabilityAlign()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_169m),
+                new Price(84_171m),
+                10_000m,
+                TestTime,
+                bidQuantity: 0.24m,
+                askQuantity: 0.76m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("ADVERSE_ORDER_BOOK_IMBALANCE", result.NoTradeReason);
+        Assert.Contains("\"OrderBookImbalance\":-0.52", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
     private static AdaptiveDecisionCycleRequest CreateDispatchableRequest() => new(
         Bars(100m, 100m, 100m, 100m, 100m, 95m),
         CreatePortfolio(),

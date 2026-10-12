@@ -149,11 +149,15 @@ public static class MarketRegimeClassifier
                 $"BEAR: Slope {trendSlopeRate:P3} is below threshold -{trendSlopeThreshold:P3}.");
         }
 
+        var rangeConfidence = n >= 20 && trendSlopeThreshold > 0m
+            ? Math.Round(Math.Clamp(0.95m - (Math.Abs(trendSlopeRate) / trendSlopeThreshold * 0.35m), 0.55m, 0.95m), 4)
+            : 0.85m;
+
         return new MarketRegimeSnapshot(
             symbol,
             observedAtUtc,
             MarketRegime.MeanRevertingRange,
-            Confidence: 0.85m,
+            Confidence: rangeConfidence,
             trendSlopeRate,
             volatilityRate,
             $"RANGE: Slope {trendSlopeRate:P3} and volatility {volatilityRate:P2} within bounds.");
