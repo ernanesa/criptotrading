@@ -64,7 +64,10 @@ public sealed class DiskSpaceSafetyGuard
                 return new DiskSpaceCheckResult(false, availableBytes, totalBytes, ratio, reason);
             }
 
-            if (ratio < minFreeDiskRatio)
+            var ratioCapBytes = minFreeDiskRatio <= 0.10m
+                ? Math.Max(minFreeDiskBytes, 20_000_000_000L)
+                : long.MaxValue;
+            if (ratio < minFreeDiskRatio && availableBytes < ratioCapBytes)
             {
                 var reason = $"Available disk space ratio {ratio:P2} is below threshold {minFreeDiskRatio:P2}.";
                 TriggerSafeMode(reason);

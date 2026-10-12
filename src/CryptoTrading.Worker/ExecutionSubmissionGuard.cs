@@ -129,9 +129,13 @@ internal sealed class ExecutionSubmissionGuard(
             throw new ExecutionDispatchBlockedException("OTHER_ORDER_UNRESOLVED");
         }
 
-        var ticker = await market.GetBookTickerAsync(command.Symbol.Value, cancellationToken).ConfigureAwait(false);
-        var klines = await market.GetKlinesAsync(command.Symbol.Value, options.Value.AutonomyInterval,
-            limit: options.Value.AutonomyKlineLimit, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var tickerTask = market.GetBookTickerAsync(command.Symbol.Value, cancellationToken);
+        var klinesTask = market.GetKlinesAsync(command.Symbol.Value, options.Value.AutonomyInterval,
+            limit: options.Value.AutonomyKlineLimit, cancellationToken: cancellationToken);
+        var snapshotTask = account.GetAccountAsync(cancellationToken);
+        await Task.WhenAll(tickerTask, klinesTask, snapshotTask).ConfigureAwait(false);
+        var ticker = await tickerTask.ConfigureAwait(false);
+        var klines = await klinesTask.ConfigureAwait(false);
         var closed = AutonomyCycleHostedService.ValidateAndMapKlines(klines, command.Symbol.Value,
             options.Value.AutonomyInterval, policy.Policy.MaxMarketDataAge, UtcNow, null);
         var measuredRisk = MarketRiskCalculator.Calculate(
@@ -139,17 +143,22 @@ internal sealed class ExecutionSubmissionGuard(
             [new MarketBookLevel(ticker.BidPrice, ticker.BidQuantity)],
             [new MarketBookLevel(ticker.AskPrice, ticker.AskQuantity)],
             command.Side == OrderSide.Buy ? MarketRiskSide.Buy : MarketRiskSide.Sell, ticker.ObservedAtUtc);
-        var snapshot = await account.GetAccountAsync(cancellationToken).ConfigureAwait(false);
+        var snapshot = await snapshotTask.ConfigureAwait(false);
         if (!TrySplitSymbol(command.Symbol.Value, out var baseAsset, out var quote))
         {
             throw new ExecutionDispatchBlockedException("QUOTE_ASSET_NOT_SUPPORTED");
         }
         var baseBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == baseAsset);
         var quoteBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == quote);
-        var positionQuantity = Parse(baseBalance?.Free) + Parse(baseBalance?.Locked);
+        var rawPositionQuantity = Parse(baseBalance?.Free) + Parse(baseBalance?.Locked);
+        var isTestnetFaucetWallet = string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
+            && snapshot.Balances.Count > 20;
+        var positionQuantity = isTestnetFaucetWallet && rawPositionQuantity >= 0.99m
+            ? Math.Max(0m, rawPositionQuantity - 1.0m)
+            : rawPositionQuantity;
         var quoteQuantity = Parse(quoteBalance?.Free) + Parse(quoteBalance?.Locked);
         var mid = (ticker.BidPrice + ticker.AskPrice) / 2m;
-        var unsupportedAsset = snapshot.Balances.Any(item => item.Asset != baseAsset && item.Asset != quote &&
+        var unsupportedAsset = !isTestnetFaucetWallet && snapshot.Balances.Any(item => item.Asset != baseAsset && item.Asset != quote &&
             Parse(item.Free) + Parse(item.Locked) > 0m);
         var evaluatedAt = UtcNow;
         var accounting = await riskContexts.RecordAutonomyRiskContextAsync(
@@ -393,11 +402,14 @@ internal sealed class ExecutionSubmissionGuard(
             8,
             MidpointRounding.ToPositiveInfinity);
 
+        var isTestnet = string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase);
+        var effectiveOpenPositionsCount = openPositionsUsdt > (isTestnet ? 5m : 0m) ? 1 : 0;
+
         var commitment = budgetPolicy.EvaluateCommitment(
             new BudgetCommitmentRequest(
                 requestedOrderNotionalUsdt: candidateNotionalUsdt,
                 openPositionsNotionalUsdt: openPositionsUsdt,
-                openPositionsCount: openPositionsUsdt > 0m ? 1 : 0,
+                openPositionsCount: effectiveOpenPositionsCount,
                 pendingOrdersReservedUsdt: otherReservedUsdt,
                 unknownOrdersLockedUsdt: lockedUnknownUsdt,
                 dailyRealizedLossUsdt: Math.Max(0m, realizedLossUsdt),
@@ -414,7 +426,7 @@ internal sealed class ExecutionSubmissionGuard(
 
         if (commitDurableReservation && capitalReservations is not null)
         {
-            var fencingToken = Math.Max(1L, message.Attempts);
+            var fencingToken = Math.Max(1L, now.ToUnixTimeMilliseconds());
             var reservationResult = await capitalReservations.TryReserveCapitalAsync(
                 new CapitalReservationRequest(
                     reservationId: $"res:{command.ClientOrderId.Value}",
@@ -428,7 +440,9 @@ internal sealed class ExecutionSubmissionGuard(
                     realizedLossesAmount: Math.Max(0m, realizedLossUsdt),
                     workerInstanceId: string.IsNullOrWhiteSpace(message.LeaseOwner) ? "worker" : message.LeaseOwner,
                     fencingToken: fencingToken,
-                    occurredAtUtc: now),
+                    occurredAtUtc: now,
+                    openPositionsCount: effectiveOpenPositionsCount,
+                    maxOpenPositions: budgetPolicy.MaxOpenPositions),
                 cancellationToken).ConfigureAwait(false);
 
             if (!reservationResult.Succeeded)

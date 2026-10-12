@@ -234,13 +234,18 @@ internal sealed class AutonomyCycleHostedService(
             discountValuation);
 
         var btc = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase));
-        var btcQuantity = ParseBalance(btc?.Free) + ParseBalance(btc?.Locked);
+        var rawBtcQuantity = ParseBalance(btc?.Free) + ParseBalance(btc?.Locked);
+        var isTestnetFaucetWallet = string.Equals(runtime.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
+            && account.Balances.Count > 20;
+        var btcQuantity = isTestnetFaucetWallet && rawBtcQuantity >= 0.99m
+            ? Math.Max(0m, rawBtcQuantity - 1.0m)
+            : rawBtcQuantity;
         var quoteAsset = new Asset("USDT");
         var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
         var availableQuoteLiquidity = ParseBalance(quote?.Free);
         var totalQuoteBalance = availableQuoteLiquidity + ParseBalance(quote?.Locked);
         var latest = closed[^1].Bar;
-        var unsupportedAssetBalance = account.Balances
+        var unsupportedAssetBalance = !isTestnetFaucetWallet && account.Balances
             .Where(balance => !string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase))
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
@@ -299,7 +304,9 @@ internal sealed class AutonomyCycleHostedService(
             mappedExecutionMarket.ObservedAtUtc,
             isComplete: mappedExecutionMarket.IsComplete && hasCompleteTradingRules,
             quantityStepSize: mappedExecutionMarket.QuantityStepSize,
-            priceTickSize: mappedExecutionMarket.PriceTickSize);
+            priceTickSize: mappedExecutionMarket.PriceTickSize,
+            bidQuantity: mappedExecutionMarket.BidQuantity,
+            askQuantity: mappedExecutionMarket.AskQuantity);
         var positionBasisConsistent = btcQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
             : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m;
@@ -344,6 +351,9 @@ internal sealed class AutonomyCycleHostedService(
         if (isAdaptive && adaptiveCycle is not null)
         {
             var adaptiveCheckpointScope = checkpointScope;
+            var hasPendingExitReplan = replanCandidate is { Side: CryptoTrading.Domain.Orders.OrderSide.Sell } rc &&
+                                       portfolio.GrossExposureNotional > 5m &&
+                                       rc.CreatedAtUtc >= now.AddMinutes(-15);
             var adaptiveRequest = new AdaptiveDecisionCycleRequest(
                 bars,
                 portfolio,
@@ -360,7 +370,9 @@ internal sealed class AutonomyCycleHostedService(
                 commissionSnapshot,
                 policyDocument.Policy.MaxMarketDataAge,
                 featureSnapshot,
-                UseConservativeCommissionReserve: true);
+                UseConservativeCommissionReserve: true,
+                ExecutionAttempt: hasPendingExitReplan ? replanCandidate!.NextAttempt : 0,
+                HasPendingExitReplan: hasPendingExitReplan);
 
             if (durablePerformances is not null)
             {

@@ -37,7 +37,8 @@ public static class MultiStrategyDecisionOrchestrator
         Symbol symbol,
         IReadOnlyList<CloseBar> bars,
         decimal baseTargetNotional,
-        DateTimeOffset evaluatedAtUtc)
+        DateTimeOffset evaluatedAtUtc,
+        bool hasOpenPosition = false)
     {
         ArgumentNullException.ThrowIfNull(bars);
         if (bars.Count < 5)
@@ -61,21 +62,66 @@ public static class MultiStrategyDecisionOrchestrator
                 IsNoTrade: true);
         }
 
-        var closePrices = new List<decimal>(bars.Count);
-        for (var i = 0; i < bars.Count; i++)
+        var macroWindowStart = bars.Count > 36 ? bars.Count - 36 : 0;
+        var macroClosePrices = new List<decimal>(bars.Count - macroWindowStart);
+        for (var i = macroWindowStart; i < bars.Count; i++)
+        {
+            macroClosePrices.Add(bars[i].ClosePrice.Value);
+        }
+
+        var regimeWindowStart = bars.Count > 20 ? bars.Count - 20 : 0;
+        var closePrices = new List<decimal>(bars.Count - regimeWindowStart);
+        for (var i = regimeWindowStart; i < bars.Count; i++)
         {
             closePrices.Add(bars[i].ClosePrice.Value);
         }
 
-        var regime = MarketRegimeClassifier.Classify(symbol, closePrices, evaluatedAtUtc);
+        var trendSlopeThreshold = bars.Count >= 20
+            ? 0.00008m
+            : MarketRegimeClassifier.DefaultTrendSlopeThreshold;
+        var regime = MarketRegimeClassifier.Classify(
+            symbol,
+            closePrices,
+            evaluatedAtUtc,
+            trendSlopeThreshold: trendSlopeThreshold);
+        var macroSlopeThreshold = bars.Count > 20
+            ? Math.Max(0.000015m, 0.00008m * 20m / macroClosePrices.Count)
+            : trendSlopeThreshold;
+        var macroRegime = bars.Count > 20
+            ? MarketRegimeClassifier.Classify(
+                symbol,
+                macroClosePrices,
+                evaluatedAtUtc,
+                trendSlopeThreshold: macroSlopeThreshold)
+            : regime;
         var candidates = new List<StrategyCandidateEvaluation>(4);
 
         // 1. Evaluate Trend Following
+        var slowPeriod = bars.Count >= 20 ? 15 : bars.Count;
+        var fastPeriod = Math.Min(5, bars.Count - 1);
         var trendStrategy = new TrendFollowingStrategy(new TrendFollowingParameters(
-            "trend-following-btcusdt", "1.0.0", symbol, fastPeriod: Math.Min(5, bars.Count - 1), slowPeriod: bars.Count, 0.001m, 0.0005m));
+            "trend-following-btcusdt", "1.0.0", symbol, fastPeriod: fastPeriod, slowPeriod: slowPeriod, 0.001m, 0.0005m));
         var trendDecisions = trendStrategy.Evaluate(bars);
         var lastTrend = trendDecisions[^1];
-        OrderSide? trendSide = lastTrend.Signal switch
+        var trendSignal = lastTrend.Signal;
+        var trendReason = lastTrend.Reason;
+        var trendReasonText = trendReason.ToString();
+        var isConfirmedBullTrend = regime.Regime == MarketRegime.BullTrend &&
+            regime.TrendSlopeRate >= 0.00014m &&
+            macroRegime.Regime == MarketRegime.BullTrend;
+        if (bars.Count >= 20 && trendSignal == TrendFollowingSignal.EnterLong && !isConfirmedBullTrend)
+        {
+            trendSignal = TrendFollowingSignal.NoTrade;
+            trendReasonText = "TrendEntryBlockedOutsideBullTrend";
+        }
+        else if (bars.Count >= 20 &&
+                 ((!hasOpenPosition && trendSignal == TrendFollowingSignal.ExitLong) ||
+                  (hasOpenPosition && trendSignal == TrendFollowingSignal.EnterLong)))
+        {
+            trendSignal = TrendFollowingSignal.NoTrade;
+            trendReasonText = TrendFollowingReason.TrendUnchanged.ToString();
+        }
+        OrderSide? trendSide = trendSignal switch
         {
             TrendFollowingSignal.EnterLong => OrderSide.Buy,
             TrendFollowingSignal.ExitLong => OrderSide.Sell,
@@ -83,14 +129,46 @@ public static class MultiStrategyDecisionOrchestrator
         };
         decimal trendScore = trendSide.HasValue ? (regime.FavorsTrendFollowing ? 1.5m : 0.4m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
-            "trend-following-btcusdt", "1.0.0", trendSide, trendScore, lastTrend.Signal.ToString(), lastTrend.Reason.ToString()));
+            "trend-following-btcusdt", "1.0.0", trendSide, trendScore, trendSignal.ToString(), trendReasonText));
 
         // 2. Evaluate Breakout Momentum
+        var breakoutEntryPeriod = bars.Count >= 20 ? 12 : Math.Min(5, bars.Count - 1);
+        var breakoutExitPeriod = bars.Count >= 20 ? 6 : Math.Min(3, bars.Count - 2);
         var breakoutStrategy = new BreakoutStrategy(new BreakoutParameters(
-            "breakout-momentum-btcusdt", "1.0.0", symbol, entryPeriod: Math.Min(5, bars.Count - 1), exitPeriod: Math.Min(3, bars.Count - 2), 0.001m, 0.0005m));
+            "breakout-momentum-btcusdt", "1.0.0", symbol, entryPeriod: breakoutEntryPeriod, exitPeriod: breakoutExitPeriod, 0.001m, 0.0005m));
         var breakoutDecisions = breakoutStrategy.Evaluate(bars);
         var lastBreakout = breakoutDecisions[^1];
-        OrderSide? breakoutSide = lastBreakout.Signal switch
+        var breakoutSignal = lastBreakout.Signal;
+        var breakoutReason = lastBreakout.Reason;
+        if (hasOpenPosition && breakoutSignal == BreakoutSignal.NoTrade &&
+            lastBreakout.ExitChannelLow is { } exitLow && lastBreakout.ClosePrice.Value < exitLow)
+        {
+            breakoutSignal = BreakoutSignal.ExitLong;
+            breakoutReason = BreakoutReason.ChannelDroppedBelowExit;
+        }
+        else if (bars.Count < 20 && !hasOpenPosition && breakoutSignal == BreakoutSignal.NoTrade &&
+                 lastBreakout.EntryChannelHigh is { } entryHigh && lastBreakout.ClosePrice.Value > entryHigh)
+        {
+            breakoutSignal = BreakoutSignal.EnterLong;
+            breakoutReason = BreakoutReason.ChannelBreakoutAbove;
+        }
+        var severeChannelBreakdown = lastBreakout.ExitChannelLow is { } channelLow &&
+            channelLow > 0m &&
+            (channelLow - lastBreakout.ClosePrice.Value) / channelLow >= 0.0008m;
+        var breakoutReasonText = breakoutReason.ToString();
+        if (bars.Count >= 20 && breakoutSignal == BreakoutSignal.EnterLong && !isConfirmedBullTrend)
+        {
+            breakoutSignal = BreakoutSignal.NoTrade;
+            breakoutReasonText = "BreakoutEntryBlockedOutsideBullTrend";
+        }
+        else if (bars.Count >= 20 &&
+                 ((!hasOpenPosition && breakoutSignal == BreakoutSignal.ExitLong) ||
+                  (hasOpenPosition && breakoutSignal == BreakoutSignal.EnterLong)))
+        {
+            breakoutSignal = BreakoutSignal.NoTrade;
+            breakoutReasonText = BreakoutReason.ChannelUnchanged.ToString();
+        }
+        OrderSide? breakoutSide = breakoutSignal switch
         {
             BreakoutSignal.EnterLong => OrderSide.Buy,
             BreakoutSignal.ExitLong => OrderSide.Sell,
@@ -98,14 +176,73 @@ public static class MultiStrategyDecisionOrchestrator
         };
         decimal breakoutScore = breakoutSide.HasValue ? (regime.Regime == MarketRegime.BullTrend ? 1.3m : 0.5m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
-            "breakout-momentum-btcusdt", "1.0.0", breakoutSide, breakoutScore, lastBreakout.Signal.ToString(), lastBreakout.Reason.ToString()));
+            "breakout-momentum-btcusdt", "1.0.0", breakoutSide, breakoutScore, breakoutSignal.ToString(), breakoutReasonText));
 
         // 3. Evaluate Mean Reversion
+        var meanRevEntryZScoreThreshold = bars.Count >= 20 ? -1.30m : -1.2m;
+        var meanRevExitZScoreThreshold = bars.Count >= 20
+            ? (regime.Regime == MarketRegime.BullTrend ? 1.0m : 0.35m)
+            : 0.0m;
         var meanRevStrategy = new MeanReversionStrategy(new MeanReversionParameters(
-            "mean-reversion-btcusdt", "1.0.0", symbol, period: Math.Min(5, bars.Count), entryZScoreThreshold: -1.2m, exitZScoreThreshold: 0.0m, 0.10m, 0.001m, 0.0005m));
+            "mean-reversion-btcusdt", "1.0.0", symbol, period: Math.Min(5, bars.Count), entryZScoreThreshold: meanRevEntryZScoreThreshold, exitZScoreThreshold: meanRevExitZScoreThreshold, 0.10m, 0.001m, 0.0005m));
         var meanRevDecisions = meanRevStrategy.Evaluate(bars);
         var lastMeanRev = meanRevDecisions[^1];
-        OrderSide? meanRevSide = lastMeanRev.Signal switch
+        var meanRevSignal = lastMeanRev.Signal;
+        var meanRevReason = lastMeanRev.Reason;
+        if (hasOpenPosition && meanRevSignal == MeanReversionSignal.NoTrade &&
+            lastMeanRev.ZScore is { } zScore && zScore >= meanRevExitZScoreThreshold)
+        {
+            meanRevSignal = MeanReversionSignal.ExitLong;
+            meanRevReason = MeanReversionReason.ZScoreRevertedToMean;
+        }
+        else if (!hasOpenPosition && meanRevSignal == MeanReversionSignal.NoTrade &&
+                 lastMeanRev.ZScore is { } entryZScore && entryZScore <= meanRevEntryZScoreThreshold)
+        {
+            meanRevSignal = MeanReversionSignal.EnterLong;
+            meanRevReason = MeanReversionReason.ZScoreOversold;
+        }
+        var meanRevReasonText = meanRevReason.ToString();
+        var recent1BarReturn = bars.Count >= 2 && bars[^2].ClosePrice.Value > 0m
+            ? (bars[^1].ClosePrice.Value - bars[^2].ClosePrice.Value) / bars[^2].ClosePrice.Value
+            : 0m;
+        var recent3BarReturn = bars.Count >= 4 && bars[^4].ClosePrice.Value > 0m
+            ? (bars[^1].ClosePrice.Value - bars[^4].ClosePrice.Value) / bars[^4].ClosePrice.Value
+            : 0m;
+        var isRecoveringRange = regime.Regime == MarketRegime.MeanRevertingRange &&
+            regime.TrendSlopeRate >= 0.000015m &&
+            !severeChannelBreakdown &&
+            recent1BarReturn > -0.00065m &&
+            recent3BarReturn > -0.0008m;
+        var isDowntrendDrift = regime.TrendSlopeRate <= -0.000045m ||
+            (!isRecoveringRange && macroRegime.TrendSlopeRate * macroClosePrices.Count <= -0.0012m) ||
+            (regime.TrendSlopeRate < 0m && recent1BarReturn <= -0.00065m) ||
+            recent3BarReturn <= -0.0008m;
+        var isFallingKnifeBreakdown = bars.Count >= 20 &&
+            (regime.Regime == MarketRegime.BearTrend ||
+             (!isRecoveringRange && macroRegime.Regime == MarketRegime.BearTrend) ||
+             severeChannelBreakdown ||
+             isDowntrendDrift);
+        var twentyBarMean = closePrices.Count > 0 ? closePrices.Average() : lastMeanRev.ClosePrice.Value;
+        if (meanRevSignal == MeanReversionSignal.EnterLong && isFallingKnifeBreakdown)
+        {
+            meanRevSignal = MeanReversionSignal.NoTrade;
+            meanRevReasonText = "FallingKnifeBreakdownBlocked";
+        }
+        else if (bars.Count >= 20 &&
+                 meanRevSignal == MeanReversionSignal.EnterLong &&
+                 lastMeanRev.ClosePrice.Value >= twentyBarMean)
+        {
+            meanRevSignal = MeanReversionSignal.NoTrade;
+            meanRevReasonText = "MeanReversionAboveMacroMeanBlocked";
+        }
+        else if (bars.Count >= 20 &&
+                 ((!hasOpenPosition && meanRevSignal == MeanReversionSignal.ExitLong) ||
+                  (hasOpenPosition && meanRevSignal == MeanReversionSignal.EnterLong)))
+        {
+            meanRevSignal = MeanReversionSignal.NoTrade;
+            meanRevReasonText = MeanReversionReason.WithinBands.ToString();
+        }
+        OrderSide? meanRevSide = meanRevSignal switch
         {
             MeanReversionSignal.EnterLong => OrderSide.Buy,
             MeanReversionSignal.ExitLong => OrderSide.Sell,
@@ -113,7 +250,7 @@ public static class MultiStrategyDecisionOrchestrator
         };
         decimal meanRevScore = meanRevSide.HasValue ? (regime.FavorsMeanReversion ? 1.6m : 0.3m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
-            "mean-reversion-btcusdt", "1.0.0", meanRevSide, meanRevScore, lastMeanRev.Signal.ToString(), lastMeanRev.Reason.ToString()));
+            "mean-reversion-btcusdt", "1.0.0", meanRevSide, meanRevScore, meanRevSignal.ToString(), meanRevReasonText));
 
         // If regime prohibits exposure (Chop or Stale), enforce NO_TRADE
         if (regime.ProhibitsNewExposure)

@@ -22,6 +22,8 @@ internal static class BinanceExecutionMarketSnapshotMapper
             Math.Min(ticker.BidLiquidityNotional, ticker.AskLiquidityNotional),
             ticker.ObservedAtUtc,
             quantityStepSize: rules?.QuantityStepSize,
-            priceTickSize: rules?.PriceTickSize);
+            priceTickSize: rules?.PriceTickSize,
+            bidQuantity: ticker.BidQuantity,
+            askQuantity: ticker.AskQuantity);
     }
 }
