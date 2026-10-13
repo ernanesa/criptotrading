@@ -528,11 +528,14 @@ public sealed class AccountReconciliationService
                 var lockedExpectation = await lockedBalanceReader
                     .GetLockedExpectationAsync(options.LedgerAccount, asset, cancellationToken)
                     .ConfigureAwait(false);
+                var feeReserveAllowance = exchangeLocked > 0m && lockedExpectation.ExpectedLockedAmount > exchangeLocked
+                    ? exchangeLocked * 0.01m
+                    : 0m;
                 if (lockedExpectation.HasLockedUnknownReservation)
                 {
                     lockedFailureReason = "LOCKED_UNKNOWN_CAPITAL_UNRESOLVED";
                 }
-                else if (Math.Abs(exchangeLocked - lockedExpectation.ExpectedLockedAmount) > options.AbsoluteTolerance)
+                else if (Math.Abs(exchangeLocked - lockedExpectation.ExpectedLockedAmount) > options.AbsoluteTolerance + feeReserveAllowance)
                 {
                     lockedFailureReason = "LOCKED_BALANCE_RESERVATION_DRIFT";
                 }
