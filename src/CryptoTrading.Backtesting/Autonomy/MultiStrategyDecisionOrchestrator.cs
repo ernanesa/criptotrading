@@ -105,10 +105,28 @@ public static class MultiStrategyDecisionOrchestrator
         var lastTrend = trendDecisions[^1];
         var trendSignal = lastTrend.Signal;
         var trendReason = lastTrend.Reason;
-        var trendReasonText = trendReason.ToString();
         var isConfirmedBullTrend = regime.Regime == MarketRegime.BullTrend &&
-            regime.TrendSlopeRate >= 0.00014m &&
+            regime.TrendSlopeRate >= 0.000115m &&
             macroRegime.Regime == MarketRegime.BullTrend;
+        if (bars.Count >= 20 && hasOpenPosition && trendSignal == TrendFollowingSignal.NoTrade &&
+            lastTrend.FastEma is { } fastMa && lastTrend.SlowEma is { } slowMa &&
+            fastMa < slowMa &&
+            (regime.Regime == MarketRegime.BearTrend || (slowMa - fastMa) / slowMa >= 0.0005m))
+        {
+            trendSignal = TrendFollowingSignal.ExitLong;
+            trendReason = TrendFollowingReason.FastCrossedBelowSlow;
+        }
+        else if (bars.Count >= 20 && !hasOpenPosition && trendSignal == TrendFollowingSignal.NoTrade &&
+                 isConfirmedBullTrend &&
+                 lastTrend.FastEma is { } bullFastMa && lastTrend.SlowEma is { } bullSlowMa &&
+                 bullFastMa > bullSlowMa &&
+                 (bullFastMa - bullSlowMa) / bullSlowMa >= 0.00080m &&
+                 (lastTrend.ClosePrice.Value - bullSlowMa) / bullSlowMa <= 0.00175m)
+        {
+            trendSignal = TrendFollowingSignal.EnterLong;
+            trendReason = TrendFollowingReason.FastCrossedAboveSlow;
+        }
+        var trendReasonText = trendReason.ToString();
         if (bars.Count >= 20 && trendSignal == TrendFollowingSignal.EnterLong && !isConfirmedBullTrend)
         {
             trendSignal = TrendFollowingSignal.NoTrade;
@@ -152,6 +170,15 @@ public static class MultiStrategyDecisionOrchestrator
             breakoutSignal = BreakoutSignal.EnterLong;
             breakoutReason = BreakoutReason.ChannelBreakoutAbove;
         }
+        else if (bars.Count >= 20 && !hasOpenPosition && breakoutSignal == BreakoutSignal.NoTrade &&
+                 isConfirmedBullTrend &&
+                 lastBreakout.EntryChannelHigh is { } confirmedHigh &&
+                 lastBreakout.ClosePrice.Value > confirmedHigh * 1.0005m &&
+                 (lastBreakout.ClosePrice.Value - confirmedHigh) / confirmedHigh <= 0.0018m)
+        {
+            breakoutSignal = BreakoutSignal.EnterLong;
+            breakoutReason = BreakoutReason.ChannelBreakoutAbove;
+        }
         var severeChannelBreakdown = lastBreakout.ExitChannelLow is { } channelLow &&
             channelLow > 0m &&
             (channelLow - lastBreakout.ClosePrice.Value) / channelLow >= 0.0008m;
@@ -179,9 +206,14 @@ public static class MultiStrategyDecisionOrchestrator
             "breakout-momentum-btcusdt", "1.0.0", breakoutSide, breakoutScore, breakoutSignal.ToString(), breakoutReasonText));
 
         // 3. Evaluate Mean Reversion
+        var slowMaExtension = lastTrend.SlowEma is { } slowEmaVal && slowEmaVal > 0m
+            ? (lastTrend.ClosePrice.Value - slowEmaVal) / slowEmaVal
+            : 0m;
         var meanRevEntryZScoreThreshold = bars.Count >= 20 ? -1.30m : -1.2m;
         var meanRevExitZScoreThreshold = bars.Count >= 20
-            ? (regime.Regime == MarketRegime.BullTrend ? 1.0m : 0.35m)
+            ? (regime.Regime == MarketRegime.BullTrend
+                ? (regime.TrendSlopeRate >= 0.00018m && slowMaExtension < 0.00165m ? 1.35m : 0.90m)
+                : 0.35m)
             : 0.0m;
         var meanRevStrategy = new MeanReversionStrategy(new MeanReversionParameters(
             "mean-reversion-btcusdt", "1.0.0", symbol, period: Math.Min(5, bars.Count), entryZScoreThreshold: meanRevEntryZScoreThreshold, exitZScoreThreshold: meanRevExitZScoreThreshold, 0.10m, 0.001m, 0.0005m));
@@ -234,6 +266,20 @@ public static class MultiStrategyDecisionOrchestrator
         {
             meanRevSignal = MeanReversionSignal.NoTrade;
             meanRevReasonText = "MeanReversionAboveMacroMeanBlocked";
+        }
+        else if (bars.Count >= 20 &&
+                 hasOpenPosition &&
+                 meanRevSignal == MeanReversionSignal.ExitLong &&
+                 isConfirmedBullTrend &&
+                 regime.TrendSlopeRate >= 0.00018m &&
+                 recent1BarReturn >= 0m &&
+                 lastTrend.FastEma is { } rideFastMa && lastTrend.SlowEma is { } rideSlowMa &&
+                 rideSlowMa > 0m &&
+                 rideFastMa > rideSlowMa &&
+                 (lastTrend.ClosePrice.Value - rideSlowMa) / rideSlowMa < 0.00165m)
+        {
+            meanRevSignal = MeanReversionSignal.NoTrade;
+            meanRevReasonText = "BullTrendRideActive";
         }
         else if (bars.Count >= 20 &&
                  ((!hasOpenPosition && meanRevSignal == MeanReversionSignal.ExitLong) ||

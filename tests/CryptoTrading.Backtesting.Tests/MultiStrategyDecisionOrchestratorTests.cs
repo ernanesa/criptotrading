@@ -134,6 +134,26 @@ public sealed class MultiStrategyDecisionOrchestratorTests
             c => c.StrategyId == "mean-reversion-btcusdt" && c.Reason == "FallingKnifeBreakdownBlocked");
     }
 
+    [Fact]
+    public void OrchestratorEmitsProtectiveTrendExitWhenExposedInBearTrend()
+    {
+        var prices = new List<decimal>(25);
+        for (var i = 0; i < 25; i++)
+        {
+            prices.Add(83000m - (i * 15m));
+        }
+
+        var bars = Bars(prices.ToArray());
+        var result = MultiStrategyDecisionOrchestrator.Orchestrate(BtcUsdt, bars, 1000m, TestTime, hasOpenPosition: true);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(MarketRegime.BearTrend, result.Regime.Regime);
+        Assert.Equal(OrderSide.Sell, result.SelectedSide);
+        Assert.Contains(
+            result.Candidates,
+            c => c.StrategyId == "trend-following-btcusdt" && c.RecommendedSide == OrderSide.Sell);
+    }
+
     private static List<CloseBar> Bars(params decimal[] prices)
     {
         var start = DateTimeOffset.Parse("2026-09-01T00:00:00Z", CultureInfo.InvariantCulture);

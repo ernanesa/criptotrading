@@ -323,6 +323,74 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Contains("\"OrderBookImbalance\":-0.52", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void LocksProfitWhenAdverseOrderBookImbalanceHitsProfitableOpenPosition()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_200m, 84_200m);
+        var portfolio = CreatePortfolio(11.7880m) with { PositionCostNotional = 11.6500m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_199m),
+                new Price(84_201m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.10m,
+                askQuantity: 0.90m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+    }
+
+    [Fact]
+    public void ScalesUpEntryNotionalOnHighConvictionKellyConfluence()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_169m),
+                new Price(84_171m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.90m,
+                askQuantity: 0.10m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.True(result.RecommendedNotional > 12m);
+    }
+
     private static AdaptiveDecisionCycleRequest CreateDispatchableRequest() => new(
         Bars(100m, 100m, 100m, 100m, 100m, 95m),
         CreatePortfolio(),

@@ -1,6 +1,7 @@
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Regimes;
+using CryptoTrading.Domain.Research;
 using Microsoft.ML;
 using Microsoft.ML.Data;
 using Microsoft.ML.Trainers;
@@ -28,7 +29,8 @@ public static class MlNetSystem1DecisionEngine
         IReadOnlyList<CloseBar> bars,
         MarketRegimeSnapshot regime,
         OrderSide? candidateSide,
-        decimal orderBookImbalance)
+        decimal orderBookImbalance,
+        StrategyRegimePerformance? empiricalPerformance = null)
     {
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(regime);
@@ -56,7 +58,8 @@ public static class MlNetSystem1DecisionEngine
             regime,
             candidateSide ?? OrderSide.Buy,
             orderBookImbalance,
-            changePointPValue);
+            changePointPValue,
+            empiricalPerformance);
 
         return new MlNetSystem1Evaluation(
             MlWinProbability: winProbability,
@@ -142,15 +145,17 @@ public static class MlNetSystem1DecisionEngine
         MarketRegimeSnapshot regime,
         OrderSide side,
         decimal orderBookImbalance,
-        decimal ssaChangePointPValue)
+        decimal ssaChangePointPValue,
+        StrategyRegimePerformance? empiricalPerformance)
     {
-        var trainingRows = BuildPointInTimeTrainingSet(bars, side);
+        var trainingRows = BuildPointInTimeTrainingSet(bars, regime, side, empiricalPerformance);
         var trainData = mlContext.Data.LoadFromEnumerable(trainingRows);
 
         var sdcaOptions = new SdcaLogisticRegressionBinaryTrainer.Options
         {
             LabelColumnName = nameof(MetaLabelRow.Label),
             FeatureColumnName = "Features",
+            ExampleWeightColumnName = nameof(MetaLabelRow.Weight),
             MaximumNumberOfIterations = 35,
             NumberOfThreads = 1,
             L2Regularization = 0.05f,
@@ -161,6 +166,7 @@ public static class MlNetSystem1DecisionEngine
         {
             LabelColumnName = nameof(MetaLabelRow.Label),
             FeatureColumnName = "Features",
+            ExampleWeightColumnName = nameof(MetaLabelRow.Weight),
             NumberOfIterations = 45,
             NumberOfThreads = 1,
             LearningRate = 0.02,
@@ -207,26 +213,67 @@ public static class MlNetSystem1DecisionEngine
         return (Math.Round(ensembleProb, 4), ensembleScore);
     }
 
-    private static List<MetaLabelRow> BuildPointInTimeTrainingSet(IReadOnlyList<CloseBar> bars, OrderSide side)
+    private static List<MetaLabelRow> BuildPointInTimeTrainingSet(
+        IReadOnlyList<CloseBar> bars,
+        MarketRegimeSnapshot regime,
+        OrderSide side,
+        StrategyRegimePerformance? empiricalPerformance)
     {
-        var rows = new List<MetaLabelRow>(64);
+        var rows = new List<MetaLabelRow>(68);
 
         var dir = side == OrderSide.Buy ? 1f : -1f;
 
         // Calibrated domain priors prevent degenerate single-class fits on short windows while encoding domain invariants:
         // 1. Oversold Z-Score (for Buy) or Overbought Z-Score (for Sell) with aligned order book -> profitable reversion
-        rows.Add(new MetaLabelRow { Label = true, ZScore = -1.65f * dir, SlopeBpsPerBar = 0.0f, Momentum3BarBps = -3.2f * dir, VolatilityBps = 3.5f, OrderBookImbalance = 0.35f * dir, SsaStability = 0.85f });
-        rows.Add(new MetaLabelRow { Label = true, ZScore = -1.40f * dir, SlopeBpsPerBar = 0.2f * dir, Momentum3BarBps = -2.5f * dir, VolatilityBps = 2.8f, OrderBookImbalance = 0.20f * dir, SsaStability = 0.80f });
-        rows.Add(new MetaLabelRow { Label = true, ZScore = 0.60f * dir, SlopeBpsPerBar = 2.1f * dir, Momentum3BarBps = 5.5f * dir, VolatilityBps = 4.0f, OrderBookImbalance = 0.45f * dir, SsaStability = 0.75f });
+        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f, ZScore = -1.65f * dir, SlopeBpsPerBar = 0.0f, Momentum3BarBps = -3.2f * dir, VolatilityBps = 3.5f, OrderBookImbalance = 0.35f * dir, SsaStability = 0.85f });
+        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f, ZScore = -1.40f * dir, SlopeBpsPerBar = 0.2f * dir, Momentum3BarBps = -2.5f * dir, VolatilityBps = 2.8f, OrderBookImbalance = 0.20f * dir, SsaStability = 0.80f });
+        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f, ZScore = 0.60f * dir, SlopeBpsPerBar = 2.1f * dir, Momentum3BarBps = 5.5f * dir, VolatilityBps = 4.0f, OrderBookImbalance = 0.45f * dir, SsaStability = 0.75f });
 
         // 2. Breakdown against side / adverse order book / chasing against reversion -> unprofitable
-        rows.Add(new MetaLabelRow { Label = false, ZScore = -2.40f * dir, SlopeBpsPerBar = -2.8f * dir, Momentum3BarBps = -11.0f * dir, VolatilityBps = 9.5f, OrderBookImbalance = -0.80f * dir, SsaStability = 0.05f });
-        rows.Add(new MetaLabelRow { Label = false, ZScore = 1.50f * dir, SlopeBpsPerBar = 0.1f * dir, Momentum3BarBps = 4.2f * dir, VolatilityBps = 3.2f, OrderBookImbalance = -0.45f * dir, SsaStability = 0.40f });
-        rows.Add(new MetaLabelRow { Label = false, ZScore = -0.50f * dir, SlopeBpsPerBar = -1.9f * dir, Momentum3BarBps = -8.5f * dir, VolatilityBps = 7.0f, OrderBookImbalance = -0.60f * dir, SsaStability = 0.15f });
+        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f, ZScore = -2.40f * dir, SlopeBpsPerBar = -2.8f * dir, Momentum3BarBps = -11.0f * dir, VolatilityBps = 9.5f, OrderBookImbalance = -0.80f * dir, SsaStability = 0.05f });
+        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f, ZScore = 1.50f * dir, SlopeBpsPerBar = 0.1f * dir, Momentum3BarBps = 4.2f * dir, VolatilityBps = 3.2f, OrderBookImbalance = -0.45f * dir, SsaStability = 0.40f });
+        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f, ZScore = -0.50f * dir, SlopeBpsPerBar = -1.9f * dir, Momentum3BarBps = -8.5f * dir, VolatilityBps = 7.0f, OrderBookImbalance = -0.60f * dir, SsaStability = 0.15f });
+
+        // 3. Closed-loop empirical experience replay from real executed strategy-regime rewards in PostgreSQL
+        if (empiricalPerformance is { ObservationCount: > 0 })
+        {
+            var replayWeight = Math.Clamp(empiricalPerformance.ObservationCount * 0.45f, 0.8f, 2.5f);
+            var regimeSlopeBps = (float)Math.Clamp(regime.TrendSlopeRate * 10_000m, -15m, 15m);
+            var regimeVolBps = (float)Math.Clamp(regime.VolatilityRate * 10_000m, 0.5m, 30m);
+            if (empiricalPerformance.AverageReward > 0m)
+            {
+                rows.Add(new MetaLabelRow
+                {
+                    Label = true,
+                    Weight = replayWeight,
+                    ZScore = -1.35f * dir,
+                    SlopeBpsPerBar = regimeSlopeBps,
+                    Momentum3BarBps = -2.0f * dir,
+                    VolatilityBps = regimeVolBps,
+                    OrderBookImbalance = 0.30f * dir,
+                    SsaStability = 0.75f,
+                });
+            }
+            else if (empiricalPerformance.AverageReward < 0m)
+            {
+                rows.Add(new MetaLabelRow
+                {
+                    Label = false,
+                    Weight = replayWeight,
+                    ZScore = -1.30f * dir,
+                    SlopeBpsPerBar = regimeSlopeBps,
+                    Momentum3BarBps = -3.5f * dir,
+                    VolatilityBps = regimeVolBps,
+                    OrderBookImbalance = -0.25f * dir,
+                    SsaStability = 0.35f,
+                });
+            }
+        }
 
         var n = bars.Count;
         const int lookback = 8;
         const int horizon = 4;
+        var maxSampleSpan = Math.Max(1, n - horizon - 1 - lookback);
 
         // Point-in-time walk-forward samples strictly prior to the current bar (endIdx = i + horizon < n - 1)
         for (var i = lookback; i + horizon < n - 1; i++)
@@ -277,9 +324,12 @@ public static class MlNetSystem1DecisionEngine
             }
 
             var hitTakeProfitBeforeStop = maxFavorableBps >= 3.0m && maxAdverseBps > -8.0m;
+            var recencyRatio = (float)(i - lookback) / maxSampleSpan;
+            var recencyWeight = 0.50f + (1.00f * recencyRatio);
             rows.Add(new MetaLabelRow
             {
                 Label = hitTakeProfitBeforeStop,
+                Weight = recencyWeight,
                 ZScore = (float)Math.Clamp(zScore, -4m, 4m),
                 SlopeBpsPerBar = (float)Math.Clamp(slopeBps, -15m, 15m),
                 Momentum3BarBps = (float)Math.Clamp(mom3Bps, -30m, 30m),
@@ -354,6 +404,7 @@ public static class MlNetSystem1DecisionEngine
     private sealed class MetaLabelRow
     {
         public bool Label { get; set; }
+        public float Weight { get; set; } = 1.0f;
         public float ZScore { get; set; }
         public float SlopeBpsPerBar { get; set; }
         public float Momentum3BarBps { get; set; }
