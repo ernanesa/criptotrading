@@ -188,7 +188,8 @@ public sealed class AdaptiveDecisionCycle
             foreach (var candidate in orchestration.Candidates)
             {
                 var perf = _metaAllocator.GetPerformance(candidate.StrategyId, regime.Regime);
-                if (perf is { ObservationCount: >= 3, AverageReward: < 0m } &&
+                if (((perf is { ObservationCount: >= 3, AverageReward: < 0m }) ||
+                     (perf is { ObservationCount: >= 1, AverageReward: <= -0.0015m })) &&
                     candidate.RecommendedSide == OrderSide.Buy)
                 {
                     adjustedCandidates.Add(candidate with
