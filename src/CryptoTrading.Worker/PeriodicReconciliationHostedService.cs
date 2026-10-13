@@ -29,6 +29,11 @@ internal sealed class PeriodicReconciliationHostedService(
             while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
             {
                 var result = await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
+                if (!result.IsHealthy)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
+                    result = await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
+                }
                 var reportPath = await reportWriter.AppendAsync(new ReconciliationRunReport(
                     Guid.NewGuid().ToString("N"),
                     result.ObservedAtUtc,

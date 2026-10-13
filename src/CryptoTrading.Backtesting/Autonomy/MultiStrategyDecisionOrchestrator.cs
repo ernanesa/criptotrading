@@ -107,7 +107,10 @@ public static class MultiStrategyDecisionOrchestrator
         var trendReason = lastTrend.Reason;
         var isConfirmedBullTrend = regime.Regime == MarketRegime.BullTrend &&
             regime.TrendSlopeRate >= 0.000115m &&
-            macroRegime.Regime == MarketRegime.BullTrend;
+            (macroRegime.Regime == MarketRegime.BullTrend ||
+             (macroRegime.Regime == MarketRegime.MeanRevertingRange &&
+              macroRegime.TrendSlopeRate >= -0.000015m &&
+              regime.TrendSlopeRate >= 0.000130m));
         if (bars.Count >= 20 && hasOpenPosition && trendSignal == TrendFollowingSignal.NoTrade &&
             lastTrend.FastEma is { } fastMa && lastTrend.SlowEma is { } slowMa &&
             fastMa < slowMa &&
@@ -120,7 +123,9 @@ public static class MultiStrategyDecisionOrchestrator
                  isConfirmedBullTrend &&
                  lastTrend.FastEma is { } bullFastMa && lastTrend.SlowEma is { } bullSlowMa &&
                  bullFastMa > bullSlowMa &&
-                 (bullFastMa - bullSlowMa) / bullSlowMa >= 0.00080m &&
+                 lastTrend.ClosePrice.Value >= bullFastMa &&
+                 (bullFastMa - bullSlowMa) / bullSlowMa >= 0.00025m &&
+                 (lastTrend.ClosePrice.Value - bullFastMa) / bullFastMa <= 0.00085m &&
                  (lastTrend.ClosePrice.Value - bullSlowMa) / bullSlowMa <= 0.00175m)
         {
             trendSignal = TrendFollowingSignal.EnterLong;
@@ -228,7 +233,16 @@ public static class MultiStrategyDecisionOrchestrator
             meanRevReason = MeanReversionReason.ZScoreRevertedToMean;
         }
         else if (!hasOpenPosition && meanRevSignal == MeanReversionSignal.NoTrade &&
-                 lastMeanRev.ZScore is { } entryZScore && entryZScore <= meanRevEntryZScoreThreshold)
+                 lastMeanRev.ZScore is { } entryZScore &&
+                 (entryZScore <= meanRevEntryZScoreThreshold ||
+                  (bars.Count >= 20 &&
+                   regime.Regime == MarketRegime.MeanRevertingRange &&
+                   regime.TrendSlopeRate >= 0.000015m &&
+                   meanRevDecisions.Count >= 2 &&
+                   meanRevDecisions[^2].ZScore is { } prevZScore &&
+                   prevZScore <= -1.20m &&
+                   entryZScore <= -0.95m &&
+                   bars[^1].ClosePrice.Value >= bars[^2].ClosePrice.Value)))
         {
             meanRevSignal = MeanReversionSignal.EnterLong;
             meanRevReason = MeanReversionReason.ZScoreOversold;
@@ -259,6 +273,14 @@ public static class MultiStrategyDecisionOrchestrator
         {
             meanRevSignal = MeanReversionSignal.NoTrade;
             meanRevReasonText = "FallingKnifeBreakdownBlocked";
+        }
+        else if (bars.Count >= 20 &&
+                 meanRevSignal == MeanReversionSignal.EnterLong &&
+                 regime.Regime == MarketRegime.BullTrend &&
+                 (!isConfirmedBullTrend || recent1BarReturn <= -0.00045m))
+        {
+            meanRevSignal = MeanReversionSignal.NoTrade;
+            meanRevReasonText = "UnconfirmedBullTrendPullbackBlocked";
         }
         else if (bars.Count >= 20 &&
                  meanRevSignal == MeanReversionSignal.EnterLong &&

@@ -505,27 +505,24 @@ public sealed class AdaptiveDecisionCycle
         {
             targetNotional = request.Portfolio.GrossExposureNotional;
         }
-        else if (request.EntryTargetNotional >= 6m && targetNotional > 0m && targetNotional < 10m)
+        else if (bars.Count >= 20 && isEntry && request.ExecutionMarket?.QuantityStepSize is not null && request.EntryTargetNotional >= 6m && targetNotional > 0m)
         {
             var baseTarget = Math.Min(request.EntryTargetNotional, request.RiskPolicy.MaxOrderNotional);
-            if (bars.Count >= 20 && isEntry && request.ExecutionMarket?.QuantityStepSize is not null)
-            {
-                var kellyMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.68m && orderBookImbalance >= 0.35m)
-                    ? 1.35m
-                    : (decisionConfidence >= 0.78m && mlEval.MlWinProbability >= 0.58m)
-                        ? 1.15m
-                        : (decisionConfidence < 0.72m || mlEval.MlWinProbability < 0.48m)
-                            ? 0.85m
-                            : 1.00m;
-                targetNotional = Math.Clamp(
-                    Math.Round(baseTarget * kellyMultiplier, 2),
-                    Math.Min(10m, request.RiskPolicy.MaxOrderNotional),
-                    request.RiskPolicy.MaxOrderNotional);
-            }
-            else
-            {
-                targetNotional = baseTarget;
-            }
+            var kellyMultiplier = (decisionConfidence >= 0.82m && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
+                ? 1.35m
+                : (decisionConfidence >= 0.74m && mlEval.MlWinProbability >= 0.54m)
+                    ? 1.18m
+                    : (decisionConfidence < 0.70m || mlEval.MlWinProbability < 0.45m)
+                        ? 0.85m
+                        : 1.06m;
+            targetNotional = Math.Clamp(
+                Math.Round(baseTarget * kellyMultiplier, 2),
+                Math.Min(10m, request.RiskPolicy.MaxOrderNotional),
+                request.RiskPolicy.MaxOrderNotional);
+        }
+        else if (request.EntryTargetNotional >= 6m && targetNotional > 0m && targetNotional < 10m)
+        {
+            targetNotional = Math.Min(request.EntryTargetNotional, request.RiskPolicy.MaxOrderNotional);
         }
 
         if (targetNotional <= 0m)

@@ -354,6 +354,9 @@ internal sealed class AutonomyCycleHostedService(
             var hasPendingExitReplan = replanCandidate is { Side: CryptoTrading.Domain.Orders.OrderSide.Sell } rc &&
                                        portfolio.GrossExposureNotional > 5m &&
                                        rc.CreatedAtUtc >= now.AddMinutes(-15);
+            var hasPendingEntryReplan = replanCandidate is { Side: CryptoTrading.Domain.Orders.OrderSide.Buy } entryRc &&
+                                        portfolio.GrossExposureNotional <= 5m &&
+                                        entryRc.CreatedAtUtc >= now.AddMinutes(-2);
             var adaptiveRequest = new AdaptiveDecisionCycleRequest(
                 bars,
                 portfolio,
@@ -364,14 +367,14 @@ internal sealed class AutonomyCycleHostedService(
                 marketRisk,
                 executionMarket,
                 policyDocument.Policy.MaxMarketDataAge,
-                TimeSpan.FromMinutes(1),
+                TimeSpan.FromSeconds(42),
                 availableQuoteLiquidity,
                 new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
                 commissionSnapshot,
                 policyDocument.Policy.MaxMarketDataAge,
                 featureSnapshot,
                 UseConservativeCommissionReserve: true,
-                ExecutionAttempt: hasPendingExitReplan ? replanCandidate!.NextAttempt : 0,
+                ExecutionAttempt: hasPendingExitReplan || hasPendingEntryReplan ? replanCandidate!.NextAttempt : 0,
                 HasPendingExitReplan: hasPendingExitReplan);
 
             if (durablePerformances is not null)
