@@ -106,11 +106,11 @@ public static class MultiStrategyDecisionOrchestrator
         var trendSignal = lastTrend.Signal;
         var trendReason = lastTrend.Reason;
         var isConfirmedBullTrend = regime.Regime == MarketRegime.BullTrend &&
-            regime.TrendSlopeRate >= 0.000115m &&
+            regime.TrendSlopeRate >= 0.000125m &&
             (macroRegime.Regime == MarketRegime.BullTrend ||
              (macroRegime.Regime == MarketRegime.MeanRevertingRange &&
-              macroRegime.TrendSlopeRate >= -0.000015m &&
-              regime.TrendSlopeRate >= 0.000130m));
+              macroRegime.TrendSlopeRate >= 0.000010m &&
+              regime.TrendSlopeRate >= 0.000160m));
         if (bars.Count >= 20 && hasOpenPosition && trendSignal == TrendFollowingSignal.NoTrade &&
             lastTrend.FastEma is { } fastMa && lastTrend.SlowEma is { } slowMa &&
             fastMa < slowMa &&
