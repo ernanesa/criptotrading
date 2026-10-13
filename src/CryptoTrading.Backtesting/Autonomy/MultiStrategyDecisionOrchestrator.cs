@@ -155,6 +155,9 @@ public static class MultiStrategyDecisionOrchestrator
             "trend-following-btcusdt", "1.0.0", trendSide, trendScore, trendSignal.ToString(), trendReasonText));
 
         // 2. Evaluate Breakout Momentum
+        var slowMaExtension = lastTrend.SlowEma is { } slowEmaVal && slowEmaVal > 0m
+            ? (lastTrend.ClosePrice.Value - slowEmaVal) / slowEmaVal
+            : 0m;
         var breakoutEntryPeriod = bars.Count >= 20 ? 12 : Math.Min(5, bars.Count - 1);
         var breakoutExitPeriod = bars.Count >= 20 ? 6 : Math.Min(3, bars.Count - 2);
         var breakoutStrategy = new BreakoutStrategy(new BreakoutParameters(
@@ -177,6 +180,8 @@ public static class MultiStrategyDecisionOrchestrator
         }
         else if (bars.Count >= 20 && !hasOpenPosition && breakoutSignal == BreakoutSignal.NoTrade &&
                  isConfirmedBullTrend &&
+                 regime.VolatilityRate <= 0.0014m &&
+                 slowMaExtension <= 0.0012m &&
                  lastBreakout.EntryChannelHigh is { } confirmedHigh &&
                  lastBreakout.ClosePrice.Value > confirmedHigh * 1.0005m &&
                  (lastBreakout.ClosePrice.Value - confirmedHigh) / confirmedHigh <= 0.0018m)
@@ -211,9 +216,6 @@ public static class MultiStrategyDecisionOrchestrator
             "breakout-momentum-btcusdt", "1.0.0", breakoutSide, breakoutScore, breakoutSignal.ToString(), breakoutReasonText));
 
         // 3. Evaluate Mean Reversion
-        var slowMaExtension = lastTrend.SlowEma is { } slowEmaVal && slowEmaVal > 0m
-            ? (lastTrend.ClosePrice.Value - slowEmaVal) / slowEmaVal
-            : 0m;
         var meanRevEntryZScoreThreshold = bars.Count >= 20 ? -1.30m : -1.2m;
         var meanRevExitZScoreThreshold = bars.Count >= 20
             ? (regime.Regime == MarketRegime.BullTrend
