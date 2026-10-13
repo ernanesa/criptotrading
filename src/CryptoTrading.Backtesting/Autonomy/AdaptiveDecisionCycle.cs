@@ -250,6 +250,10 @@ public sealed class AdaptiveDecisionCycle
             (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps &&
             (request.Portfolio.PositionCostNotional - request.Portfolio.GrossExposureNotional) / request.Portfolio.PositionCostNotional * 10_000m < maxNoiseLossBps;
 
+        var currentUnrealizedProfitBps = request.Portfolio.PositionCostNotional > 0m
+            ? (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m
+            : 0m;
+
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             request.HasPendingExitReplan &&
             request.Portfolio.GrossExposureNotional > minTradableExposure &&
@@ -261,6 +265,22 @@ public sealed class AdaptiveDecisionCycle
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = "SELECTED: Pending exit replan candidate after TTL expiration.",
+                IsNoTrade = false
+            };
+        }
+        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+                 bars.Count >= 20 &&
+                 request.Portfolio.GrossExposureNotional > minTradableExposure &&
+                 currentUnrealizedProfitBps >= minProfitBps + 2m &&
+                 orderBookImbalance <= -0.65m &&
+                 mlEval.MlWinProbability < 0.38m)
+        {
+            orchestration = orchestration with
+            {
+                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedSide = OrderSide.Sell,
+                SelectedNotional = request.Portfolio.GrossExposureNotional,
+                OrchestrationReason = "LOCK_PROFIT_ADVERSE_ORDER_BOOK: Locking net profit on strong adverse order-book imbalance.",
                 IsNoTrade = false
             };
         }
@@ -383,12 +403,19 @@ public sealed class AdaptiveDecisionCycle
         }
 
         // 5b. System-1 Calibrated Decision Confidence, ML.NET 6.0 Meta-Labeler, SSA Breakdown & Order-Book Imbalance Gate
+        var selectedPerf = _metaAllocator.GetPerformance(orchestration.SelectedStrategyId!, regime.Regime)
+            ?? (isEntry && regime.Regime == MarketRegime.BullTrend
+                ? _metaAllocator.GetPerformance("mean-reversion-btcusdt", MarketRegime.BullTrend)
+                : null);
         if (!isEntry)
         {
-            mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Sell, orderBookImbalance);
+            mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Sell, orderBookImbalance, selectedPerf);
+        }
+        else if (selectedPerf is { ObservationCount: > 0 })
+        {
+            mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, orderBookImbalance, selectedPerf);
         }
 
-        var selectedPerf = _metaAllocator.GetPerformance(orchestration.SelectedStrategyId!, regime.Regime);
         var perfBonus = selectedPerf is { ObservationCount: > 0 }
             ? Math.Clamp(selectedPerf.AverageReward * 150m, -0.25m, 0.12m)
             : 0m;
@@ -441,11 +468,16 @@ public sealed class AdaptiveDecisionCycle
 
             if (!isEntry &&
                 request.Portfolio.PositionCostNotional > 0m &&
-                orderBookImbalance >= 0.70m)
+                (orderBookImbalance >= 0.70m ||
+                 (regime.Regime == MarketRegime.BullTrend &&
+                  regime.TrendSlopeRate >= 0.00018m &&
+                  orderBookImbalance >= 0.25m &&
+                  mlEval.MlWinProbability >= 0.60m)))
             {
                 var unrealizedProfitBps = (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional)
                     / request.Portfolio.PositionCostNotional * 10_000m;
-                if (unrealizedProfitBps >= minProfitBps && unrealizedProfitBps < 18m)
+                var maxHoldProfitBps = regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate >= 0.00018m ? 24m : 18m;
+                if (unrealizedProfitBps >= minProfitBps && unrealizedProfitBps < maxHoldProfitBps)
                 {
                     return CreateNoTradeResult(
                         regime,
@@ -475,7 +507,25 @@ public sealed class AdaptiveDecisionCycle
         }
         else if (request.EntryTargetNotional >= 6m && targetNotional > 0m && targetNotional < 10m)
         {
-            targetNotional = Math.Min(request.EntryTargetNotional, request.RiskPolicy.MaxOrderNotional);
+            var baseTarget = Math.Min(request.EntryTargetNotional, request.RiskPolicy.MaxOrderNotional);
+            if (bars.Count >= 20 && isEntry && request.ExecutionMarket?.QuantityStepSize is not null)
+            {
+                var kellyMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.68m && orderBookImbalance >= 0.35m)
+                    ? 1.35m
+                    : (decisionConfidence >= 0.78m && mlEval.MlWinProbability >= 0.58m)
+                        ? 1.15m
+                        : (decisionConfidence < 0.72m || mlEval.MlWinProbability < 0.48m)
+                            ? 0.85m
+                            : 1.00m;
+                targetNotional = Math.Clamp(
+                    Math.Round(baseTarget * kellyMultiplier, 2),
+                    Math.Min(10m, request.RiskPolicy.MaxOrderNotional),
+                    request.RiskPolicy.MaxOrderNotional);
+            }
+            else
+            {
+                targetNotional = baseTarget;
+            }
         }
 
         if (targetNotional <= 0m)
