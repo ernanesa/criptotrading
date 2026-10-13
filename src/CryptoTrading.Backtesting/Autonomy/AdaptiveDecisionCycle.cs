@@ -244,8 +244,8 @@ public sealed class AdaptiveDecisionCycle
             : 0m;
         var minProfitBps = Math.Max(6m, roundTripFeeBps + 5m);
         var maxNoiseLossBps = bars.Count >= 20
-            ? (regime.Regime == MarketRegime.BearTrend || regime.TrendSlopeRate <= -0.000040m ? 12m : 22m)
-            : 15m;
+            ? (regime.Regime == MarketRegime.BearTrend || regime.TrendSlopeRate <= -0.000025m ? 9m : 14m)
+            : 12m;
         var isWithinCostBasisNoiseBand = request.Portfolio.PositionCostNotional > 0m &&
             (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps &&
             (request.Portfolio.PositionCostNotional - request.Portfolio.GrossExposureNotional) / request.Portfolio.PositionCostNotional * 10_000m < maxNoiseLossBps;
@@ -271,8 +271,8 @@ public sealed class AdaptiveDecisionCycle
         else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
                  bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
-                 currentUnrealizedProfitBps >= minProfitBps + 2m &&
-                 orderBookImbalance <= -0.65m &&
+                 currentUnrealizedProfitBps >= minProfitBps &&
+                 orderBookImbalance <= -0.60m &&
                  mlEval.MlWinProbability < 0.38m)
         {
             orchestration = orchestration with
