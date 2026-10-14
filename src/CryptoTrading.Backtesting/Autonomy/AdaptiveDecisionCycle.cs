@@ -314,6 +314,23 @@ public sealed class AdaptiveDecisionCycle
         else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
                  bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
+                 request.Portfolio.PositionCostNotional > 0m &&
+                 bars[^1].ClosePrice.Value > 0m &&
+                 currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
+                 EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, out var chandelierReason))
+        {
+            orchestration = orchestration with
+            {
+                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedSide = OrderSide.Sell,
+                SelectedNotional = request.Portfolio.GrossExposureNotional,
+                OrchestrationReason = chandelierReason,
+                IsNoTrade = false
+            };
+        }
+        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+                 bars.Count >= 20 &&
+                 request.Portfolio.GrossExposureNotional > minTradableExposure &&
                  currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
                  (orderBookImbalance <= -0.35m || mlEval.MlWinProbability < 0.42m))
         {
@@ -398,6 +415,7 @@ public sealed class AdaptiveDecisionCycle
         if (!isEntry &&
             request.Portfolio.PositionCostNotional > 0m &&
             !orchestration.OrchestrationReason.StartsWith("BREAK_EVEN_PROFIT_LOCK", StringComparison.Ordinal) &&
+            !orchestration.OrchestrationReason.StartsWith("TRAILING_STOP_CHANDELIER_EXIT", StringComparison.Ordinal) &&
             (request.Portfolio.GrossExposureNotional < request.Portfolio.PositionCostNotional ||
              (bars.Count >= 20 &&
               (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps)))
@@ -752,6 +770,7 @@ public sealed class AdaptiveDecisionCycle
             SelectedSide = orchestration.SelectedSide.Value.ToString(),
             AuthorizedNotional = targetNotional,
             Tactic = tacticRecommendation.SelectedTactic.ToString(),
+            OrchestrationReason = orchestration.OrchestrationReason,
             Candidates = orchestration.Candidates.Select(c => new
             {
                 c.StrategyId,
@@ -830,6 +849,40 @@ public sealed class AdaptiveDecisionCycle
             nettingProposal,
             noTradeReason,
             trace);
+    }
+
+    private static bool EvaluateTrailingStopPullback(
+        IReadOnlyList<CloseBar> bars,
+        PortfolioSnapshot portfolio,
+        decimal currentUnrealizedProfitBps,
+        decimal roundTripFeeBps,
+        decimal volBps,
+        out string reason)
+    {
+        reason = string.Empty;
+        if (bars.Count < 20 || portfolio.PositionCostNotional <= 0m || bars[^1].ClosePrice.Value <= 0m)
+        {
+            return false;
+        }
+
+        var lookbackBars = Math.Min(15, bars.Count);
+        var peakRecentClose = bars.TakeLast(lookbackBars).Max(b => b.ClosePrice.Value);
+        var currentPrice = bars[^1].ClosePrice.Value;
+        var heldQuantity = portfolio.GrossExposureNotional / currentPrice;
+        var peakNotional = peakRecentClose * heldQuantity;
+        var peakProfitBps = (peakNotional - portfolio.PositionCostNotional) / portfolio.PositionCostNotional * 10_000m;
+        var trailingGapBps = Math.Clamp(volBps * 1.5m, 10.0m, 20.0m);
+        var pullbackBps = peakProfitBps - currentUnrealizedProfitBps;
+
+        if (peakProfitBps >= (roundTripFeeBps + 12.0m) &&
+            pullbackBps >= trailingGapBps &&
+            currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m))
+        {
+            reason = $"TRAILING_STOP_CHANDELIER_EXIT: Securing {currentUnrealizedProfitBps:F1} bps profit after {pullbackBps:F1} bps pullback from {peakProfitBps:F1} bps peak.";
+            return true;
+        }
+
+        return false;
     }
 
     private static DecisionIdentity BuildIdentity(string strategyId, string strategyVersion, Symbol symbol, DateTimeOffset closeTimeUtc, string side)
