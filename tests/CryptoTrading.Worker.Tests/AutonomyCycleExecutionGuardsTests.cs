@@ -236,9 +236,15 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
     private sealed class FakeAccountClient : IBinanceSpotAccountClient
     {
+        private readonly IReadOnlyList<BinanceBalance> balances;
+
+        public FakeAccountClient(IReadOnlyList<BinanceBalance>? balances = null)
+        {
+            this.balances = balances ?? [new BinanceBalance("BTC", "0", "0"), new BinanceBalance("USDT", "1000", "0")];
+        }
+
         public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT",
-                [new BinanceBalance("BTC", "0", "0"), new BinanceBalance("USDT", "1000", "0")]));
+            Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT", balances));
 
         public Task<BinanceCommissionSnapshot> GetCommissionAsync(string symbol, CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceCommissionSnapshot(
@@ -466,6 +472,114 @@ public sealed class AutonomyCycleExecutionGuardsTests
         await runTask.ConfigureAwait(true);
 
         Assert.True(marketClient.GetKlinesCallCount >= 3);
+    }
+
+    [Fact]
+    public async Task RunOnceExecutesMultiAssetScanningAcrossConfiguredSymbols()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 50,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        var symbols = options.Value.ResolveAutonomySymbols();
+        foreach (var sym in symbols)
+        {
+            await hostedService.RunOnceAsync(options.Value, sym, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(2, decisionCommitStore.Commits.Count);
+        Assert.Equal("BTCUSDT", decisionCommitStore.Commits[0].Symbol.Value);
+        Assert.Equal("ETHUSDT", decisionCommitStore.Commits[1].Symbol.Value);
+    }
+
+    [Fact]
+    public async Task RunOnceAllowsMultiAssetScanningWhileHoldingPositionsInUniverseAssets()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient([
+            new BinanceBalance("USDT", "5000", "0"),
+            new BinanceBalance("BTC", "0.05", "0"),
+            new BinanceBalance("BNB", "1.5", "0"),
+            new BinanceBalance("ETH", "0", "0")
+        ]);
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("ETHUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 50,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        await hostedService.RunOnceAsync(options.Value, "ETHUSDT", TestContext.Current.CancellationToken);
+
+        Assert.Single(decisionCommitStore.Commits);
+        Assert.Equal("ETHUSDT", decisionCommitStore.Commits[0].Symbol.Value);
+        Assert.DoesNotContain(RiskReasonCodes.RiskContextUnavailable, decisionCommitStore.Commits[0].RiskDecision?.ReasonCodes ?? []);
+        Assert.NotEqual(RiskReasonCodes.RiskContextUnavailable, decisionCommitStore.Commits[0].NoTradeReason);
     }
 
     private sealed class FakeMarketDataStreamClient : IBinanceSpotMarketDataClient

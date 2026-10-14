@@ -72,7 +72,11 @@ internal sealed class AutonomyCycleHostedService(
             {
                 try
                 {
-                    await RunOnceAsync(runtime, stoppingToken).ConfigureAwait(false);
+                    var symbols = runtime.ResolveAutonomySymbols();
+                    foreach (var symbol in symbols)
+                    {
+                        await RunOnceAsync(runtime, symbol, stoppingToken).ConfigureAwait(false);
+                    }
                     consecutiveTransientFailures = 0;
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -155,16 +159,15 @@ internal sealed class AutonomyCycleHostedService(
 
     private async Task ConsumeMarketDataStreamAsync(WorkerRuntimeOptions runtime, CancellationToken stoppingToken)
     {
-        var subscription = new BinanceMarketSubscription(
-            runtime.AutonomySymbol,
-            BinanceMarketStreamKind.Kline,
-            runtime.AutonomyInterval);
+        var subscriptions = runtime.ResolveAutonomySymbols()
+            .Select(s => new BinanceMarketSubscription(s, BinanceMarketStreamKind.Kline, runtime.AutonomyInterval))
+            .ToList();
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await foreach (var marketEvent in marketDataStreamClient!.ReadAsync([subscription], stoppingToken).ConfigureAwait(false))
+                await foreach (var marketEvent in marketDataStreamClient!.ReadAsync(subscriptions, stoppingToken).ConfigureAwait(false))
                 {
                     if (marketEvent is BinanceKlineEvent kline && kline.IsClosed)
                     {
@@ -184,20 +187,36 @@ internal sealed class AutonomyCycleHostedService(
         }
     }
 
-    internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
+    internal Task RunOnceAsync(WorkerRuntimeOptions runtime, CancellationToken cancellationToken)
+    {
+        return RunOnceAsync(runtime, runtime.AutonomySymbol, cancellationToken);
+    }
+
+    internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, string symbol, CancellationToken cancellationToken)
     {
         using var cycleActivity = CryptoTrading.Observability.TradingTelemetry.ActivitySource.StartActivity("autonomy.cycle");
         using var cycleScope = logger.BeginScope(new Dictionary<string, object?>
         {
             ["event_name"] = "autonomy.cycle",
-            ["symbol"] = runtime.AutonomySymbol,
+            ["symbol"] = symbol,
             ["engine_mode"] = runtime.AutonomyEngineMode,
             ["trace_id"] = System.Diagnostics.Activity.Current?.TraceId.ToString()
         });
         var now = DateTimeOffset.UtcNow;
+        var symbolObj = new Symbol(symbol);
+        var activeCycle = cycle.Parameters.Symbol == symbolObj
+            ? cycle
+            : new BaselineDecisionCycle(new TrendFollowingParameters(
+                cycle.Parameters.StrategyId,
+                cycle.Parameters.Version,
+                symbolObj,
+                cycle.Parameters.FastPeriod,
+                cycle.Parameters.SlowPeriod,
+                cycle.Parameters.FeeRate,
+                cycle.Parameters.SlippageRate));
         var isAdaptive = adaptiveCycle is not null && !string.Equals(runtime.AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase);
-        var activeStrategyVersion = isAdaptive ? AdaptiveDecisionCycle.StrategyVersion : cycle.StrategyVersion;
-        var checkpointScope = $"{runtime.AutonomySymbol}:{runtime.AutonomyInterval}:{activeStrategyVersion}";
+        var activeStrategyVersion = isAdaptive ? AdaptiveDecisionCycle.StrategyVersion : activeCycle.StrategyVersion;
+        var checkpointScope = $"{symbol}:{runtime.AutonomyInterval}:{activeStrategyVersion}";
         var lastProcessedCloseUtc = await decisionCommitStore
             .GetLastProcessedCloseAsync(checkpointScope, cancellationToken)
             .ConfigureAwait(false);
@@ -209,13 +228,13 @@ internal sealed class AutonomyCycleHostedService(
         }
 
         var klines = await marketClient.GetKlinesAsync(
-            runtime.AutonomySymbol,
+            symbol,
             runtime.AutonomyInterval,
             limit: runtime.AutonomyKlineLimit,
             cancellationToken: cancellationToken).ConfigureAwait(false);
         var closed = ValidateAndMapKlines(
             klines,
-            runtime.AutonomySymbol,
+            symbol,
             runtime.AutonomyInterval,
             policyDocument.Policy.MaxMarketDataAge,
             now,
@@ -227,13 +246,13 @@ internal sealed class AutonomyCycleHostedService(
 
         var featureSnapshot = BaselineFeatureSnapshot.Create(
             closed,
-            cycle.Parameters);
+            activeCycle.Parameters);
 
         if (openOrderStore is not null)
         {
             var openOrders = await openOrderStore.ReadOpenOrdersAsync(cancellationToken).ConfigureAwait(false);
             var unknownOrder = openOrders.FirstOrDefault(o =>
-                string.Equals(o.Symbol, runtime.AutonomySymbol, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(o.Symbol, symbol, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(o.Status, "UNKNOWN", StringComparison.OrdinalIgnoreCase));
 
             if (unknownOrder is not null)
@@ -244,13 +263,13 @@ internal sealed class AutonomyCycleHostedService(
                 {
                     Reason = blockReason,
                     BlockedClientOrderId = unknownOrder.ClientOrderId,
-                    Symbol = runtime.AutonomySymbol,
+                    Symbol = symbol,
                     CloseTimeUtc = closed[^1].Bar.CloseTimeUtc,
                 });
                 var environment = runtime.ExecutionMode.Trim().ToUpperInvariant();
                 var accountScope = runtime.ReconciliationAccount.Trim();
-                var canonicalIdentity = string.Join('|', environment, accountScope, runtime.AutonomySymbol,
-                    cycle.StrategyId, cycle.StrategyVersion, closed[^1].Bar.CloseTimeUtc.ToString("O", CultureInfo.InvariantCulture));
+                var canonicalIdentity = string.Join('|', environment, accountScope, symbol,
+                    activeCycle.StrategyId, activeCycle.StrategyVersion, closed[^1].Bar.CloseTimeUtc.ToString("O", CultureInfo.InvariantCulture));
                 var decisionId = "ad-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalIdentity)));
                 await decisionCommitStore.CommitAsync(
                     new AutonomyDecisionCommit(
@@ -258,9 +277,9 @@ internal sealed class AutonomyCycleHostedService(
                         environment,
                         accountScope,
                         checkpointScope,
-                        new Symbol(runtime.AutonomySymbol),
-                        cycle.StrategyId,
-                        cycle.StrategyVersion,
+                        new Symbol(symbol),
+                        activeCycle.StrategyId,
+                        activeCycle.StrategyVersion,
                         closed[^1].Bar.CloseTimeUtc,
                         featureSnapshot.AvailableAtUtc,
                         featureSnapshot.SchemaVersion,
@@ -283,7 +302,7 @@ internal sealed class AutonomyCycleHostedService(
         {
             var candidates = await cancellationStore.ReadReplanCandidatesAsync(100, cancellationToken).ConfigureAwait(false);
             replanCandidate = candidates.LastOrDefault(c =>
-                string.Equals(c.Symbol.Value, runtime.AutonomySymbol, StringComparison.OrdinalIgnoreCase));
+                string.Equals(c.Symbol.Value, symbol, StringComparison.OrdinalIgnoreCase));
         }
 
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
@@ -292,77 +311,90 @@ internal sealed class AutonomyCycleHostedService(
             throw new InvalidOperationException("Binance account does not currently allow trading.");
         }
 
-        var commission = await accountClient.GetCommissionAsync(runtime.AutonomySymbol, cancellationToken).ConfigureAwait(false);
+        var commission = await accountClient.GetCommissionAsync(symbol, cancellationToken).ConfigureAwait(false);
         var discountValuation = await ResolveDiscountValuationAsync(
             commission,
-            runtime.AutonomySymbol,
+            symbol,
             account,
             marketClient,
             cancellationToken).ConfigureAwait(false);
         var commissionSnapshot = MapCommission(
             commission,
-            runtime.AutonomySymbol,
+            symbol,
             runtime.ReconciliationAccount,
             account,
             now,
             discountValuation);
 
-        var btc = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase));
-        var rawBtcQuantity = ParseBalance(btc?.Free) + ParseBalance(btc?.Locked);
+        var baseAsset = symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
+            ? symbol[..^4]
+            : symbol;
+        var baseBalance = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, baseAsset, StringComparison.OrdinalIgnoreCase));
+        var rawBaseQuantity = ParseBalance(baseBalance?.Free) + ParseBalance(baseBalance?.Locked);
         var isTestnetFaucetWallet = string.Equals(runtime.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
             && account.Balances.Count > 20;
-        var btcQuantity = isTestnetFaucetWallet && rawBtcQuantity >= 0.99m
-            ? Math.Max(0m, rawBtcQuantity - 1.0m)
-            : rawBtcQuantity;
+        var baseQuantity = isTestnetFaucetWallet && string.Equals(baseAsset, "BTC", StringComparison.OrdinalIgnoreCase) && rawBaseQuantity >= 0.99m
+            ? Math.Max(0m, rawBaseQuantity - 1.0m)
+            : rawBaseQuantity;
         var quoteAsset = new Asset("USDT");
         var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
         var availableQuoteLiquidity = ParseBalance(quote?.Free);
         var totalQuoteBalance = availableQuoteLiquidity + ParseBalance(quote?.Locked);
         var latest = closed[^1].Bar;
+        var configuredUniverseAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            quoteAsset.Value,
+            "BNB"
+        };
+        foreach (var s in runtime.ResolveAutonomySymbols())
+        {
+            var b = s.EndsWith("USDT", StringComparison.OrdinalIgnoreCase) ? s[..^4] : s;
+            configuredUniverseAssets.Add(b);
+        }
+
         var unsupportedAssetBalance = !isTestnetFaucetWallet && account.Balances
-            .Where(balance => !string.Equals(balance.Asset, "BTC", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase))
+            .Where(balance => !configuredUniverseAssets.Contains(balance.Asset))
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
         decimal? currentEquityNotional = unsupportedAssetBalance
             ? null
-            : totalQuoteBalance + (btcQuantity * latest.ClosePrice.Value);
+            : totalQuoteBalance + (baseQuantity * latest.ClosePrice.Value);
         var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
         // Unlike the decision checkpoint, the equity scope must survive
         // strategy-version changes; otherwise a new strategy could reset the
         // historical drawdown protection after only one baseline observation.
-        var riskContextScope = $"equity:{runtime.ReconciliationAccount}:{runtime.AutonomySymbol}:{quoteAsset.Value}";
+        var riskContextScope = $"equity:{runtime.ReconciliationAccount}:{symbol}:{quoteAsset.Value}";
         var accounting = await riskContextStore.RecordAutonomyRiskContextAsync(
             riskContextScope,
-            new Symbol(runtime.AutonomySymbol),
+            new Symbol(symbol),
             quoteAsset,
             dayStartUtc,
             currentEquityNotional,
             now,
             cancellationToken).ConfigureAwait(false);
         var bookTicker = await marketClient.GetBookTickerAsync(
-            runtime.AutonomySymbol,
+            symbol,
             cancellationToken).ConfigureAwait(false);
         if (navSnapshots is not null && !unsupportedAssetBalance &&
             bookTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
             DateTimeOffset.UtcNow - bookTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
         {
             var valuationPrice = (bookTicker.BidPrice + bookTicker.AskPrice) / 2m;
-            decimal? unrealized = btcQuantity == 0m ? 0m :
-                accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m
-                    ? btcQuantity * valuationPrice - accounting.PositionCostNotional : null;
+            decimal? unrealized = baseQuantity == 0m ? 0m :
+                accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - baseQuantity) <= 0.00000001m
+                    ? baseQuantity * valuationPrice - accounting.PositionCostNotional : null;
             await navSnapshots.RecordNavSnapshotAsync(new PortfolioNavSnapshot(
-                runtime.AutonomySymbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
-                totalQuoteBalance + btcQuantity * valuationPrice, unrealized,
+                symbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
+                totalQuoteBalance + baseQuantity * valuationPrice, unrealized,
                 null, "account-snapshot+observed-book-mid"), cancellationToken).ConfigureAwait(false);
-            AutonomyCycleLog.Valuation(logger, runtime.AutonomySymbol, bookTicker.ObservedAtUtc,
-                totalQuoteBalance + btcQuantity * valuationPrice, unrealized);
+            AutonomyCycleLog.Valuation(logger, symbol, bookTicker.ObservedAtUtc,
+                totalQuoteBalance + baseQuantity * valuationPrice, unrealized);
         }
         BinanceSymbolTradingRules? rules = null;
         if (rulesProvider is not null)
         {
             try
             {
-                rules = await rulesProvider.GetAsync(runtime.AutonomySymbol, cancellationToken).ConfigureAwait(false);
+                rules = await rulesProvider.GetAsync(symbol, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -370,7 +402,7 @@ internal sealed class AutonomyCycleHostedService(
             }
         }
         var mappedExecutionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker, rules);
-        var hasCompleteTradingRules = HasCompleteTradingRules(rules, runtime.AutonomySymbol);
+        var hasCompleteTradingRules = HasCompleteTradingRules(rules, symbol);
         var executionMarket = new ExecutionMarketSnapshot(
             mappedExecutionMarket.BestBid,
             mappedExecutionMarket.BestAsk,
@@ -381,9 +413,10 @@ internal sealed class AutonomyCycleHostedService(
             priceTickSize: mappedExecutionMarket.PriceTickSize,
             bidQuantity: mappedExecutionMarket.BidQuantity,
             askQuantity: mappedExecutionMarket.AskQuantity);
-        var positionBasisConsistent = btcQuantity <= 0m
+        var baseAssetObj = new Asset(baseAsset);
+        var positionBasisConsistent = baseQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
-            : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - btcQuantity) <= 0.00000001m;
+            : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - baseQuantity) <= 0.00000001m;
         var riskContextComplete = positionBasisConsistent && accounting.RiskContextComplete;
         var riskContextReason = !positionBasisConsistent
             ? "POSITION_BASIS_DRIFT"
@@ -392,9 +425,9 @@ internal sealed class AutonomyCycleHostedService(
             new Dictionary<Asset, Money>
             {
                 [quoteAsset] = new Money(availableQuoteLiquidity, quoteAsset),
-                [new Asset("BTC")] = new Money(btcQuantity, new Asset("BTC")),
+                [baseAssetObj] = new Money(baseQuantity, baseAssetObj),
             },
-            btcQuantity * latest.ClosePrice.Value,
+            baseQuantity * latest.ClosePrice.Value,
             accounting.RealizedDailyLossNotional,
             accounting.DrawdownNotional ?? 0m,
             accounting.PositionCostNotional,
@@ -450,7 +483,9 @@ internal sealed class AutonomyCycleHostedService(
                 UseConservativeCommissionReserve: true,
                 ExecutionAttempt: hasPendingExitReplan || hasPendingEntryReplan ? replanCandidate!.NextAttempt : 0,
                 HasPendingExitReplan: hasPendingExitReplan,
-                PendingExitReplanStrategyId: hasPendingExitReplan ? "trend-following-btcusdt" : null);
+#pragma warning disable CA1308 // Strategy identifiers use lowercase slugs by design
+                PendingExitReplanStrategyId: hasPendingExitReplan ? $"trend-following-{symbol.ToLowerInvariant()}" : null);
+#pragma warning restore CA1308
 
             if (durablePerformances is not null)
             {
@@ -487,7 +522,7 @@ internal sealed class AutonomyCycleHostedService(
                 : adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
 
             await decisionCommitStore.CommitAsync(
-                CreateAdaptiveDecisionCommit(runtime, adaptiveCheckpointScope, featureSnapshot, adaptiveResult, adaptiveOutcome, adaptiveReason, adaptiveOutbox, replanCandidate),
+                CreateAdaptiveDecisionCommit(runtime, new Symbol(symbol), adaptiveCheckpointScope, featureSnapshot, adaptiveResult, adaptiveOutcome, adaptiveReason, adaptiveOutbox, replanCandidate),
                 cancellationToken).ConfigureAwait(false);
 
             lastProcessedCloseUtc = latest.CloseTimeUtc;
@@ -527,7 +562,7 @@ internal sealed class AutonomyCycleHostedService(
             policyDocument.Policy.MaxMarketDataAge,
             featureSnapshot,
             UseConservativeCommissionReserve: true);
-        var result = cycle.Evaluate(request);
+        var result = activeCycle.Evaluate(request);
         var outbox = hasCompleteTradingRules ? GetDispatchableOutbox(result) : null;
         var outcome = !hasCompleteTradingRules || result.IsNoTrade
             ? "NO_TRADE"
@@ -559,6 +594,7 @@ internal sealed class AutonomyCycleHostedService(
 
     private static AutonomyDecisionCommit CreateAdaptiveDecisionCommit(
         WorkerRuntimeOptions runtime,
+        Symbol symbol,
         string checkpointScope,
         BaselineFeatureSnapshot featureSnapshot,
         AdaptiveDecisionCycleResult result,
@@ -571,7 +607,6 @@ internal sealed class AutonomyCycleHostedService(
         var accountScope = runtime.ReconciliationAccount.Trim();
         var strategyId = result.SelectedStrategyId ?? AdaptiveDecisionCycle.StrategyId;
         var strategyVersion = result.SelectedStrategyVersion;
-        var symbol = new Symbol(runtime.AutonomySymbol);
         var canonicalIdentity = string.Join('|', environment, accountScope, symbol.Value,
             strategyId, strategyVersion, featureSnapshot.Decision.CloseTimeUtc.ToString("O", CultureInfo.InvariantCulture));
         var decisionId = "ad-" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalIdentity)));

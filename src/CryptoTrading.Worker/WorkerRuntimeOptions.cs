@@ -59,6 +59,28 @@ public sealed class WorkerRuntimeOptions
 
     public string AutonomySymbol { get; set; } = "BTCUSDT";
 
+    /// <summary>Comma or whitespace-separated list of symbols scanned by the multi-asset autonomy engine.</summary>
+    public string AutonomySymbols { get; set; } = string.Empty;
+
+    public IReadOnlyList<string> ResolveAutonomySymbols()
+    {
+        var raw = !string.IsNullOrWhiteSpace(AutonomySymbols)
+            ? AutonomySymbols
+            : AutonomySymbol;
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return ["BTCUSDT"];
+        }
+
+        var list = raw.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => s.ToUpperInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return list.Count > 0 ? list : ["BTCUSDT"];
+    }
+
     public string AutonomyInterval { get; set; } = "1m";
 
     public int AutonomyKlineLimit { get; set; } = 100;
@@ -252,10 +274,25 @@ public sealed class WorkerRuntimeOptions
                     ["WORKER_AUTONOMY_ENABLED requires persistence, migrations, RiskPolicy, reconciliation and account stream."]);
             }
 
-            if (string.IsNullOrWhiteSpace(AutonomySymbol) || !string.Equals(AutonomySymbol.Trim(), "BTCUSDT", StringComparison.OrdinalIgnoreCase))
+            var symbols = ResolveAutonomySymbols();
+            if (symbols.Count == 0)
             {
                 throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
-                    ["WORKER_AUTONOMY_SYMBOL is restricted to BTCUSDT for the A2 baseline."]);
+                    ["WORKER_AUTONOMY_SYMBOLS must contain at least one valid symbol."]);
+            }
+
+            var allowedUniverse = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"
+            };
+
+            foreach (var symbol in symbols)
+            {
+                if (!allowedUniverse.Contains(symbol))
+                {
+                    throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                        [$"WORKER_AUTONOMY_SYMBOLS contains unauthorized symbol '{symbol}'. Allowed universe: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT."]);
+                }
             }
 
             if (AutonomyInterval.Trim() is not ("1m" or "5m" or "15m" or "1h"))

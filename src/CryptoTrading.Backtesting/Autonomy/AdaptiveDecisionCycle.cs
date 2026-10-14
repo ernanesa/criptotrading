@@ -110,6 +110,11 @@ public sealed class AdaptiveDecisionCycle
         var bars = request.Bars;
         var latestBar = bars[^1];
         var symbol = latestBar.Symbol;
+#pragma warning disable CA1308 // Lowercase is the stable strategy-id suffix format, not an equality operation.
+        var symKey = symbol.Value.ToLowerInvariant();
+#pragma warning restore CA1308
+        var meanReversionId = $"mean-reversion-{symKey}";
+        var trendFollowingId = $"trend-following-{symKey}";
 
         // 1. Minimum historical bars check
         if (bars.Count < 5)
@@ -269,7 +274,7 @@ public sealed class AdaptiveDecisionCycle
         {
             var fallbackExitStrategy = !string.IsNullOrWhiteSpace(request.PendingExitReplanStrategyId)
                 ? request.PendingExitReplanStrategyId
-                : (orchestration.Candidates.FirstOrDefault(c => c.RecommendedSide == OrderSide.Sell)?.StrategyId ?? "trend-following-btcusdt");
+                : (orchestration.Candidates.FirstOrDefault(c => c.RecommendedSide == OrderSide.Sell)?.StrategyId ?? trendFollowingId);
 
             orchestration = orchestration with
             {
@@ -289,7 +294,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedStrategyId = meanReversionId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = "LOCK_PROFIT_ADVERSE_ORDER_BOOK: Locking net profit on strong adverse order-book imbalance.",
@@ -304,7 +309,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedStrategyId = meanReversionId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = $"TAKE_PROFIT_EXPANDED_TARGET: Locking {currentUnrealizedProfitBps:F1} bps profit on expanded target in {regime.Regime}.",
@@ -321,7 +326,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedStrategyId = meanReversionId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = chandelierReason,
@@ -336,7 +341,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedStrategyId = meanReversionId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = $"BREAK_EVEN_PROFIT_LOCK: Locking {currentUnrealizedProfitBps:F1} bps profit at break-even floor on softening momentum.",
@@ -434,11 +439,11 @@ public sealed class AdaptiveDecisionCycle
                     mlEval: mlEval);
             }
 
-            if (string.Equals(orchestration.SelectedStrategyId, "mean-reversion-btcusdt", StringComparison.OrdinalIgnoreCase))
+            if (orchestration.SelectedStrategyId is not null && orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase))
             {
                 var protectiveExit = orchestration.Candidates
                     .Where(c => c.RecommendedSide == OrderSide.Sell &&
-                                !string.Equals(c.StrategyId, "mean-reversion-btcusdt", StringComparison.OrdinalIgnoreCase) &&
+                                !c.StrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase) &&
                                 c.ExpectedUtilityScore > 0m)
                     .OrderByDescending(c => c.ExpectedUtilityScore)
                     .FirstOrDefault();
@@ -466,7 +471,7 @@ public sealed class AdaptiveDecisionCycle
         // 5b. System-1 Calibrated Decision Confidence, ML.NET 6.0 Meta-Labeler, SSA Breakdown & Order-Book Imbalance Gate
         var selectedPerf = _metaAllocator.GetPerformance(orchestration.SelectedStrategyId!, regime.Regime)
             ?? (isEntry && regime.Regime == MarketRegime.BullTrend
-                ? _metaAllocator.GetPerformance("mean-reversion-btcusdt", MarketRegime.BullTrend)
+                ? _metaAllocator.GetPerformance(meanReversionId, MarketRegime.BullTrend)
                 : null);
         if (!isEntry)
         {
@@ -504,7 +509,7 @@ public sealed class AdaptiveDecisionCycle
             if (isEntry &&
                 (orderBookImbalance <= -0.75m ||
                  (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.45m) ||
-                 (!string.Equals(orchestration.SelectedStrategyId, "mean-reversion-btcusdt", StringComparison.OrdinalIgnoreCase) &&
+                 (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase) &&
                   (mlEval.MlWinProbability < 0.45m || (orderBookImbalance <= -0.20m && mlEval.MlWinProbability < 0.50m)))))
             {
                 return CreateNoTradeResult(
@@ -622,7 +627,7 @@ public sealed class AdaptiveDecisionCycle
 
         // 8. Adaptive Execution Tactic Selection
         var isMomentumEntry = orchestration.SelectedSide == OrderSide.Buy &&
-            !string.Equals(orchestration.SelectedStrategyId, "mean-reversion-btcusdt", StringComparison.OrdinalIgnoreCase);
+            (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase));
         var isUrgentBreakout = isMomentumEntry && (mlEval.MlWinProbability >= 0.82m || volBps >= 22.0m);
         var urgency = isUrgentBreakout
             ? 0.85m
@@ -642,7 +647,7 @@ public sealed class AdaptiveDecisionCycle
             takerFee);
 
         // 9. Independent Risk Engine Evaluation via OrderExecutionPipeline
-        var identity = BuildIdentity(orchestration.SelectedStrategyId, DefaultStrategyVersion, symbol, latestBar.CloseTimeUtc, orchestration.SelectedSide.Value.ToString());
+        var identity = BuildIdentity(orchestration.SelectedStrategyId ?? DefaultStrategyId, DefaultStrategyVersion, symbol, latestBar.CloseTimeUtc, orchestration.SelectedSide.Value.ToString());
         var nettedNotional = nettingProposal.NettedQuantity * referencePrice;
         var marketRisk = request.MarketRisk ?? new MarketRiskSnapshot(
             expectedSlippageBps: 5m,
