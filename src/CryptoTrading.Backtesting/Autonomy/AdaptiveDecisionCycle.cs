@@ -644,7 +644,9 @@ public sealed class AdaptiveDecisionCycle
             topOfBookSpreadBps,
             expectedSlippageBps,
             makerFee,
-            takerFee);
+            takerFee,
+            orderBookImbalance: request.ExecutionMarket?.OrderBookImbalance ?? 0m,
+            volatilityBps: volBps);
 
         // 9. Independent Risk Engine Evaluation via OrderExecutionPipeline
         var identity = BuildIdentity(orchestration.SelectedStrategyId ?? DefaultStrategyId, DefaultStrategyVersion, symbol, latestBar.CloseTimeUtc, orchestration.SelectedSide.Value.ToString());
@@ -708,7 +710,8 @@ public sealed class AdaptiveDecisionCycle
                     feeReservePolicy: request.FeeReservePolicy,
                     effectiveCommission: request.EffectiveCommission,
                     commissionMaximumAge: request.CommissionMaximumAge,
-                    useConservativeCommissionReserve: request.UseConservativeCommissionReserve));
+                    useConservativeCommissionReserve: request.UseConservativeCommissionReserve,
+                    tactic: tacticRecommendation));
 
             if (plan.Plan is not null)
             {

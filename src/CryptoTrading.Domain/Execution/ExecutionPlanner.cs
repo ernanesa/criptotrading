@@ -75,7 +75,8 @@ public sealed record ExecutionPlanRequest
         EffectiveCommissionSnapshot? effectiveCommission = null,
         TimeSpan? commissionMaximumAge = null,
         bool makerFeeEligible = false,
-        bool useConservativeCommissionReserve = false)
+        bool useConservativeCommissionReserve = false,
+        ExecutionTacticDecision? tactic = null)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -117,6 +118,7 @@ public sealed record ExecutionPlanRequest
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(CommissionMaximumAge, TimeSpan.Zero);
         MakerFeeEligible = makerFeeEligible;
         UseConservativeCommissionReserve = useConservativeCommissionReserve;
+        Tactic = tactic;
     }
 
     public OrderIntent Intent { get; }
@@ -133,6 +135,7 @@ public sealed record ExecutionPlanRequest
     /// <summary>True only when policy and venue semantics prove a maker fee is applicable.</summary>
     public bool MakerFeeEligible { get; }
     public bool UseConservativeCommissionReserve { get; }
+    public ExecutionTacticDecision? Tactic { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -260,11 +263,45 @@ public static class ExecutionPlanner
         var limitPrice = intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk;
         if (market.PriceTickSize is { } tickSize && tickSize > 0m)
         {
-            var tickSource = intent.Side is OrderSide.Buy && intent.Type is OrderType.Market
-                ? market.BestAsk.Value * 1.00015m
-                : intent.Side is OrderSide.Sell
-                    ? market.BestBid.Value * 0.99985m
-                    : market.BestBid.Value;
+            decimal tickSource;
+            if (request.Tactic is { } tacticDecision)
+            {
+                if (tacticDecision.SelectedTactic == ExecutionTactic.AggressiveTakerImmediate || (intent.Type is OrderType.Market && tacticDecision.RequiresImmediateFill))
+                {
+                    tickSource = intent.Side is OrderSide.Buy
+                        ? market.BestAsk.Value * 1.00015m
+                        : market.BestBid.Value * 0.99985m;
+                }
+                else if (tacticDecision.SelectedTactic == ExecutionTactic.PassiveMakerDeep)
+                {
+                    tickSource = intent.Side is OrderSide.Buy
+                        ? Math.Max(tickSize, market.BestBid.Value - tickSize)
+                        : market.BestAsk.Value + tickSize;
+                }
+                else // PassiveMakerPegged or IcebergChunked (maker)
+                {
+                    var offset = Math.Max(0, tacticDecision.PegOffsetTicks);
+                    if (intent.Side is OrderSide.Buy)
+                    {
+                        var maxBuy = market.BestAsk.Value - tickSize;
+                        tickSource = Math.Min(maxBuy, market.BestBid.Value + (offset * tickSize));
+                    }
+                    else
+                    {
+                        var minSell = market.BestBid.Value + tickSize;
+                        tickSource = Math.Max(minSell, market.BestAsk.Value - (offset * tickSize));
+                    }
+                }
+            }
+            else
+            {
+                tickSource = intent.Side is OrderSide.Buy && intent.Type is OrderType.Market
+                    ? market.BestAsk.Value * 1.00015m
+                    : intent.Side is OrderSide.Sell
+                        ? market.BestBid.Value * 0.99985m
+                        : market.BestBid.Value;
+            }
+
             var ticks = Math.Floor(tickSource / tickSize);
             limitPrice = new Price(ticks * tickSize);
         }
