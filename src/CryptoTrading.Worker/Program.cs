@@ -165,7 +165,10 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) ||
         new CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle(
             CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline));
     builder.Services.AddSingleton<CryptoTrading.Domain.Research.ContextualMetaAllocator>();
-    builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.AdaptiveDecisionCycle>();
+    builder.Services.AddSingleton(sp =>
+        new CryptoTrading.Backtesting.Autonomy.AdaptiveDecisionCycle(
+            sp.GetService<CryptoTrading.Domain.Research.ContextualMetaAllocator>(),
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ResolveQuarantinedStrategies()));
 }
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {

@@ -505,6 +505,52 @@ public sealed class OperationalApiEndpointsTests
         Assert.Equal("UNKNOWN_WITHOUT_REALIZED_LOSSES", json["profitFactorAvailabilityReason"]?.GetValue<string>());
     }
 
+    [Fact]
+    public async Task GetPortfolioPerformanceAcceptsSpecificSymbol()
+    {
+        var metrics = new AggregatedPortfolioPerformanceMetrics(
+            5, 4, 1, 15m, 1m, 18m, 3m, Array.Empty<PerformancePeriodMetrics>(), null)
+        {
+            ScopeSymbol = "ETHUSDT",
+            CurrentNetAssetValueQuote = 500m,
+            CurrentUnrealizedPnlQuote = 2m,
+            CurrentSnapshotObservedAtUtc = DateTimeOffset.UtcNow
+        };
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IPortfolioNavSnapshotStore>(new FakePortfolioSnapshotStore(metrics));
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/portfolio/performance?symbol=ETHUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
+        var json = await response.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(json);
+        Assert.Equal("ETHUSDT", json["scopeSymbol"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task GetPortfolioPerformanceRejectsInvalidSymbol()
+    {
+        var metrics = new AggregatedPortfolioPerformanceMetrics(
+            0, 0, 0, 0m, 0m, 0m, 0m, Array.Empty<PerformancePeriodMetrics>(), null)
+        {
+            CurrentNetAssetValueQuote = 500m,
+            CurrentUnrealizedPnlQuote = 0m,
+            CurrentSnapshotObservedAtUtc = DateTimeOffset.UtcNow
+        };
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IPortfolioNavSnapshotStore>(new FakePortfolioSnapshotStore(metrics));
+        });
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(new Uri("/portfolio/performance?symbol=DOGEBUSD", UriKind.Relative), TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The caller disposes the created WebApplicationFactory.")]
     private static WebApplicationFactory<Program> CreateFactory(
         IPAddress remoteIp,
@@ -634,6 +680,11 @@ public sealed class OperationalApiEndpointsTests
         public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(
             DateTimeOffset asOfUtc,
             CancellationToken cancellationToken = default) => Task.FromResult(metrics);
+
+        public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(
+            DateTimeOffset asOfUtc,
+            string? symbol,
+            CancellationToken cancellationToken = default) => Task.FromResult(symbol is not null ? metrics with { ScopeSymbol = symbol } : metrics);
     }
 
     private sealed class FakeOperationalControlAuditStore(

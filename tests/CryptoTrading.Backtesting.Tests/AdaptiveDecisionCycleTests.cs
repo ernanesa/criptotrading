@@ -261,6 +261,27 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void SuppressesBreakoutEntryWhenQuarantinedInBullTrend()
+    {
+        var cycle = new AdaptiveDecisionCycle(quarantinedStrategies: ["breakout-momentum"]);
+        var bars = Bars(100m, 101m, 102m, 103m, 102m, 106m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        var candidate = Assert.Single(result.Candidates, c => c.StrategyId == "breakout-momentum-btcusdt");
+        Assert.Null(candidate.RecommendedSide);
+        Assert.Equal("StrategyQuarantinedForNegativeExpectancy", candidate.Reason);
+    }
+
+    [Fact]
     public void BlocksMeanReversionFallingKnifeEntryDuringIntradayBreakdown()
     {
         var cycle = new AdaptiveDecisionCycle();

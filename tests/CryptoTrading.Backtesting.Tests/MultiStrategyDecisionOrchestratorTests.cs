@@ -154,6 +154,20 @@ public sealed class MultiStrategyDecisionOrchestratorTests
             c => c.StrategyId == "trend-following-btcusdt" && c.RecommendedSide == OrderSide.Sell);
     }
 
+    [Fact]
+    public void OrchestratorSuppressesBreakoutEntryWhenQuarantined()
+    {
+        // High of past bars is 103, last bar breaks out to 106.
+        var bars = Bars(100m, 101m, 102m, 103m, 102m, 106m);
+        var quarantined = new HashSet<string>(["breakout-momentum"], StringComparer.OrdinalIgnoreCase);
+        var result = MultiStrategyDecisionOrchestrator.Orchestrate(BtcUsdt, bars, 1000m, TestTime, quarantinedStrategies: quarantined);
+
+        Assert.True(result.IsNoTrade);
+        var breakoutCandidate = Assert.Single(result.Candidates, c => c.StrategyId == "breakout-momentum-btcusdt");
+        Assert.Null(breakoutCandidate.RecommendedSide);
+        Assert.Equal("StrategyQuarantinedForNegativeExpectancy", breakoutCandidate.Reason);
+    }
+
     private static List<CloseBar> Bars(params decimal[] prices)
     {
         var start = DateTimeOffset.Parse("2026-09-01T00:00:00Z", CultureInfo.InvariantCulture);

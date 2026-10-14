@@ -198,6 +198,34 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public async Task TestnetExecutorThrowsExecutionDispatchBlockedWhenSymbolNotAllowed()
+    {
+        var command = NewCommand("ETHUSDT");
+        var exchange = new RejectedTestnetClient();
+        var store = new RecordingOpenOrderStore();
+        var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), store);
+
+        var ex = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(
+            () => executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("outside BINANCE_ALLOWED_SYMBOLS", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, exchange.SubmitCalls);
+    }
+
+    [Fact]
+    public async Task TestnetCancelExecutorThrowsExecutionDispatchBlockedWhenSymbolNotAllowed()
+    {
+        var command = NewCancelCommand("ETHUSDT");
+        var store = new RecordingOpenOrderStore();
+        var exchange = new CancelRecordingTestnetClient(command, "CANCELED");
+        var executor = CreateTestnetCancelExecutor(exchange, store);
+
+        var ex = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(
+            () => executor.ExecuteAsync(CancelMessageFor(command), cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains("outside BINANCE_ALLOWED_SYMBOLS", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, exchange.CancelCalls);
+    }
+
+    [Fact]
     public async Task TestnetCancelExecutorPersistsPendingThenProjectsVenueCancellation()
     {
         var command = NewCancelCommand();
@@ -782,10 +810,10 @@ public sealed class WorkerRuntimeTests
         await Assert.ThrowsAsync<JsonException>(() => executor.ExecuteAsync(message, cancellationToken: TestContext.Current.CancellationToken));
     }
 
-    private static SubmitOrderCommand NewCommand() => new(
+    private static SubmitOrderCommand NewCommand(string symbol = "BTCUSDT") => new(
         OrderId.New(),
         ClientOrderId.New(),
-        new Symbol("BTCUSDT"),
+        new Symbol(symbol),
         OrderSide.Buy,
         OrderType.Market,
         new Quantity(0.01m),
@@ -812,8 +840,8 @@ public sealed class WorkerRuntimeTests
         command.CreatedAtUtc.AddMinutes(1),
         "test-worker");
 
-    private static CancelOrderCommand NewCancelCommand() => new(
-        OrderId.New(), ClientOrderId.New(), new Symbol("BTCUSDT"), OrderSide.Buy, OrderType.Limit,
+    private static CancelOrderCommand NewCancelCommand(string symbol = "BTCUSDT") => new(
+        OrderId.New(), ClientOrderId.New(), new Symbol(symbol), OrderSide.Buy, OrderType.Limit,
         new Quantity(0.01m), new Quantity(0m), new Price(10_000m), CorrelationId.New(), IdempotencyKey.New(),
         0, DateTimeOffset.UtcNow.AddMinutes(-2), DateTimeOffset.UtcNow.AddMinutes(-1), "42");
 

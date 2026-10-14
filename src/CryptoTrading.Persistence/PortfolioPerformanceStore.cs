@@ -65,6 +65,8 @@ public sealed record AggregatedPortfolioPerformanceMetrics(
 {
     public string ScopeSymbol { get; init; } = "BTCUSDT";
 
+    public PositionCostBasisRecord? PositionBasis { get; init; }
+
     public string QuoteAsset { get; init; } = "USDT";
 
     public DateTimeOffset AsOfUtc { get; init; }
@@ -90,6 +92,10 @@ public sealed record AggregatedPortfolioPerformanceMetrics(
 public interface IPortfolioPerformanceStore
 {
     Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(CancellationToken cancellationToken = default);
+
+    Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(
+        string? symbol,
+        CancellationToken cancellationToken = default);
 }
 
 public interface IPortfolioNavSnapshotStore
@@ -98,5 +104,10 @@ public interface IPortfolioNavSnapshotStore
 
     Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(
         DateTimeOffset asOfUtc,
+        CancellationToken cancellationToken = default);
+
+    Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(
+        DateTimeOffset asOfUtc,
+        string? symbol,
         CancellationToken cancellationToken = default);
 }

@@ -83,6 +83,21 @@ public sealed class WorkerRuntimeOptions
 
     public string AutonomyInterval { get; set; } = "1m";
 
+    /// <summary>Comma or whitespace-separated list of strategies quarantined from opening new entries due to negative expectancy.</summary>
+    public string QuarantinedStrategies { get; set; } = "breakout-momentum";
+
+    public IReadOnlySet<string> ResolveQuarantinedStrategies()
+    {
+        if (string.IsNullOrWhiteSpace(QuarantinedStrategies))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return new HashSet<string>(
+            QuarantinedStrategies.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
     public int AutonomyKlineLimit { get; set; } = 100;
 
     public decimal AutonomyEntryTargetNotional { get; set; } = 100m;

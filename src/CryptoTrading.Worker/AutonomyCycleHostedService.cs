@@ -47,7 +47,8 @@ internal sealed class AutonomyCycleHostedService(
     IBinanceSymbolTradingRulesProvider? rulesProvider = null,
     IPortfolioNavSnapshotStore? navSnapshots = null,
     IStrategyRegimePerformanceStore? durablePerformances = null,
-    IBinanceSpotMarketDataClient? marketDataStreamClient = null) : BackgroundService
+    IBinanceSpotMarketDataClient? marketDataStreamClient = null,
+    CryptoTrading.Observability.TradingAlertDispatcher? alertDispatcher = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
     private readonly System.Threading.Channels.Channel<DateTimeOffset> barCloseSignalChannel =
@@ -59,7 +60,12 @@ internal sealed class AutonomyCycleHostedService(
     private int consecutiveTransientFailures;
     private const int MaxConsecutiveTransientFailures = 3;
     private readonly ConcurrentDictionary<string, BinanceBookTicker> streamBookTickers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, List<BinanceSpotKline>> klineCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastKlineFetchUtc = new(StringComparer.OrdinalIgnoreCase);
+    private DateTimeOffset? safeModeEnteredAtUtc;
+    private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
+    internal ConcurrentDictionary<string, List<BinanceSpotKline>> KlineCache => klineCache;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -81,6 +87,36 @@ internal sealed class AutonomyCycleHostedService(
                         await RunOnceAsync(runtime, symbol, stoppingToken).ConfigureAwait(false);
                     }
                     consecutiveTransientFailures = 0;
+                    var currentControl = operationalControl.Snapshot;
+                    if (currentControl.Mode == OperationalMode.SafeMode)
+                    {
+                        safeModeEnteredAtUtc ??= DateTimeOffset.UtcNow;
+                        var duration = DateTimeOffset.UtcNow - safeModeEnteredAtUtc.Value;
+                        if (duration > TimeSpan.FromMinutes(15) &&
+                            (lastProlongedSafeModeAlertAtUtc is null || DateTimeOffset.UtcNow - lastProlongedSafeModeAlertAtUtc.Value > TimeSpan.FromMinutes(15)))
+                        {
+                            lastProlongedSafeModeAlertAtUtc = DateTimeOffset.UtcNow;
+                            if (alertDispatcher is not null)
+                            {
+                                _ = await alertDispatcher.PublishAsync(new CryptoTrading.Observability.TradingAlert(
+                                    runtime.ExecutionMode,
+                                    "AUTONOMY",
+                                    "autonomy/prolonged_safemode",
+                                    DateTimeOffset.UtcNow,
+                                    Guid.NewGuid().ToString("N"),
+                                    CryptoTrading.Observability.TradingAlertSeverity.Warning,
+                                    "ops",
+                                    $"SafeMode has been active for {duration.TotalMinutes:F0} minutes without recovery.",
+                                    "docs/runbooks/operational-control.md",
+                                    $"PROLONGED_SAFE_MODE_{safeModeEnteredAtUtc:yyyyMMddHHmmss}_{(int)(duration.TotalMinutes / 15)}"), stoppingToken).ConfigureAwait(false);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        safeModeEnteredAtUtc = null;
+                        lastProlongedSafeModeAlertAtUtc = null;
+                    }
                 }
                 catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
                 {
@@ -102,6 +138,21 @@ internal sealed class AutonomyCycleHostedService(
                                     IdempotencyKey.New(),
                                     DateTimeOffset.UtcNow),
                                 stoppingToken).ConfigureAwait(false);
+
+                            if (alertDispatcher is not null)
+                            {
+                                _ = await alertDispatcher.PublishAsync(new CryptoTrading.Observability.TradingAlert(
+                                    runtime.ExecutionMode,
+                                    "AUTONOMY",
+                                    "autonomy/operational_control_escalation",
+                                    DateTimeOffset.UtcNow,
+                                    Guid.NewGuid().ToString("N"),
+                                    CryptoTrading.Observability.TradingAlertSeverity.Critical,
+                                    "ops",
+                                    $"Autonomy cycle triggered KillSwitch due to {classification.ReasonCode}",
+                                    "docs/runbooks/operational-control.md",
+                                    classification.ReasonCode), stoppingToken).ConfigureAwait(false);
+                            }
                         }
                         else if (classification.Severity == FailureSeverity.Transient && ++consecutiveTransientFailures < MaxConsecutiveTransientFailures)
                         {
@@ -114,10 +165,26 @@ internal sealed class AutonomyCycleHostedService(
                             _ = await operationalControl.EnterSafeModeAsync(
                                 new OperationalControlCommand(
                                     "autonomy-cycle",
-                                    $"A2 failure: {classification.ReasonCode} (consecutive={consecutiveTransientFailures})",
+                                    $"A2 failure: {classification.ReasonCode} (severity={classification.Severity}, consecutive={consecutiveTransientFailures})",
                                     IdempotencyKey.New(),
                                     DateTimeOffset.UtcNow),
                                 stoppingToken).ConfigureAwait(false);
+
+                            safeModeEnteredAtUtc ??= DateTimeOffset.UtcNow;
+                            if (alertDispatcher is not null)
+                            {
+                                _ = await alertDispatcher.PublishAsync(new CryptoTrading.Observability.TradingAlert(
+                                    runtime.ExecutionMode,
+                                    "AUTONOMY",
+                                    "autonomy/operational_control_escalation",
+                                    DateTimeOffset.UtcNow,
+                                    Guid.NewGuid().ToString("N"),
+                                    CryptoTrading.Observability.TradingAlertSeverity.Critical,
+                                    "ops",
+                                    $"Autonomy cycle entered SafeMode due to {classification.ReasonCode}",
+                                    "docs/runbooks/operational-control.md",
+                                    classification.ReasonCode), stoppingToken).ConfigureAwait(false);
+                            }
                         }
                     }
                     catch (Exception controlException) when (controlException is not OperationCanceledException)
@@ -176,9 +243,43 @@ internal sealed class AutonomyCycleHostedService(
             {
                 await foreach (var marketEvent in marketDataStreamClient!.ReadAsync(subscriptions, stoppingToken).ConfigureAwait(false))
                 {
-                    if (marketEvent is BinanceKlineEvent kline && kline.IsClosed)
+                    if (marketEvent is BinanceKlineEvent kline)
                     {
-                        barCloseSignalChannel.Writer.TryWrite(kline.ReceivedAt);
+                        var openTimeUtc = DateTimeOffset.FromUnixTimeMilliseconds(kline.OpenTime);
+                        var closeTimeUtc = DateTimeOffset.FromUnixTimeMilliseconds(kline.CloseTime);
+                        if (klineCache.TryGetValue(kline.Symbol, out var list))
+                        {
+                            lock (list)
+                            {
+                                var klineSnapshot = new BinanceSpotKline(
+                                    openTimeUtc,
+                                    closeTimeUtc,
+                                    kline.Open,
+                                    kline.High,
+                                    kline.Low,
+                                    kline.Close,
+                                    kline.Volume,
+                                    kline.Interval);
+
+                                if (list.Count > 0 && list[^1].OpenTimeUtc == openTimeUtc)
+                                {
+                                    list[^1] = klineSnapshot;
+                                }
+                                else if (kline.IsClosed)
+                                {
+                                    list.Add(klineSnapshot);
+                                    if (list.Count > runtime.AutonomyKlineLimit * 2)
+                                    {
+                                        list.RemoveAt(0);
+                                    }
+                                }
+                            }
+                        }
+
+                        if (kline.IsClosed)
+                        {
+                            barCloseSignalChannel.Writer.TryWrite(kline.ReceivedAt);
+                        }
                     }
                     else if (marketEvent is BinanceBookTickerStreamEvent tickerEvent)
                     {
@@ -244,11 +345,44 @@ internal sealed class AutonomyCycleHostedService(
             throw new InvalidOperationException("Autonomy cycle refuses a RiskPolicy with withdrawals enabled.");
         }
 
-        var klines = await marketClient.GetKlinesAsync(
-            symbol,
-            runtime.AutonomyInterval,
-            limit: runtime.AutonomyKlineLimit,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<BinanceSpotKline> klines;
+        var cacheEligible = klineCache.TryGetValue(symbol, out var cachedList) &&
+            cachedList.Count >= runtime.AutonomyKlineLimit &&
+            (now - lastKlineFetchUtc.GetValueOrDefault(symbol, DateTimeOffset.MinValue)) <= TimeSpan.FromMinutes(10);
+
+        if (cacheEligible)
+        {
+            lock (cachedList!)
+            {
+                if (cachedList.Count >= runtime.AutonomyKlineLimit &&
+                    cachedList[^1].CloseTimeUtc <= now &&
+                    (now - cachedList[^1].CloseTimeUtc) <= policyDocument.Policy.MaxMarketDataAge)
+                {
+                    klines = cachedList.ToArray();
+                }
+                else
+                {
+                    cacheEligible = false;
+                    klines = [];
+                }
+            }
+        }
+        else
+        {
+            klines = [];
+        }
+
+        if (!cacheEligible)
+        {
+            klines = await marketClient.GetKlinesAsync(
+                symbol,
+                runtime.AutonomyInterval,
+                limit: runtime.AutonomyKlineLimit,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            var newList = new List<BinanceSpotKline>(klines);
+            klineCache[symbol] = newList;
+            lastKlineFetchUtc[symbol] = now;
+        }
         var closed = ValidateAndMapKlines(
             klines,
             symbol,
@@ -688,6 +822,8 @@ internal sealed class AutonomyCycleHostedService(
         var risk = result.Execution?.Decision;
         var trace = JsonSerializer.Serialize(new
         {
+            CodeVersion = CryptoTrading.Domain.Runtime.RuntimeCodeVersion.Current,
+            StrategyVersion = decision.StrategyVersion,
             featureSnapshot.Decision.BarIndex,
             featureSnapshot.Decision.FastEma,
             featureSnapshot.Decision.SlowEma,

@@ -52,6 +52,44 @@ public static class FailureClassifier
                 TimeSpan.FromSeconds(2));
         }
 
+        var targetEx = exception;
+        string? sqlState = null;
+        while (targetEx is not null)
+        {
+            var sqlStateProp = targetEx.GetType().GetProperty("SqlState") ?? targetEx.GetType().GetProperty("SQLState");
+            sqlState = sqlStateProp?.GetValue(targetEx)?.ToString();
+            if (!string.IsNullOrEmpty(sqlState))
+            {
+                break;
+            }
+            targetEx = targetEx.InnerException;
+        }
+
+        if (!string.IsNullOrEmpty(sqlState))
+        {
+            if (sqlState is "40001" or "40P01" ||
+                sqlState.StartsWith("08", StringComparison.Ordinal) ||
+                sqlState.StartsWith("57P", StringComparison.Ordinal))
+            {
+                return new FailureClassification(
+                    FailureSeverity.Transient,
+                    RuntimeState.Degraded,
+                    "RetryDatabaseTransient",
+                    $"DB_TRANSIENT_SQLSTATE_{sqlState}",
+                    TimeSpan.FromSeconds(2));
+            }
+
+            if (sqlState == "23505")
+            {
+                return new FailureClassification(
+                    FailureSeverity.Transient,
+                    RuntimeState.Degraded,
+                    "IgnoreOrRetryUniqueViolation",
+                    "DB_UNIQUE_VIOLATION_23505",
+                    TimeSpan.FromMilliseconds(500));
+            }
+        }
+
         if (exception is HttpRequestException httpEx)
         {
             if (httpEx.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
