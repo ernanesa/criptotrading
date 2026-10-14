@@ -1,3 +1,4 @@
+using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Regimes;
@@ -13,7 +14,7 @@ namespace CryptoTrading.Backtesting.Autonomy;
 /// Structured output produced by the ML.NET 6.0 Preview System-1 decision evaluator combining:
 /// 1. Singular Spectrum Analysis (SSA) change-point and spike detection (<c>Microsoft.ML.TimeSeries</c>).
 /// 2. Calibrated binary meta-labeling ensemble combining <c>Gam</c> (<c>Microsoft.ML.FastTree</c>) and
-///    <c>SdcaLogisticRegression</c> (<c>Microsoft.ML</c>) with deterministic single-threaded execution.
+///    <c>SdcaLogisticRegression</c> (<c>Microsoft.ML</c>) with Platt Scaling and deterministic single-threaded execution.
 /// </summary>
 public readonly record struct MlNetSystem1Evaluation(
     decimal MlWinProbability,
@@ -22,6 +23,31 @@ public readonly record struct MlNetSystem1Evaluation(
     decimal SsaMartingaleScore,
     decimal SsaSpikePValue,
     bool IsSsaStructuralBreakdown);
+
+/// <summary>
+/// Walk-forward out-of-sample probability calibration report featuring Brier Score and Expected Calibration Error (ECE).
+/// </summary>
+public sealed record MlProbabilityCalibrationReport(
+    decimal BrierScore,
+    decimal ExpectedCalibrationError,
+    bool BrierScoreThresholdMet,
+    decimal TargetBrierThreshold,
+    int TotalEvaluations,
+    int PositiveOutcomes,
+    IReadOnlyList<MlProbabilityCalibrationBin> ReliabilityBins,
+    DateTimeOffset EvaluatedAtUtc);
+
+/// <summary>
+/// Individual confidence/reliability bin for probability calibration curve analysis.
+/// </summary>
+public sealed record MlProbabilityCalibrationBin(
+    int BinIndex,
+    decimal LowerBound,
+    decimal UpperBound,
+    int SampleCount,
+    decimal MeanConfidence,
+    decimal EmpiricalWinRate,
+    decimal AbsoluteError);
 
 public static class MlNetSystem1DecisionEngine
 {
@@ -205,12 +231,19 @@ public static class MlNetSystem1DecisionEngine
             ? Math.Clamp((decimal)gamPred.Probability, 0.05m, 0.99m)
             : regime.Confidence;
 
-        var ensembleProb = Math.Clamp((sdcaProb * 0.55m) + (gamProb * 0.45m), 0.05m, 0.99m);
+        var ensembleProb = Math.Clamp((sdcaProb * 0.55m) + (gamProb * 0.45m), 0.01m, 0.99m);
         var ensembleScore = (!float.IsNaN(sdcaPred.Score) && !float.IsNaN(gamPred.Score))
             ? Math.Round(((decimal)sdcaPred.Score * 0.55m) + ((decimal)gamPred.Score * 0.45m), 4)
             : 0m;
 
-        return (Math.Round(ensembleProb, 4), ensembleScore);
+        // Platt Scaling (John Platt, 1999) regularized sigmoid calibration
+        var plattProb = PlattParameters.Default.Transform(ensembleScore);
+        var finalCalibratedProb = Math.Clamp(
+            Math.Round((ensembleProb * 0.70m) + (plattProb * 0.30m), 4),
+            0.01m,
+            0.99m);
+
+        return (finalCalibratedProb, ensembleScore);
     }
 
     private static List<MetaLabelRow> BuildPointInTimeTrainingSet(
@@ -323,8 +356,8 @@ public static class MlNetSystem1DecisionEngine
                 }
             }
 
-            var minProfitableMoveBps = Math.Max(20.0m, Math.Clamp(volBps * 2.5m, 18.0m, 35.0m));
-            var maxAllowedStopBps = Math.Clamp(volBps * 1.5m, 8.0m, 18.0m);
+            var minProfitableMoveBps = Math.Max(22.0m, volBps * 2.0m);
+            var maxAllowedStopBps = Math.Max(12.0m, volBps * 1.2m);
             var hitTakeProfitBeforeStop = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
             var recencyRatio = (float)(i - lookback) / maxSampleSpan;
             var recencyWeight = 0.50f + (1.00f * recencyRatio);
@@ -384,6 +417,205 @@ public static class MlNetSystem1DecisionEngine
             OrderBookImbalance = (float)Math.Clamp(orderBookImbalance, -1m, 1m),
             SsaStability = (float)Math.Clamp(ssaChangePointPValue, 0m, 1m),
         };
+    }
+
+    /// <summary>
+    /// Computes the Brier score for probabilistic calibration verification:
+    /// Brier = (1 / N) * sum((p_t - y_t)^2).
+    /// </summary>
+    public static decimal CalculateBrierScore(IReadOnlyList<(decimal PredictedProb, bool ActualOutcome)> predictions)
+    {
+        ArgumentNullException.ThrowIfNull(predictions);
+        if (predictions.Count == 0)
+        {
+            return 0m;
+        }
+
+        var sumSqErr = 0m;
+        for (var i = 0; i < predictions.Count; i++)
+        {
+            var p = Math.Clamp(predictions[i].PredictedProb, 0m, 1m);
+            var y = predictions[i].ActualOutcome ? 1m : 0m;
+            var diff = p - y;
+            sumSqErr += diff * diff;
+        }
+
+        return Math.Round(sumSqErr / predictions.Count, 4);
+    }
+
+    /// <summary>
+    /// Evaluates probabilistic calibration metrics across discrete confidence bins,
+    /// calculating Brier Score, Expected Calibration Error (ECE), and empirical reliability bins.
+    /// </summary>
+    public static MlProbabilityCalibrationReport CalculateCalibrationReport(
+        IReadOnlyList<(decimal PredictedProb, bool ActualOutcome)> predictions,
+        int binCount = 5,
+        decimal targetBrierThreshold = 0.15m)
+    {
+        ArgumentNullException.ThrowIfNull(predictions);
+        if (binCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(binCount), "Bin count must be positive.");
+        }
+
+        if (predictions.Count == 0)
+        {
+            return new MlProbabilityCalibrationReport(
+                BrierScore: 0m,
+                ExpectedCalibrationError: 0m,
+                BrierScoreThresholdMet: true,
+                TargetBrierThreshold: targetBrierThreshold,
+                TotalEvaluations: 0,
+                PositiveOutcomes: 0,
+                ReliabilityBins: [],
+                EvaluatedAtUtc: DateTimeOffset.UtcNow);
+        }
+
+        var brierScore = CalculateBrierScore(predictions);
+        var binStep = 1.0m / binCount;
+        var bins = new List<MlProbabilityCalibrationBin>(binCount);
+        var weightedEceSum = 0m;
+        var positiveOutcomes = 0;
+
+        for (var b = 0; b < binCount; b++)
+        {
+            var lower = b * binStep;
+            var upper = (b == binCount - 1) ? 1.0001m : (b + 1) * binStep;
+
+            var binSamples = predictions
+                .Where(p => p.PredictedProb >= lower && p.PredictedProb < upper)
+                .ToArray();
+
+            var nominalUpper = Math.Min(1.0m, (b + 1) * binStep);
+            if (binSamples.Length == 0)
+            {
+                bins.Add(new MlProbabilityCalibrationBin(
+                    BinIndex: b + 1,
+                    LowerBound: lower,
+                    UpperBound: nominalUpper,
+                    SampleCount: 0,
+                    MeanConfidence: (lower + nominalUpper) / 2m,
+                    EmpiricalWinRate: 0m,
+                    AbsoluteError: 0m));
+                continue;
+            }
+
+            var meanConf = binSamples.Average(s => s.PredictedProb);
+            var wins = binSamples.Count(s => s.ActualOutcome);
+            var winRate = (decimal)wins / binSamples.Length;
+            var absErr = Math.Abs(meanConf - winRate);
+
+            weightedEceSum += (decimal)binSamples.Length / predictions.Count * absErr;
+            bins.Add(new MlProbabilityCalibrationBin(
+                BinIndex: b + 1,
+                LowerBound: lower,
+                UpperBound: nominalUpper,
+                SampleCount: binSamples.Length,
+                MeanConfidence: Math.Round(meanConf, 4),
+                EmpiricalWinRate: Math.Round(winRate, 4),
+                AbsoluteError: Math.Round(absErr, 4)));
+        }
+
+        for (var i = 0; i < predictions.Count; i++)
+        {
+            if (predictions[i].ActualOutcome)
+            {
+                positiveOutcomes++;
+            }
+        }
+
+        var ece = Math.Round(weightedEceSum, 4);
+        var thresholdMet = brierScore <= targetBrierThreshold;
+
+        return new MlProbabilityCalibrationReport(
+            BrierScore: brierScore,
+            ExpectedCalibrationError: ece,
+            BrierScoreThresholdMet: thresholdMet,
+            TargetBrierThreshold: targetBrierThreshold,
+            TotalEvaluations: predictions.Count,
+            PositiveOutcomes: positiveOutcomes,
+            ReliabilityBins: bins,
+            EvaluatedAtUtc: DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// Executes walk-forward point-in-time System-1 probability calibration against out-of-sample klines
+    /// without lookahead leakage.
+    /// </summary>
+    public static MlProbabilityCalibrationReport EvaluateWalkForwardCalibration(
+        IReadOnlyList<CloseBar> bars,
+        IReadOnlyList<WalkForwardWindow> windows,
+        decimal orderBookImbalance = 0m,
+        decimal targetBrierThreshold = 0.15m)
+    {
+        ArgumentNullException.ThrowIfNull(bars);
+        ArgumentNullException.ThrowIfNull(windows);
+        if (bars.Count < 20 || windows.Count == 0)
+        {
+            return new MlProbabilityCalibrationReport(
+                BrierScore: 0m,
+                ExpectedCalibrationError: 0m,
+                BrierScoreThresholdMet: true,
+                TargetBrierThreshold: targetBrierThreshold,
+                TotalEvaluations: 0,
+                PositiveOutcomes: 0,
+                ReliabilityBins: [],
+                EvaluatedAtUtc: DateTimeOffset.UtcNow);
+        }
+
+        const int horizon = 4;
+        var samples = new List<(decimal PredictedProb, bool ActualOutcome)>();
+
+        foreach (var window in windows)
+        {
+            var oosStart = window.OutOfSampleStartIndex;
+            var oosEnd = window.OutOfSampleStartIndex + window.OutOfSampleLength;
+
+            for (var t = oosStart; t < oosEnd && t + horizon < bars.Count; t++)
+            {
+                // Point-in-time slice up to bar t (strictly no lookahead)
+                var pointInTimeBars = bars.Take(t + 1).ToArray();
+                if (pointInTimeBars.Length < 20)
+                {
+                    continue;
+                }
+
+                var closePrices = pointInTimeBars.Select(b => b.ClosePrice.Value).ToArray();
+                var regime = MarketRegimeClassifier.Classify(
+                    pointInTimeBars[0].Symbol,
+                    closePrices,
+                    pointInTimeBars[^1].CloseTimeUtc);
+
+                var eval = Evaluate(pointInTimeBars, regime, OrderSide.Buy, orderBookImbalance);
+
+                // Triple-barrier out-of-sample forward outcome over the next 'horizon' bars
+                var entryPrice = bars[t].ClosePrice.Value;
+                var maxFavorableBps = 0m;
+                var maxAdverseBps = 0m;
+                for (var h = 1; h <= horizon && t + h < bars.Count; h++)
+                {
+                    var fwdPrice = bars[t + h].ClosePrice.Value;
+                    var retBps = entryPrice > 0m ? (fwdPrice - entryPrice) / entryPrice * 10_000m : 0m;
+                    if (retBps > maxFavorableBps)
+                    {
+                        maxFavorableBps = retBps;
+                    }
+
+                    if (retBps < maxAdverseBps)
+                    {
+                        maxAdverseBps = retBps;
+                    }
+                }
+
+                var volBps = regime.VolatilityRate * 10_000m;
+                var minProfitableMoveBps = Math.Max(22.0m, volBps * 2.0m);
+                var maxAllowedStopBps = Math.Max(12.0m, volBps * 1.2m);
+                var actualOutcome = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
+                samples.Add((eval.MlWinProbability, actualOutcome));
+            }
+        }
+
+        return CalculateCalibrationReport(samples, binCount: 5, targetBrierThreshold: targetBrierThreshold);
     }
 
     private sealed class SsaInputRow
