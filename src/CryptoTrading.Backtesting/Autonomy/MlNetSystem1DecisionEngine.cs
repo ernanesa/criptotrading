@@ -323,7 +323,9 @@ public static class MlNetSystem1DecisionEngine
                 }
             }
 
-            var hitTakeProfitBeforeStop = maxFavorableBps >= 3.0m && maxAdverseBps > -8.0m;
+            var minProfitableMoveBps = Math.Max(20.0m, Math.Clamp(volBps * 2.5m, 18.0m, 35.0m));
+            var maxAllowedStopBps = Math.Clamp(volBps * 1.5m, 8.0m, 18.0m);
+            var hitTakeProfitBeforeStop = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
             var recencyRatio = (float)(i - lookback) / maxSampleSpan;
             var recencyWeight = 0.50f + (1.00f * recencyRatio);
             rows.Add(new MetaLabelRow

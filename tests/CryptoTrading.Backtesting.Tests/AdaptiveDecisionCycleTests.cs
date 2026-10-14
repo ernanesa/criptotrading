@@ -426,6 +426,42 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
     }
 
+    [Fact]
+    public void LocksProfitAtBreakEvenWhenMomentumSoftens()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_200m, 84_200m);
+        // Position entered at 11.6000 and current notional is 11.6220 (+18.96 bps gain, above roundTripFeeBps + 3)
+        var portfolio = CreatePortfolio(11.6220m) with { PositionCostNotional = 11.6000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_199m),
+                new Price(84_201m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.30m,
+                askQuantity: 0.70m), // Imbalance = -0.40m <= -0.35m
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
+    }
+
     private static AdaptiveDecisionCycleRequest CreateDispatchableRequest() => new(
         Bars(100m, 100m, 100m, 100m, 100m, 95m),
         CreatePortfolio(),
