@@ -146,6 +146,20 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) ||
     builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {
     _ = builder.Services.AddBinanceSpotMarketClient();
+    if (string.Equals(builder.Configuration["WORKER_EXECUTION_MODE"], "TESTNET", StringComparison.OrdinalIgnoreCase))
+    {
+        _ = builder.Services.AddBinanceSpotMarketDataClient(options =>
+        {
+            options.Environment = string.Equals(builder.Configuration["TRADING_ENVIRONMENT"], "DEMO", StringComparison.OrdinalIgnoreCase)
+                ? CryptoTrading.Exchange.Binance.BinanceEnvironment.Demo
+                : CryptoTrading.Exchange.Binance.BinanceEnvironment.Testnet;
+            var wsAddress = builder.Configuration["BINANCE_STREAM_BASE_URL"];
+            if (!string.IsNullOrWhiteSpace(wsAddress))
+            {
+                options.WebSocketBaseAddress = new Uri(wsAddress.Trim());
+            }
+        });
+    }
     builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle>(_ =>
         new CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle(
             CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline));

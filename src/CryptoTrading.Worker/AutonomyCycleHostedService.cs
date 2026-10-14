@@ -45,9 +45,16 @@ internal sealed class AutonomyCycleHostedService(
     IDriftObservationStore? driftStore = null,
     IBinanceSymbolTradingRulesProvider? rulesProvider = null,
     IPortfolioNavSnapshotStore? navSnapshots = null,
-    IStrategyRegimePerformanceStore? durablePerformances = null) : BackgroundService
+    IStrategyRegimePerformanceStore? durablePerformances = null,
+    IBinanceSpotMarketDataClient? marketDataStreamClient = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
+    private readonly System.Threading.Channels.Channel<DateTimeOffset> barCloseSignalChannel =
+        System.Threading.Channels.Channel.CreateBounded<DateTimeOffset>(
+            new System.Threading.Channels.BoundedChannelOptions(1)
+            {
+                FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest
+            });
     private int consecutiveTransientFailures;
     private const int MaxConsecutiveTransientFailures = 3;
 
@@ -55,58 +62,125 @@ internal sealed class AutonomyCycleHostedService(
     {
         var runtime = options.Value;
         runtime.Validate();
+        var streamConsumerTask = marketDataStreamClient is not null
+            ? ConsumeMarketDataStreamAsync(runtime, stoppingToken)
+            : Task.CompletedTask;
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await RunOnceAsync(runtime, stoppingToken).ConfigureAwait(false);
+                    consecutiveTransientFailures = 0;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
+                    var classification = FailureClassifier.Classify(exception);
+                    AutonomyCycleLog.Failed(logger, exception.GetType().Name, classification.ReasonCode);
+                    try
+                    {
+                        if (classification.TargetState == CryptoTrading.Domain.Runtime.RuntimeState.KillSwitch)
+                        {
+                            _ = await operationalControl.ActivateKillSwitchAsync(
+                                new OperationalControlCommand(
+                                    "autonomy-cycle",
+                                    $"A2 terminal failure: {classification.ReasonCode}",
+                                    IdempotencyKey.New(),
+                                    DateTimeOffset.UtcNow),
+                                stoppingToken).ConfigureAwait(false);
+                        }
+                        else if (classification.Severity == FailureSeverity.Transient && ++consecutiveTransientFailures < MaxConsecutiveTransientFailures)
+                        {
+                            var backoff = classification.SuggestedBackoff ?? TimeSpan.FromSeconds(2);
+                            await Task.Delay(backoff, stoppingToken).ConfigureAwait(false);
+                            continue;
+                        }
+                        else
+                        {
+                            _ = await operationalControl.EnterSafeModeAsync(
+                                new OperationalControlCommand(
+                                    "autonomy-cycle",
+                                    $"A2 failure: {classification.ReasonCode} (consecutive={consecutiveTransientFailures})",
+                                    IdempotencyKey.New(),
+                                    DateTimeOffset.UtcNow),
+                                stoppingToken).ConfigureAwait(false);
+                        }
+                    }
+                    catch (Exception controlException) when (controlException is not OperationCanceledException)
+                    {
+                        AutonomyCycleLog.ControlFailure(logger, controlException.GetType().Name);
+                    }
+                }
+
+                if (marketDataStreamClient is null)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(runtime.PollIntervalMilliseconds), stoppingToken).ConfigureAwait(false);
+                }
+                else
+                {
+                    using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                    delayCts.CancelAfter(runtime.PollIntervalMilliseconds);
+                    try
+                    {
+                        if (await barCloseSignalChannel.Reader.WaitToReadAsync(delayCts.Token).ConfigureAwait(false))
+                        {
+                            while (barCloseSignalChannel.Reader.TryRead(out _)) { }
+                        }
+                    }
+                    catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
+                    {
+                        // Polling interval elapsed with no bar close signal; continue to next scheduled cycle.
+                    }
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                await streamConsumerTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+            }
+        }
+    }
+
+    private async Task ConsumeMarketDataStreamAsync(WorkerRuntimeOptions runtime, CancellationToken stoppingToken)
+    {
+        var subscription = new BinanceMarketSubscription(
+            runtime.AutonomySymbol,
+            BinanceMarketStreamKind.Kline,
+            runtime.AutonomyInterval);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await RunOnceAsync(runtime, stoppingToken).ConfigureAwait(false);
-                consecutiveTransientFailures = 0;
+                await foreach (var marketEvent in marketDataStreamClient!.ReadAsync([subscription], stoppingToken).ConfigureAwait(false))
+                {
+                    if (marketEvent is BinanceKlineEvent kline && kline.IsClosed)
+                    {
+                        barCloseSignalChannel.Writer.TryWrite(kline.ReceivedAt);
+                    }
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
             }
-            catch (Exception exception)
+            catch (Exception ex)
             {
-                using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
-                var classification = FailureClassifier.Classify(exception);
-                AutonomyCycleLog.Failed(logger, exception.GetType().Name, classification.ReasonCode);
-                try
-                {
-                    if (classification.TargetState == CryptoTrading.Domain.Runtime.RuntimeState.KillSwitch)
-                    {
-                        _ = await operationalControl.ActivateKillSwitchAsync(
-                            new OperationalControlCommand(
-                                "autonomy-cycle",
-                                $"A2 terminal failure: {classification.ReasonCode}",
-                                IdempotencyKey.New(),
-                                DateTimeOffset.UtcNow),
-                            stoppingToken).ConfigureAwait(false);
-                    }
-                    else if (classification.Severity == FailureSeverity.Transient && ++consecutiveTransientFailures < MaxConsecutiveTransientFailures)
-                    {
-                        var backoff = classification.SuggestedBackoff ?? TimeSpan.FromSeconds(2);
-                        await Task.Delay(backoff, stoppingToken).ConfigureAwait(false);
-                        continue;
-                    }
-                    else
-                    {
-                        _ = await operationalControl.EnterSafeModeAsync(
-                            new OperationalControlCommand(
-                                "autonomy-cycle",
-                                $"A2 failure: {classification.ReasonCode} (consecutive={consecutiveTransientFailures})",
-                                IdempotencyKey.New(),
-                                DateTimeOffset.UtcNow),
-                            stoppingToken).ConfigureAwait(false);
-                    }
-                }
-                catch (Exception controlException) when (controlException is not OperationCanceledException)
-                {
-                    AutonomyCycleLog.ControlFailure(logger, controlException.GetType().Name);
-                }
+                AutonomyCycleLog.StreamDisconnected(logger, ex);
+                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false);
             }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(runtime.PollIntervalMilliseconds), stoppingToken).ConfigureAwait(false);
         }
     }
 
@@ -740,6 +814,9 @@ internal static partial class AutonomyCycleLog
 
     [LoggerMessage(LogLevel.Error, "Autonomy cycle failed. ErrorType={ErrorType} Error={Error}")]
     public static partial void Failed(ILogger logger, string errorType, string error);
+
+    [LoggerMessage(LogLevel.Warning, "Binance market data WebSocket stream disconnected. Reconnecting in 2 seconds...")]
+    public static partial void StreamDisconnected(ILogger logger, Exception exception);
 
     [LoggerMessage(LogLevel.Error, "Autonomy cycle could not enter SafeMode. ErrorType={ErrorType}")]
     public static partial void ControlFailure(ILogger logger, string errorType);

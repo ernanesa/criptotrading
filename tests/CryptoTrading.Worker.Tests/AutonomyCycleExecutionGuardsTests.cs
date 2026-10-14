@@ -188,6 +188,8 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
     private sealed class FakeMarketClient : IBinanceSpotMarketClient
     {
+        public int GetKlinesCallCount { get; private set; }
+
         public Task PingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default) =>
@@ -201,6 +203,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
             int limit = 500,
             CancellationToken cancellationToken = default)
         {
+            GetKlinesCallCount++;
             var now = DateTimeOffset.UtcNow;
             var currentMinute = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, TimeSpan.Zero);
             var list = new List<BinanceSpotKline>
@@ -333,6 +336,157 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
         public Task<BinanceSymbolTradingRules> RefreshAsync(string symbol, CancellationToken cancellationToken = default) =>
             Task.FromResult(rules);
+    }
+
+    [Fact]
+    public async Task ConsumesMarketDataStreamAndProcessesClosedKlinesImmediately()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+        var streamClient = new FakeMarketDataStreamClient();
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbol = "BTCUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 10_000,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance,
+            marketDataStreamClient: streamClient);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var runTask = hostedService.StartAsync(cts.Token);
+
+        var startupTriggered = SpinWait.SpinUntil(() => marketClient.GetKlinesCallCount >= 1, TimeSpan.FromSeconds(2));
+        Assert.True(startupTriggered, "AutonomyCycleHostedService did not execute startup RunOnceAsync.");
+        var initialCallCount = marketClient.GetKlinesCallCount;
+
+        streamClient.EmitKline(new BinanceKlineEvent(
+            "btcusdt@kline_1m",
+            "BTCUSDT",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeMilliseconds(),
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            "1m",
+            84_000m,
+            84_100m,
+            84_150m,
+            83_950m,
+            10m,
+            IsClosed: true));
+
+        var streamTriggered = SpinWait.SpinUntil(() => marketClient.GetKlinesCallCount > initialCallCount, TimeSpan.FromSeconds(2));
+        Assert.True(streamTriggered, "Closed kline stream event did not immediately trigger subsequent autonomy cycle execution.");
+
+        await hostedService.StopAsync(CancellationToken.None).ConfigureAwait(true);
+        await runTask.ConfigureAwait(true);
+
+        Assert.True(marketClient.GetKlinesCallCount >= 2);
+    }
+
+    [Fact]
+    public async Task OperatesInRestOnlyModeWhenMarketDataStreamClientIsNullWithoutLeakingChannelWaiters()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbol = "BTCUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 100,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance,
+            marketDataStreamClient: null);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var runTask = hostedService.StartAsync(cts.Token);
+
+        var executedMultipleTicks = SpinWait.SpinUntil(() => marketClient.GetKlinesCallCount >= 3, TimeSpan.FromSeconds(2));
+        Assert.True(executedMultipleTicks, "REST-only autonomy cycle did not complete multiple periodic poll cycles.");
+
+        await hostedService.StopAsync(CancellationToken.None).ConfigureAwait(true);
+        await runTask.ConfigureAwait(true);
+
+        Assert.True(marketClient.GetKlinesCallCount >= 3);
+    }
+
+    private sealed class FakeMarketDataStreamClient : IBinanceSpotMarketDataClient
+    {
+        private readonly System.Threading.Channels.Channel<BinanceMarketDataEvent> events =
+            System.Threading.Channels.Channel.CreateUnbounded<BinanceMarketDataEvent>();
+
+        public void EmitKline(BinanceKlineEvent kline) => events.Writer.TryWrite(kline);
+
+        public async IAsyncEnumerable<BinanceMarketDataEvent> ReadAsync(
+            IEnumerable<BinanceMarketSubscription> subscriptions,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            while (await events.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                while (events.Reader.TryRead(out var item))
+                {
+                    yield return item;
+                }
+            }
+        }
     }
 
     private sealed class HostedServiceFixture : IDisposable
