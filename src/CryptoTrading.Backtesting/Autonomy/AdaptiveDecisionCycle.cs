@@ -443,7 +443,9 @@ public sealed class AdaptiveDecisionCycle
 
             if (isEntry &&
                 (orderBookImbalance <= -0.75m ||
-                 (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.45m)))
+                 (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.45m) ||
+                 (!string.Equals(orchestration.SelectedStrategyId, "mean-reversion-btcusdt", StringComparison.OrdinalIgnoreCase) &&
+                  (mlEval.MlWinProbability < 0.45m || (orderBookImbalance <= -0.20m && mlEval.MlWinProbability < 0.50m)))))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -455,7 +457,7 @@ public sealed class AdaptiveDecisionCycle
                     mlEval: mlEval);
             }
 
-            if (isEntry && decisionConfidence < 0.65m)
+            if (isEntry && (decisionConfidence < 0.65m || mlEval.MlWinProbability < 0.35m))
             {
                 return CreateNoTradeResult(
                     regime,
