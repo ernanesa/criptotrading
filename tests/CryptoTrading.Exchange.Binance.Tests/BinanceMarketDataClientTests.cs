@@ -11,14 +11,65 @@ public sealed class BinanceMarketDataClientTests
     {
         var trade = new BinanceMarketSubscription(" btcusdt ", BinanceMarketStreamKind.Trade);
         var kline = new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Kline, "1m");
+        var bookTicker = new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.BookTicker);
 
         Assert.Equal("btcusdt@trade", trade.ToStreamName());
         Assert.Equal("btcusdt@kline_1m", kline.ToStreamName());
+        Assert.Equal("btcusdt@bookTicker", bookTicker.ToStreamName());
         Assert.Equal(
-            "wss://stream.testnet.binance.vision/stream?streams=btcusdt%40trade/btcusdt%40kline_1m",
+            "wss://stream.testnet.binance.vision/stream?streams=btcusdt%40trade/btcusdt%40kline_1m/btcusdt%40bookTicker",
             BinanceSpotMarketDataClient.BuildStreamUri(
                 new Uri("wss://stream.testnet.binance.vision/stream"),
-                [trade.ToStreamName(), kline.ToStreamName()]).ToString());
+                [trade.ToStreamName(), kline.ToStreamName(), bookTicker.ToStreamName()]).ToString());
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns the transport for the duration of this test.")]
+    public async Task ReadAsyncMapsBookTickerPayload()
+    {
+        var transport = new FakeTransport(
+            "{\"stream\":\"btcusdt@bookTicker\",\"data\":{\"u\":400900217,\"s\":\"BTCUSDT\",\"b\":\"25350.00\",\"B\":\"1.500\",\"a\":\"25351.00\",\"A\":\"2.000\"}}");
+        var client = new BinanceSpotMarketDataClient(
+            new BinanceMarketDataOptions
+            {
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1)
+            },
+            () => transport);
+
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.BookTicker)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await enumerator.MoveNextAsync());
+        var ticker = Assert.IsType<BinanceBookTickerStreamEvent>(enumerator.Current);
+        Assert.Equal("BTCUSDT", ticker.Symbol);
+        Assert.Equal(400900217, ticker.UpdateId);
+        Assert.Equal(25350.00m, ticker.BestBidPrice);
+        Assert.Equal(1.500m, ticker.BestBidQuantity);
+        Assert.Equal(25351.00m, ticker.BestAskPrice);
+        Assert.Equal(2.000m, ticker.BestAskQuantity);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns the transport for the duration of this test.")]
+    public async Task ReadAsyncQuarantinesInvalidBookTickerPayload()
+    {
+        var transport = new FakeTransport(
+            "{\"stream\":\"btcusdt@bookTicker\",\"data\":{\"u\":1,\"s\":\"BTCUSDT\",\"b\":\"25352.00\",\"B\":\"1.500\",\"a\":\"25350.00\",\"A\":\"2.000\"}}", // Crossed: ask < bid
+            "{\"stream\":\"btcusdt@bookTicker\",\"data\":{\"u\":2,\"s\":\"BTCUSDT\",\"b\":\"25350.00\",\"B\":\"1.500\",\"a\":\"25351.00\",\"A\":\"2.000\"}}"); // Valid
+        var client = new BinanceSpotMarketDataClient(
+            new BinanceMarketDataOptions
+            {
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1)
+            },
+            () => transport);
+
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.BookTicker)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await enumerator.MoveNextAsync());
+        var ticker = Assert.IsType<BinanceBookTickerStreamEvent>(enumerator.Current);
+        Assert.Equal(2, ticker.UpdateId);
+        Assert.Equal(25350.00m, ticker.BestBidPrice);
     }
 
     [Fact]

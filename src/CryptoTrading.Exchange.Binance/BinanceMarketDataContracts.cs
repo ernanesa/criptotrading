@@ -13,6 +13,7 @@ public sealed record BinanceMarketSubscription(string Symbol, BinanceMarketStrea
             BinanceMarketStreamKind.Trade => $"{symbol}@trade",
             BinanceMarketStreamKind.Kline when !string.IsNullOrWhiteSpace(Interval) => $"{symbol}@kline_{ToLowerAscii(Interval.Trim())}",
             BinanceMarketStreamKind.Kline => throw new ArgumentException("Kline subscriptions require an interval.", nameof(Interval)),
+            BinanceMarketStreamKind.BookTicker => $"{symbol}@bookTicker",
             _ => throw new ArgumentOutOfRangeException(nameof(Kind), Kind, "Unsupported market stream kind.")
         };
     }
@@ -43,7 +44,8 @@ public sealed record BinanceMarketSubscription(string Symbol, BinanceMarketStrea
 public enum BinanceMarketStreamKind
 {
     Trade,
-    Kline
+    Kline,
+    BookTicker
 }
 
 public abstract record BinanceMarketDataEvent(
@@ -51,6 +53,16 @@ public abstract record BinanceMarketDataEvent(
     string Symbol,
     long EventTime,
     DateTimeOffset ReceivedAt);
+
+public sealed record BinanceBookTickerStreamEvent(
+    string Stream,
+    string Symbol,
+    long UpdateId,
+    DateTimeOffset ReceivedAt,
+    decimal BestBidPrice,
+    decimal BestBidQuantity,
+    decimal BestAskPrice,
+    decimal BestAskQuantity) : BinanceMarketDataEvent(Stream, Symbol, UpdateId, ReceivedAt);
 
 public sealed record BinanceTradeEvent(
     string Stream,
@@ -112,6 +124,14 @@ internal static class BinanceMarketDataParser
         {
             return null;
         }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     public static BinanceMarketDataEvent Parse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAt)
@@ -120,7 +140,18 @@ internal static class BinanceMarketDataParser
         var root = document.RootElement;
         var stream = root.GetProperty("stream").GetString() ?? throw new JsonException("Missing stream name.");
         var data = root.GetProperty("data");
-        var eventType = data.GetProperty("e").GetString();
+
+        if (!data.TryGetProperty("e", out var eventTypeProp))
+        {
+            if (data.TryGetProperty("u", out var updateIdProp) && data.TryGetProperty("b", out _) && data.TryGetProperty("a", out _))
+            {
+                return ParseBookTicker(stream, data, receivedAt, updateIdProp.GetInt64());
+            }
+
+            throw new JsonException("Unsupported market data payload without event type.");
+        }
+
+        var eventType = eventTypeProp.GetString();
 
         return eventType switch
         {
@@ -129,6 +160,22 @@ internal static class BinanceMarketDataParser
             "depthUpdate" => ParseDepthUpdate(stream, data, receivedAt),
             _ => throw new JsonException($"Unsupported Binance market event '{eventType}'.")
         };
+    }
+
+    private static BinanceBookTickerStreamEvent ParseBookTicker(string stream, JsonElement data, DateTimeOffset receivedAt, long updateId)
+    {
+        var symbol = data.GetProperty("s").GetString() ?? throw new JsonException("Missing bookTicker symbol.");
+        var bidPrice = ParseDecimal(data, "b");
+        var bidQuantity = ParseDecimal(data, "B");
+        var askPrice = ParseDecimal(data, "a");
+        var askQuantity = ParseDecimal(data, "A");
+
+        if (bidPrice <= 0m || askPrice < bidPrice || bidQuantity <= 0m || askQuantity <= 0m)
+        {
+            throw new JsonException($"Invalid bookTicker quote for symbol '{symbol}': bidPrice={bidPrice}, askPrice={askPrice}, bidQty={bidQuantity}, askQty={askQuantity}");
+        }
+
+        return new(stream, symbol, updateId, receivedAt, bidPrice, bidQuantity, askPrice, askQuantity);
     }
 
     private static BinanceTradeEvent ParseTrade(string stream, JsonElement data, DateTimeOffset receivedAt) =>
