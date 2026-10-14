@@ -38,7 +38,8 @@ public static class MultiStrategyDecisionOrchestrator
         IReadOnlyList<CloseBar> bars,
         decimal baseTargetNotional,
         DateTimeOffset evaluatedAtUtc,
-        bool hasOpenPosition = false)
+        bool hasOpenPosition = false,
+        IReadOnlySet<string>? quarantinedStrategies = null)
     {
         ArgumentNullException.ThrowIfNull(bars);
         if (bars.Count < 5)
@@ -138,7 +139,12 @@ public static class MultiStrategyDecisionOrchestrator
             trendReason = TrendFollowingReason.FastCrossedAboveSlow;
         }
         var trendReasonText = trendReason.ToString();
-        if (bars.Count >= 20 && trendSignal == TrendFollowingSignal.EnterLong && !isConfirmedBullTrend)
+        if (IsQuarantined(trendStrategyId, quarantinedStrategies) && trendSignal == TrendFollowingSignal.EnterLong)
+        {
+            trendSignal = TrendFollowingSignal.NoTrade;
+            trendReasonText = "StrategyQuarantinedForNegativeExpectancy";
+        }
+        else if (bars.Count >= 20 && trendSignal == TrendFollowingSignal.EnterLong && !isConfirmedBullTrend)
         {
             trendSignal = TrendFollowingSignal.NoTrade;
             trendReasonText = "TrendEntryBlockedOutsideBullTrend";
@@ -199,7 +205,12 @@ public static class MultiStrategyDecisionOrchestrator
             channelLow > 0m &&
             (channelLow - lastBreakout.ClosePrice.Value) / channelLow >= 0.0008m;
         var breakoutReasonText = breakoutReason.ToString();
-        if (bars.Count >= 20 && breakoutSignal == BreakoutSignal.EnterLong && !isConfirmedBullTrend)
+        if (IsQuarantined(breakoutStrategyId, quarantinedStrategies) && breakoutSignal == BreakoutSignal.EnterLong)
+        {
+            breakoutSignal = BreakoutSignal.NoTrade;
+            breakoutReasonText = "StrategyQuarantinedForNegativeExpectancy";
+        }
+        else if (bars.Count >= 20 && breakoutSignal == BreakoutSignal.EnterLong && !isConfirmedBullTrend)
         {
             breakoutSignal = BreakoutSignal.NoTrade;
             breakoutReasonText = "BreakoutEntryBlockedOutsideBullTrend";
@@ -277,7 +288,12 @@ public static class MultiStrategyDecisionOrchestrator
              severeChannelBreakdown ||
              isDowntrendDrift);
         var twentyBarMean = closePrices.Count > 0 ? closePrices.Average() : lastMeanRev.ClosePrice.Value;
-        if (meanRevSignal == MeanReversionSignal.EnterLong && isFallingKnifeBreakdown)
+        if (IsQuarantined(meanRevStrategyId, quarantinedStrategies) && meanRevSignal == MeanReversionSignal.EnterLong)
+        {
+            meanRevSignal = MeanReversionSignal.NoTrade;
+            meanRevReasonText = "StrategyQuarantinedForNegativeExpectancy";
+        }
+        else if (meanRevSignal == MeanReversionSignal.EnterLong && isFallingKnifeBreakdown)
         {
             meanRevSignal = MeanReversionSignal.NoTrade;
             meanRevReasonText = "FallingKnifeBreakdownBlocked";
@@ -380,5 +396,16 @@ public static class MultiStrategyDecisionOrchestrator
             baseTargetNotional,
             OrchestrationReason: $"SELECTED: Strategy {bestCandidate.StrategyId} yielded highest utility {bestCandidate.ExpectedUtilityScore:F2} under regime {regime.Regime}.",
             IsNoTrade: false);
+    }
+
+    private static bool IsQuarantined(string strategyId, IReadOnlySet<string>? quarantinedStrategies)
+    {
+        if (quarantinedStrategies is null || quarantinedStrategies.Count == 0)
+        {
+            return false;
+        }
+
+        return quarantinedStrategies.Contains(strategyId) ||
+               quarantinedStrategies.Any(q => strategyId.Contains(q, StringComparison.OrdinalIgnoreCase));
     }
 }

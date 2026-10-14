@@ -89,10 +89,16 @@ public sealed class AdaptiveDecisionCycle
     public const decimal ProductionRealisticFeeFloorBps = 15.0m;
 
     private readonly ContextualMetaAllocator _metaAllocator;
+    private readonly HashSet<string>? _quarantinedStrategies;
 
-    public AdaptiveDecisionCycle(ContextualMetaAllocator? metaAllocator = null)
+    public AdaptiveDecisionCycle(
+        ContextualMetaAllocator? metaAllocator = null,
+        IEnumerable<string>? quarantinedStrategies = null)
     {
         _metaAllocator = metaAllocator ?? new ContextualMetaAllocator();
+        _quarantinedStrategies = quarantinedStrategies is not null
+            ? new HashSet<string>(quarantinedStrategies, StringComparer.OrdinalIgnoreCase)
+            : null;
     }
 
     public static string StrategyId => DefaultStrategyId;
@@ -192,7 +198,8 @@ public sealed class AdaptiveDecisionCycle
             bars,
             request.EntryTargetNotional,
             request.EvaluatedAtUtc,
-            hasOpenPosition);
+            hasOpenPosition,
+            _quarantinedStrategies);
 
         if (bars.Count >= 20 && orchestration.Candidates.Count > 0)
         {
@@ -270,7 +277,10 @@ public sealed class AdaptiveDecisionCycle
         var currentUnrealizedProfitBps = request.Portfolio.PositionCostNotional > 0m
             ? (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m
             : 0m;
-        var targetProfitBps = Math.Max(minProfitBps, Math.Clamp(volBps * 3.5m, 25.0m, 55.0m));
+        var totalRealisticCostBps = roundTripFeeBps + 3.0m;
+        var minTargetProfitBps = Math.Max(36.0m, totalRealisticCostBps * 2.0m);
+        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(65.0m, volBps * 4.0m));
+        var targetProfitBps = Math.Clamp(volBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
 
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             request.HasPendingExitReplan &&
@@ -779,6 +789,8 @@ public sealed class AdaptiveDecisionCycle
 
         var trace = JsonSerializer.Serialize(new
         {
+            CodeVersion = CryptoTrading.Domain.Runtime.RuntimeCodeVersion.Current,
+            StrategyVersion = DefaultStrategyVersion,
             Outcome = finalExecution.IsDispatchable ? "DISPATCHABLE" : "BLOCKED",
             Regime = regime.Regime.ToString(),
             RegimeConfidence = regime.Confidence,
@@ -838,6 +850,8 @@ public sealed class AdaptiveDecisionCycle
     {
         var trace = JsonSerializer.Serialize(new
         {
+            CodeVersion = CryptoTrading.Domain.Runtime.RuntimeCodeVersion.Current,
+            StrategyVersion = DefaultStrategyVersion,
             Outcome = "NO_TRADE",
             Reason = noTradeReason,
             Regime = regime.Regime.ToString(),

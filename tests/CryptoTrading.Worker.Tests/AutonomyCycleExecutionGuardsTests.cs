@@ -4,6 +4,7 @@ using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Runtime;
 using CryptoTrading.Exchange.Binance;
+using CryptoTrading.Observability;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -34,7 +35,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
             AutonomySymbol = "BTCUSDT",
             AutonomyInterval = "1m",
             AutonomyKlineLimit = 50,
-            PollIntervalMilliseconds = 50,
+            PollIntervalMilliseconds = 100,
             ExecutionMode = "PAPER",
             NoTrade = true,
             ReconciliationAccount = "test-account",
@@ -89,7 +90,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
             AutonomySymbol = "BTCUSDT",
             AutonomyInterval = "1m",
             AutonomyKlineLimit = 50,
-            PollIntervalMilliseconds = 50,
+            PollIntervalMilliseconds = 100,
             ExecutionMode = "PAPER",
             NoTrade = true,
             ReconciliationAccount = "test-account",
@@ -186,7 +187,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
         1m,
         "1m");
 
-    private sealed class FakeMarketClient : IBinanceSpotMarketClient
+    private class FakeMarketClient : IBinanceSpotMarketClient
     {
         public int GetKlinesCallCount { get; private set; }
         public int GetBookTickerCallCount { get; private set; }
@@ -197,7 +198,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
         public Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceServerTime(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
 
-        public Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
+        public virtual Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
             string symbol,
             string interval,
             DateTimeOffset? startTimeUtc = null,
@@ -647,6 +648,89 @@ public sealed class AutonomyCycleExecutionGuardsTests
         // Scenario 3: Cache miss -> falls back to REST GetBookTickerAsync.
         await hostedService.RunOnceAsync(options.Value, "SOLUSDT", TestContext.Current.CancellationToken);
         Assert.Equal(2, marketClient.GetBookTickerCallCount);
+
+        // Scenario 4: Fresh in-memory stream klines (>= 50) -> REST GetKlinesAsync is bypassed.
+        var klines = new List<BinanceSpotKline>();
+        for (var i = 0; i < 50; i++)
+        {
+            klines.Add(new BinanceSpotKline(
+                DateTimeOffset.UtcNow.AddMinutes(-50 + i),
+                DateTimeOffset.UtcNow.AddMinutes(-49 + i),
+                100m, 101m, 99m, 100m, 10m, "1m"));
+        }
+        hostedService.KlineCache["BTCUSDT"] = klines;
+        var initialKlinesCount = marketClient.GetKlinesCallCount;
+        await hostedService.RunOnceAsync(options.Value, "BTCUSDT", TestContext.Current.CancellationToken);
+        Assert.Equal(initialKlinesCount, marketClient.GetKlinesCallCount);
+    }
+
+    [Fact]
+    public async Task AutonomyCycleDispatchesAlertOnSafeModeTransition()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var alertSink = new InMemoryTradingAlertSink();
+        using var alertDispatcher = new TradingAlertDispatcher(alertSink);
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbol = "BTCUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 100,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        // Simulating a failure by passing a market client that throws an unhandled exception
+        var throwingMarketClient = new ThrowingMarketClient(new InvalidOperationException("POSITION_BASIS_DRIFT unexpected mismatch"));
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            throwingMarketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance,
+            alertDispatcher: alertDispatcher);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var runTask = hostedService.StartAsync(cts.Token);
+
+        var alertReceived = SpinWait.SpinUntil(() => alertSink.Alerts.Count > 0, TimeSpan.FromSeconds(3));
+        await hostedService.StopAsync(CancellationToken.None).ConfigureAwait(true);
+        await runTask.ConfigureAwait(true);
+
+        Assert.True(alertReceived, "AutonomyCycle did not dispatch alert on SafeMode transition.");
+        var alert = Assert.Single(alertSink.Alerts);
+        Assert.Equal(TradingAlertSeverity.Critical, alert.Severity);
+        Assert.Equal("autonomy/operational_control_escalation", alert.Scope);
+        Assert.Equal(OperationalMode.SafeMode, operationalControl.Snapshot.Mode);
+    }
+
+    private sealed class ThrowingMarketClient(Exception exception) : FakeMarketClient
+    {
+        public override Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc = null, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) =>
+            throw exception;
     }
 
     private sealed class FakeMarketDataStreamClient : IBinanceSpotMarketDataClient

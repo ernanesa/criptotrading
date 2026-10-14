@@ -53,7 +53,7 @@ public sealed class TestnetOutboxMessageExecutor(
 
         if (!tradingOptions.Value.Binance.ParsedAllowedSymbols.Contains(command.Symbol.Value, StringComparer.Ordinal))
         {
-            throw new InvalidOperationException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
+            throw new ExecutionDispatchBlockedException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
         }
 
         if (submissionGuard is null || submissionStore is null)

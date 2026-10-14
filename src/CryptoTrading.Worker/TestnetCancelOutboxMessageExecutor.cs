@@ -52,7 +52,7 @@ public sealed class TestnetCancelOutboxMessageExecutor(
 
         if (!tradingOptions.Value.Binance.ParsedAllowedSymbols.Contains(command.Symbol.Value, StringComparer.Ordinal))
         {
-            throw new InvalidOperationException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
+            throw new ExecutionDispatchBlockedException($"Symbol '{command.Symbol}' is outside BINANCE_ALLOWED_SYMBOLS for Testnet execution.");
         }
 
         var existing = (await openOrders.ReadOpenOrdersAsync(cancellationToken).ConfigureAwait(false))

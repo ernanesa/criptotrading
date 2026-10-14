@@ -571,6 +571,7 @@ localDiagnostics.MapGet("/trading/trades", async (
 .WithName("GetMyTrades");
 
 localDiagnostics.MapGet("/portfolio/performance", async (
+    [Microsoft.AspNetCore.Mvc.FromQuery] string? symbol,
     IServiceProvider services,
     CancellationToken cancellationToken) =>
 {
@@ -580,11 +581,20 @@ localDiagnostics.MapGet("/portfolio/performance", async (
         return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", "Durable portfolio snapshots are unavailable.");
     }
 
+    if (!string.IsNullOrWhiteSpace(symbol))
+    {
+        var normalized = symbol.Trim().ToUpperInvariant();
+        if (normalized is not ("BTCUSDT" or "ETHUSDT" or "SOLUSDT" or "BNBUSDT"))
+        {
+            return ApiProblem.BadRequest("INVALID_SYMBOL", $"Symbol '{symbol}' is not part of the allowed performance universe.");
+        }
+    }
+
     var asOfUtc = DateTimeOffset.UtcNow;
     AggregatedPortfolioPerformanceMetrics metrics;
     try
     {
-        metrics = await snapshotStore.GetPerformanceMetricsAsync(asOfUtc, cancellationToken).ConfigureAwait(false);
+        metrics = await snapshotStore.GetPerformanceMetricsAsync(asOfUtc, symbol, cancellationToken).ConfigureAwait(false);
     }
     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
     {
