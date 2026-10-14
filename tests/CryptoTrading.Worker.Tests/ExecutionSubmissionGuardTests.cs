@@ -31,6 +31,42 @@ public sealed class ExecutionSubmissionGuardTests
     }
 
     [Fact]
+    public async Task SafeModeAllowsSellOrderWhenRuntimeReconciledAndConnected()
+    {
+        var control = new InMemoryOperationalControl(new RejectReset());
+        var stop = new OperationalControlCommand("test", "safe mode", IdempotencyKey.New(), DateTimeOffset.UtcNow);
+        _ = await control.EnterSafeModeAsync(stop, cancellationToken: TestContext.Current.CancellationToken);
+        await using var supervisor = new RuntimeSupervisor();
+        await supervisor.BeginBootstrappingAsync("test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
+
+        var guard = Create(control, supervisor);
+        var (command, message) = SellCommand(DateTimeOffset.UtcNow.AddMinutes(-2)); // Expired so ValidateCoreAsync fails on expiry, not on operational state
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateAsync(command, message, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal("EXECUTION_EXPIRED_OR_INVALID_TIME", exception.Message); // Proves ValidateOperationalState passed!
+    }
+
+    [Fact]
+    public async Task KillSwitchBlocksSellOrderEvenWhenRuntimeReconciledAndConnected()
+    {
+        var control = new InMemoryOperationalControl(new RejectReset());
+        var stop = new OperationalControlCommand("test", "emergency stop", IdempotencyKey.New(), DateTimeOffset.UtcNow);
+        _ = await control.ActivateKillSwitchAsync(stop, cancellationToken: TestContext.Current.CancellationToken);
+        await using var supervisor = new RuntimeSupervisor();
+        await supervisor.BeginBootstrappingAsync("test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(true, "test", cancellationToken: TestContext.Current.CancellationToken);
+
+        var guard = Create(control, supervisor);
+        var (command, message) = SellCommand(DateTimeOffset.UtcNow);
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateAsync(command, message, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal("OPERATIONAL_OR_RUNTIME_BLOCKED", exception.Message);
+    }
+
+    [Fact]
     public async Task ExpiredIntentBlocksBeforeMarketOrAccountIo()
     {
         await using var supervisor = new RuntimeSupervisor();
@@ -309,6 +345,17 @@ public sealed class ExecutionSubmissionGuardTests
         var idempotency = IdempotencyKey.New();
         var command = new SubmitOrderCommand(OrderId.New(), ClientOrderId.New(), new Symbol("BTCUSDT"),
             OrderSide.Buy, OrderType.Market, new Quantity(0.01m), new Price(10000m), 100m,
+            correlation, idempotency, "risk-v1", created);
+        return (command, new LeasedOutboxMessage(Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType,
+            correlation, idempotency, "{}", created, 1, created.AddMinutes(1), "test"));
+    }
+
+    private static (SubmitOrderCommand Command, LeasedOutboxMessage Message) SellCommand(DateTimeOffset created)
+    {
+        var correlation = CorrelationId.New();
+        var idempotency = IdempotencyKey.New();
+        var command = new SubmitOrderCommand(OrderId.New(), ClientOrderId.New(), new Symbol("BTCUSDT"),
+            OrderSide.Sell, OrderType.Market, new Quantity(0.01m), new Price(10000m), 100m,
             correlation, idempotency, "risk-v1", created);
         return (command, new LeasedOutboxMessage(Guid.NewGuid(), OrderExecutionPipeline.SubmitOrderMessageType,
             correlation, idempotency, "{}", created, 1, created.AddMinutes(1), "test"));

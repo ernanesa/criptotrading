@@ -153,7 +153,12 @@ public sealed class AdaptiveDecisionCycle
         var mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, orderBookImbalance);
 
         // 3. Operational Mode & Risk Pre-checks
-        if (request.OperationalControl.BlocksNewEntries)
+        // SafeMode blocks new exposure but must keep the risk-reducing exit path alive for an open position.
+        // KillSwitch always blocks everything.
+        var exitOnly = request.OperationalControl.BlocksNewEntries &&
+                       request.OperationalControl.Mode == OperationalMode.SafeMode &&
+                       request.Portfolio.GrossExposureNotional > 0m;
+        if (request.OperationalControl.BlocksNewEntries && !exitOnly)
         {
             return CreateNoTradeResult(
                 regime,
@@ -415,6 +420,17 @@ public sealed class AdaptiveDecisionCycle
                 OrchestrationReason = $"SELECTED: Entry candidate {actionableEntry.StrategyId} superseded exit while flat."
             };
             isEntry = true;
+        }
+
+        if (exitOnly && isEntry)
+        {
+            return CreateNoTradeResult(
+                regime,
+                orchestration.Candidates,
+                null,
+                $"OPERATIONAL_CONTROL_BLOCKED:{request.OperationalControl.Mode}",
+                orderBookImbalance: orderBookImbalance,
+                mlEval: mlEval);
         }
 
         if (!isEntry &&

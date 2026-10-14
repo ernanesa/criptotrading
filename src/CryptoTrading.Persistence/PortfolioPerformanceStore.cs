@@ -21,6 +21,14 @@ public sealed record PerformancePeriodMetrics(
     public decimal? UnrealizedPnlDeltaQuote { get; init; }
 
     public PerformanceSnapshotAvailability SnapshotAvailability { get; init; } = PerformanceSnapshotAvailability.MissingBaselineSnapshot;
+
+    public decimal? RealisticNetProfitQuote { get; init; }
+
+    public decimal? AverageReturnBps { get; init; }
+
+    public decimal? AverageWinBps { get; init; }
+
+    public decimal? AverageLossBps { get; init; }
 }
 
 public enum PerformanceSnapshotAvailability
@@ -69,6 +77,14 @@ public sealed record AggregatedPortfolioPerformanceMetrics(
     public IReadOnlyList<AssetAmount> UnvaluedFeeAmounts { get; init; } = [];
 
     public bool FeesAreComplete => UnvaluedFeeAmounts.Count == 0;
+
+    public decimal? RealisticNetPnlQuote { get; init; }
+
+    public decimal? AverageReturnBps { get; init; }
+
+    public decimal? AverageWinBps { get; init; }
+
+    public decimal? AverageLossBps { get; init; }
 }
 
 public interface IPortfolioPerformanceStore
