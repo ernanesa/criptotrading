@@ -324,6 +324,38 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void RejectsEntryWhenMlWinProbabilityIsBelowFiftyPercentFloor()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_169m),
+                new Price(84_171m),
+                10_000m,
+                TestTime,
+                bidQuantity: 0.35m,
+                askQuantity: 0.65m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("LOW_DECISION_CONFIDENCE", result.NoTradeReason);
+    }
+
+    [Fact]
     public void LocksProfitWhenAdverseOrderBookImbalanceHitsProfitableOpenPosition()
     {
         var cycle = new AdaptiveDecisionCycle();

@@ -284,9 +284,7 @@ public static class ExecutionPlanner
             return new(null, TargetNotAuthorized);
         }
 
-        var authorizedNotional = (market.QuantityStepSize is not null || market.PriceTickSize is not null)
-            ? quantity.Value * limitPrice.Value
-            : decision.AuthorizedTargetNotional;
+        var authorizedNotional = quantity.Value * limitPrice.Value;
 
         var identity = BuildIdentity(intent, request.Attempt, limitPrice, quantity);
         return new(
