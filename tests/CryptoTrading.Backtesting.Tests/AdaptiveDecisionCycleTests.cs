@@ -427,6 +427,46 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void LocksProfitOnTrailingStopChandelierExitWhenPricePullbacksFromPeak()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 24 bars: position entered earlier, swings up to 84_350 (+41.6 bps gain from cost basis 84_000),
+        // then pulls back to 84_210 (+25.0 bps gain, a 16.6 bps pullback >= 15.0 bps trailing gap)
+        var bars = Bars(
+            84_000m, 84_020m, 84_050m, 84_080m, 84_120m, 84_150m,
+            84_180m, 84_220m, 84_260m, 84_300m, 84_330m, 84_350m,
+            84_340m, 84_320m, 84_300m, 84_280m, 84_260m, 84_240m,
+            84_230m, 84_220m, 84_215m, 84_210m, 84_210m, 84_210m);
+        // Cost basis 10.0000 USDT at 84_000 -> held qty = 10 / 84000 = 0.0001190476 BTC
+        // Current price 84_210 -> gross exposure = 0.0001190476 * 84210 = 10.0250 USDT (+25.0 bps gain)
+        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_209m),
+                new Price(84_211m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.50m,
+                askQuantity: 0.50m), // Neutral imbalance: trailing stop triggers purely on price pullback
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
+        Assert.Contains("TRAILING_STOP_CHANDELIER_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LocksProfitAtBreakEvenWhenMomentumSoftens()
     {
         var cycle = new AdaptiveDecisionCycle();
