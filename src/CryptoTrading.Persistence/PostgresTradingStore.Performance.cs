@@ -184,15 +184,20 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         return [("Hoje (Dia / 24 Horas)", dayStart), ("Semana (Últimos 7 Dias)", asOfUtc.AddDays(-7)), ("Mês (Últimos 30 Dias)", asOfUtc.AddDays(-30)), ("Ano (Acumulado / YTD)", yearStart)];
     }
 
+    private static readonly HashSet<string> AllowedUniverseSymbols = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"
+    };
+
     private static void ValidateSnapshot(PortfolioNavSnapshot snapshot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshot.Symbol);
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshot.QuoteAsset);
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshot.Source);
-        if (!string.Equals(snapshot.Symbol, PerformanceSymbol, StringComparison.OrdinalIgnoreCase) ||
+        if (!AllowedUniverseSymbols.Contains(snapshot.Symbol.Trim()) ||
             !string.Equals(snapshot.QuoteAsset, PerformanceQuoteAsset, StringComparison.OrdinalIgnoreCase))
         {
-            throw new ArgumentException("Portfolio snapshots are limited to the BTCUSDT/USDT performance scope.", nameof(snapshot));
+            throw new ArgumentException("Portfolio snapshots are limited to the allowed universe performance scope.", nameof(snapshot));
         }
         if (snapshot.ObservedAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Portfolio snapshot timestamp must be UTC.", nameof(snapshot));
         if (snapshot.NetAssetValueQuote < 0m) throw new ArgumentOutOfRangeException(nameof(snapshot), "Net asset value cannot be negative.");
