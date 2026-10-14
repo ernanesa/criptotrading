@@ -517,7 +517,7 @@ public sealed class AdaptiveDecisionCycle
                     mlEval: mlEval);
             }
 
-            if (isEntry && (decisionConfidence < 0.65m || mlEval.MlWinProbability < 0.35m))
+            if (isEntry && (decisionConfidence < 0.65m || mlEval.MlWinProbability < 0.50m))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -708,7 +708,7 @@ public sealed class AdaptiveDecisionCycle
             if (plan.Plan is not null)
             {
                 var passiveRisk = new RiskEvaluationRequest(
-                    plan.Plan.AuthorizedNotional,
+                    plan.Plan.Quantity.Value * plan.Plan.LimitPrice.Value,
                     request.Portfolio.GrossExposureNotional,
                     request.Portfolio.DailyLossNotional,
                     request.Portfolio.Drawdown,
