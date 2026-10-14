@@ -507,6 +507,69 @@ public sealed class WorkerRuntimeTests
     }
 
     [Fact]
+    public void AutonomySymbolsResolvesAndValidatesAllowedUniverse()
+    {
+        var validMulti = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbols = "btcusdt, ethusdt; solusdt bnbusdt"
+        };
+        validMulti.Validate();
+
+        var resolved = validMulti.ResolveAutonomySymbols();
+        Assert.Equal(4, resolved.Count);
+        Assert.Equal(["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"], resolved);
+
+        var fallbackLegacy = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbol = "ETHUSDT"
+        };
+        fallbackLegacy.Validate();
+        Assert.Equal(["ETHUSDT"], fallbackLegacy.ResolveAutonomySymbols());
+
+        var unauthorizedLegacy = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbol = "XRPUSDT"
+        };
+        var exLegacy = Assert.Throws<OptionsValidationException>(() => unauthorizedLegacy.Validate());
+        Assert.Contains("unauthorized symbol 'XRPUSDT'", exLegacy.Message, StringComparison.Ordinal);
+
+        var unauthorized = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbols = "BTCUSDT, DOGEUSDT"
+        };
+        var ex = Assert.Throws<OptionsValidationException>(() => unauthorized.Validate());
+        Assert.Contains("unauthorized symbol 'DOGEUSDT'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AutonomyFeeReserveBpsIsBounded()
     {
         var negative = new WorkerRuntimeOptions

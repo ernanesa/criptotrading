@@ -94,13 +94,19 @@ public static class MultiStrategyDecisionOrchestrator
                 evaluatedAtUtc,
                 trendSlopeThreshold: macroSlopeThreshold)
             : regime;
+#pragma warning disable CA1308 // Lowercase is the stable strategy-id suffix format, not an equality operation.
+        var symKey = symbol.Value.ToLowerInvariant();
+#pragma warning restore CA1308
+        var trendStrategyId = $"trend-following-{symKey}";
+        var breakoutStrategyId = $"breakout-momentum-{symKey}";
+        var meanRevStrategyId = $"mean-reversion-{symKey}";
         var candidates = new List<StrategyCandidateEvaluation>(4);
 
         // 1. Evaluate Trend Following
         var slowPeriod = bars.Count >= 20 ? 15 : bars.Count;
         var fastPeriod = Math.Min(5, bars.Count - 1);
         var trendStrategy = new TrendFollowingStrategy(new TrendFollowingParameters(
-            "trend-following-btcusdt", "1.0.0", symbol, fastPeriod: fastPeriod, slowPeriod: slowPeriod, 0.001m, 0.0005m));
+            trendStrategyId, "1.0.0", symbol, fastPeriod: fastPeriod, slowPeriod: slowPeriod, 0.001m, 0.0005m));
         var trendDecisions = trendStrategy.Evaluate(bars);
         var lastTrend = trendDecisions[^1];
         var trendSignal = lastTrend.Signal;
@@ -152,7 +158,7 @@ public static class MultiStrategyDecisionOrchestrator
         };
         decimal trendScore = trendSide.HasValue ? (regime.FavorsTrendFollowing ? 1.5m : 0.4m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
-            "trend-following-btcusdt", "1.0.0", trendSide, trendScore, trendSignal.ToString(), trendReasonText));
+            trendStrategyId, "1.0.0", trendSide, trendScore, trendSignal.ToString(), trendReasonText));
 
         // 2. Evaluate Breakout Momentum
         var slowMaExtension = lastTrend.SlowEma is { } slowEmaVal && slowEmaVal > 0m
@@ -161,7 +167,7 @@ public static class MultiStrategyDecisionOrchestrator
         var breakoutEntryPeriod = bars.Count >= 20 ? 12 : Math.Min(5, bars.Count - 1);
         var breakoutExitPeriod = bars.Count >= 20 ? 6 : Math.Min(3, bars.Count - 2);
         var breakoutStrategy = new BreakoutStrategy(new BreakoutParameters(
-            "breakout-momentum-btcusdt", "1.0.0", symbol, entryPeriod: breakoutEntryPeriod, exitPeriod: breakoutExitPeriod, 0.001m, 0.0005m));
+            breakoutStrategyId, "1.0.0", symbol, entryPeriod: breakoutEntryPeriod, exitPeriod: breakoutExitPeriod, 0.001m, 0.0005m));
         var breakoutDecisions = breakoutStrategy.Evaluate(bars);
         var lastBreakout = breakoutDecisions[^1];
         var breakoutSignal = lastBreakout.Signal;
@@ -213,7 +219,7 @@ public static class MultiStrategyDecisionOrchestrator
         };
         decimal breakoutScore = breakoutSide.HasValue ? (regime.Regime == MarketRegime.BullTrend ? 1.3m : 0.5m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
-            "breakout-momentum-btcusdt", "1.0.0", breakoutSide, breakoutScore, breakoutSignal.ToString(), breakoutReasonText));
+            breakoutStrategyId, "1.0.0", breakoutSide, breakoutScore, breakoutSignal.ToString(), breakoutReasonText));
 
         // 3. Evaluate Mean Reversion
         var meanRevEntryZScoreThreshold = bars.Count >= 20 ? -1.30m : -1.2m;
@@ -223,7 +229,7 @@ public static class MultiStrategyDecisionOrchestrator
                 : 0.35m)
             : 0.0m;
         var meanRevStrategy = new MeanReversionStrategy(new MeanReversionParameters(
-            "mean-reversion-btcusdt", "1.0.0", symbol, period: Math.Min(5, bars.Count), entryZScoreThreshold: meanRevEntryZScoreThreshold, exitZScoreThreshold: meanRevExitZScoreThreshold, 0.10m, 0.001m, 0.0005m));
+            meanRevStrategyId, "1.0.0", symbol, period: Math.Min(5, bars.Count), entryZScoreThreshold: meanRevEntryZScoreThreshold, exitZScoreThreshold: meanRevExitZScoreThreshold, 0.10m, 0.001m, 0.0005m));
         var meanRevDecisions = meanRevStrategy.Evaluate(bars);
         var lastMeanRev = meanRevDecisions[^1];
         var meanRevSignal = lastMeanRev.Signal;
@@ -320,7 +326,7 @@ public static class MultiStrategyDecisionOrchestrator
         };
         decimal meanRevScore = meanRevSide.HasValue ? (regime.FavorsMeanReversion ? 1.6m : 0.3m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
-            "mean-reversion-btcusdt", "1.0.0", meanRevSide, meanRevScore, meanRevSignal.ToString(), meanRevReasonText));
+            meanRevStrategyId, "1.0.0", meanRevSide, meanRevScore, meanRevSignal.ToString(), meanRevReasonText));
 
         // If regime prohibits exposure (Chop or Stale), enforce NO_TRADE
         if (regime.ProhibitsNewExposure)

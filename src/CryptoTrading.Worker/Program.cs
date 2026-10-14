@@ -75,6 +75,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AccountStreamEnabled = builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false);
         options.AutonomyEnabled = builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false);
         options.AutonomySymbol = builder.Configuration["WORKER_AUTONOMY_SYMBOL"] ?? "BTCUSDT";
+        options.AutonomySymbols = builder.Configuration["WORKER_AUTONOMY_SYMBOLS"] ?? string.Empty;
         options.AutonomyInterval = builder.Configuration["WORKER_AUTONOMY_INTERVAL"] ?? "1m";
         options.AutonomyKlineLimit = builder.Configuration.GetValue("WORKER_AUTONOMY_KLINE_LIMIT", 100);
         options.AutonomyEntryTargetNotional = builder.Configuration.GetValue("WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL", 100m);
