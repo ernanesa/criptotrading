@@ -525,7 +525,13 @@ public sealed class OperationalApiEndpointsTests
                     ["BINANCE_API_SECRET"] = "test-api-secret",
                     ["BINANCE_WITHDRAWALS_ENABLED"] = "false",
                     ["BINANCE_ALLOWED_SYMBOLS"] = "BTCUSDT",
-                    ["POSTGRES_CONNECTION_STRING"] = postgresConnectionString ?? ""
+                    ["POSTGRES_CONNECTION_STRING"] = postgresConnectionString ?? "",
+                    ["POSTGRES_PASSWORD_FILE"] = null,
+                    ["POSTGRES_PASSWORD"] = null,
+                    ["POSTGRES_HOST"] = null,
+                    ["POSTGRES_PORT"] = null,
+                    ["POSTGRES_DB"] = null,
+                    ["POSTGRES_USER"] = null
                 });
             });
 
