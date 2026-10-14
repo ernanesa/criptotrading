@@ -26,8 +26,8 @@
       },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
-        "resolved": "6.0.0",
-        "contentHash": "UcSjPsst+DfAdJGVDsu346FX0ci0ah+lw3WRtn18NUwEqRt70HaOQ7lI72vy3+1LxtqI3T5GWwV39rQSrCzAeg=="
+        "resolved": "9.0.4",
+        "contentHash": "9VGI5kxIvrNG2mqLQZnUR6y/3fcnygD8eNpHR+CqfbnIXvea6nehnYknDKQTxZVPMpzpNca+7DxLBmpdB3q0Bw=="
       },
       "Microsoft.Extensions.Diagnostics.HealthChecks": {
         "type": "Transitive",
@@ -41,6 +41,61 @@
         "type": "Transitive",
         "resolved": "11.0.0-rc.1.26425.128",
         "contentHash": "7I1lyFDMftIPBBf18/mlnvOW2/T/VCGbDxPjacw7zLkHuU95viIpLYH72V0stzAcoDi1BJL0GqkenxqVAVaAyg=="
+      },
+      "Microsoft.ML": {
+        "type": "Transitive",
+        "resolved": "6.0.0-preview.26457.2",
+        "contentHash": "Fb7MHtWUpw2tm8XqZ431LJVtoUmNSN2jD+iTIXNAwxFw0t89LZlCCVc3mNrJd54rlY/CtMHJRaFl8DH85IPDag==",
+        "dependencies": {
+          "Microsoft.Bcl.AsyncInterfaces": "9.0.4",
+          "Microsoft.ML.CpuMath": "6.0.0-preview.26457.2",
+          "Microsoft.ML.DataView": "6.0.0-preview.26457.2",
+          "Newtonsoft.Json": "13.0.3",
+          "System.CodeDom": "9.0.4",
+          "System.Numerics.Tensors": "9.0.4"
+        }
+      },
+      "Microsoft.ML.CpuMath": {
+        "type": "Transitive",
+        "resolved": "6.0.0-preview.26457.2",
+        "contentHash": "jeNzbLYzSiJ+JpsmM+h/izmOzMWFXycYxSnZZjwTbVvRYPfn06k+7FEFxfZagH6e6l701S2l2wBih4AyIJ9Rpg==",
+        "dependencies": {
+          "System.Numerics.Tensors": "9.0.4"
+        }
+      },
+      "Microsoft.ML.DataView": {
+        "type": "Transitive",
+        "resolved": "6.0.0-preview.26457.2",
+        "contentHash": "Xnq5y8dSEpp5e+aM50bLWE33/W0KVgHX+iyOY39ken5+il3AqH6i+iZpbG6As7Atxi89TCF6EgFrICcM8JlLew=="
+      },
+      "Microsoft.ML.FastTree": {
+        "type": "Transitive",
+        "resolved": "6.0.0-preview.26457.2",
+        "contentHash": "oZB8BZkR7n5BkvWn5GqccvKNETowBbDP4Peq5BEiEt44YK0t9qs3f2cdAThqjY7AmMmLxczPnFq0khTOPXVdXw==",
+        "dependencies": {
+          "Microsoft.Bcl.AsyncInterfaces": "9.0.4",
+          "Microsoft.ML": "6.0.0-preview.26457.2",
+          "Newtonsoft.Json": "13.0.3",
+          "System.CodeDom": "9.0.4"
+        }
+      },
+      "Microsoft.ML.Mkl.Redist": {
+        "type": "Transitive",
+        "resolved": "6.0.0-preview.26457.2",
+        "contentHash": "tBU++rYwKApoQm0/Z/yEZ3RbjqnBtcuYLjQPKEgOK0sD70E5okJegeMjNzTMkZJ33MNVAlCDvnp0jflcmln8Yg=="
+      },
+      "Microsoft.ML.TimeSeries": {
+        "type": "Transitive",
+        "resolved": "6.0.0-preview.26457.2",
+        "contentHash": "OaJ3ZKk6yOHIz34hkOedNaoy68IjhuLpHeynqm50vzGMboRd8R4aZRt8bXH1qKOQu889Gzq43BZ/E7cELqf8bQ==",
+        "dependencies": {
+          "Microsoft.Bcl.AsyncInterfaces": "9.0.4",
+          "Microsoft.ML": "6.0.0-preview.26457.2",
+          "Microsoft.ML.Mkl.Redist": "6.0.0-preview.26457.2",
+          "Newtonsoft.Json": "13.0.3",
+          "System.CodeDom": "9.0.4",
+          "System.Numerics.Tensors": "9.0.4"
+        }
       },
       "Microsoft.Testing.Extensions.Telemetry": {
         "type": "Transitive",
@@ -76,6 +131,21 @@
         "type": "Transitive",
         "resolved": "5.0.0",
         "contentHash": "dDoKi0PnDz31yAyETfRntsLArTlVAVzUzCIvvEDsDsucrl33Dl8pIJG06ePTJTI3tGpeyHS9Cq7Foc/s4EeKcg=="
+      },
+      "Newtonsoft.Json": {
+        "type": "Transitive",
+        "resolved": "13.0.3",
+        "contentHash": "HrC5BXdl00IP9zeV+0Z848QWPAoCr9P3bDEZguI+gkLcBKAOxix/tLEAAHC+UvDNPv4a2d18lOReHMOagPa+zQ=="
+      },
+      "System.CodeDom": {
+        "type": "Transitive",
+        "resolved": "9.0.4",
+        "contentHash": "aJdv7Z87PoPW8ijvGIincocooYRbH3Umtlz7OrJKf6GDInbdu1bvk5X1fFlmbl7WP+9ntoIBd7NjKz+siVFdHA=="
+      },
+      "System.Numerics.Tensors": {
+        "type": "Transitive",
+        "resolved": "9.0.4",
+        "contentHash": "ynVvqELpMWGQJ1Y90rlAmuTiSQIkXD0W5AMj7pVpEjECmrcIJLexIBblgccerHFijayfcsl1KCbkk+Sg5cS9vQ=="
       },
       "System.Security.AccessControl": {
         "type": "Transitive",
@@ -143,7 +213,10 @@
       "cryptotrading.backtesting": {
         "type": "Project",
         "dependencies": {
-          "CryptoTrading.Domain": "[1.0.0, )"
+          "CryptoTrading.Domain": "[1.0.0, )",
+          "Microsoft.ML": "[6.0.0-preview.26457.2, )",
+          "Microsoft.ML.FastTree": "[6.0.0-preview.26457.2, )",
+          "Microsoft.ML.TimeSeries": "[6.0.0-preview.26457.2, )"
         }
       },
       "cryptotrading.domain": {

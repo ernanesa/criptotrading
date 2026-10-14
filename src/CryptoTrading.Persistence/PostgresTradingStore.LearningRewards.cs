@@ -21,16 +21,30 @@ public sealed partial class PostgresTradingStore : IExecutionLearningRewardStore
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
 
         const string candidateSql = """
-            SELECT d.decision_id, d.strategy_id, d.strategy_reason,
+            SELECT COALESCE(buy_d.decision_id, sell_d.decision_id) AS decision_id,
+                   COALESCE(buy_d.strategy_id, sell_d.strategy_id) AS strategy_id,
+                   COALESCE(buy_d.strategy_reason, sell_d.strategy_reason) AS strategy_reason,
                    round(f.realized_pnl_quote / NULLIF(f.quantity * f.price, 0), 18)
             FROM trading.execution_fills f
-            JOIN trading.execution_submission_context c ON c.client_order_id = f.client_order_id
-            JOIN trading.autonomy_decisions d ON d.outbox_message_id = c.outbox_message_id
+            JOIN trading.execution_submission_context sell_c ON sell_c.client_order_id = f.client_order_id
+            JOIN trading.autonomy_decisions sell_d ON sell_d.outbox_message_id = sell_c.outbox_message_id
+            LEFT JOIN LATERAL (
+                SELECT buy_d.decision_id, buy_d.strategy_id, buy_d.strategy_reason
+                FROM trading.execution_fills buy_f
+                JOIN trading.execution_submission_context buy_c ON buy_c.client_order_id = buy_f.client_order_id
+                JOIN trading.autonomy_decisions buy_d ON buy_d.outbox_message_id = buy_c.outbox_message_id
+                WHERE buy_f.symbol = f.symbol
+                  AND buy_f.side = 'BUY'
+                  AND buy_f.occurred_at <= f.occurred_at
+                  AND buy_d.outcome = 'DISPATCHABLE'
+                ORDER BY buy_f.occurred_at DESC
+                LIMIT 1
+            ) buy_d ON true
             WHERE f.execution_id = @execution_id
-              AND d.outcome = 'DISPATCHABLE'
-              AND d.symbol = f.symbol
-              AND c.symbol = f.symbol
-              AND c.side = f.side
+              AND sell_d.outcome = 'DISPATCHABLE'
+              AND sell_d.symbol = f.symbol
+              AND sell_c.symbol = f.symbol
+              AND sell_c.side = f.side
               AND f.realized_pnl_quote IS NOT NULL
               AND f.fee_comparison_status = 'WITHIN_TOLERANCE'
               AND f.quote_asset = 'USDT'
