@@ -189,6 +189,8 @@ public sealed class AutonomyCycleExecutionGuardsTests
     private sealed class FakeMarketClient : IBinanceSpotMarketClient
     {
         public int GetKlinesCallCount { get; private set; }
+        public int GetBookTickerCallCount { get; private set; }
+        public int MinuteOffset { get; set; }
 
         public Task PingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
@@ -205,7 +207,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
         {
             GetKlinesCallCount++;
             var now = DateTimeOffset.UtcNow;
-            var currentMinute = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, TimeSpan.Zero);
+            var currentMinute = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, TimeSpan.Zero).AddMinutes(MinuteOffset);
             var list = new List<BinanceSpotKline>
             {
                 Kline(currentMinute.AddMinutes(-4), 100m),
@@ -224,8 +226,11 @@ public sealed class AutonomyCycleExecutionGuardsTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<BinanceAggregateTrade>>([]);
 
-        public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new BinanceBookTicker(symbol, 100m, 10m, 101m, 10m, DateTimeOffset.UtcNow));
+        public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default)
+        {
+            GetBookTickerCallCount++;
+            return Task.FromResult(new BinanceBookTicker(symbol, 100m, 10m, 101m, 10m, DateTimeOffset.UtcNow));
+        }
 
         public Task<BinanceExchangeInfo> GetExchangeInfoAsync(string? symbol = null, CancellationToken cancellationToken = default) =>
             throw new NotImplementedException();
@@ -580,6 +585,68 @@ public sealed class AutonomyCycleExecutionGuardsTests
         Assert.Equal("ETHUSDT", decisionCommitStore.Commits[0].Symbol.Value);
         Assert.DoesNotContain(RiskReasonCodes.RiskContextUnavailable, decisionCommitStore.Commits[0].RiskDecision?.ReasonCodes ?? []);
         Assert.NotEqual(RiskReasonCodes.RiskContextUnavailable, decisionCommitStore.Commits[0].NoTradeReason);
+    }
+
+    [Fact]
+    public async Task RunOnceUsesStreamBookTickerWhenFreshAndFallsBackToRestWhenStale()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient([
+            new BinanceBalance("USDT", "5000", "0"),
+            new BinanceBalance("BTC", "0", "0"),
+            new BinanceBalance("ETH", "0", "0"),
+            new BinanceBalance("SOL", "0", "0")
+        ]);
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT, SOLUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 50,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        // Scenario 1: Fresh in-memory stream book ticker -> REST GetBookTickerAsync should NOT be called.
+        hostedService.StreamBookTickers["BTCUSDT"] = new BinanceBookTicker("BTCUSDT", 60000m, 1m, 60001m, 1m, DateTimeOffset.UtcNow);
+        await hostedService.RunOnceAsync(options.Value, "BTCUSDT", TestContext.Current.CancellationToken);
+        Assert.Equal(0, marketClient.GetBookTickerCallCount);
+
+        // Scenario 2: Stale in-memory stream book ticker (> 15m) -> falls back to REST GetBookTickerAsync.
+        hostedService.StreamBookTickers["ETHUSDT"] = new BinanceBookTicker("ETHUSDT", 3000m, 1m, 3001m, 1m, DateTimeOffset.UtcNow.AddMinutes(-20));
+        await hostedService.RunOnceAsync(options.Value, "ETHUSDT", TestContext.Current.CancellationToken);
+        Assert.Equal(1, marketClient.GetBookTickerCallCount);
+
+        // Scenario 3: Cache miss -> falls back to REST GetBookTickerAsync.
+        await hostedService.RunOnceAsync(options.Value, "SOLUSDT", TestContext.Current.CancellationToken);
+        Assert.Equal(2, marketClient.GetBookTickerCallCount);
     }
 
     private sealed class FakeMarketDataStreamClient : IBinanceSpotMarketDataClient

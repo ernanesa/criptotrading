@@ -1,6 +1,7 @@
 #pragma warning disable CA1515 // Hosted service is a host composition boundary.
 #pragma warning disable CA1031 // Supervisor converts unexpected failures into SafeMode.
 
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -57,6 +58,8 @@ internal sealed class AutonomyCycleHostedService(
             });
     private int consecutiveTransientFailures;
     private const int MaxConsecutiveTransientFailures = 3;
+    private readonly ConcurrentDictionary<string, BinanceBookTicker> streamBookTickers = new(StringComparer.OrdinalIgnoreCase);
+    internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -159,9 +162,13 @@ internal sealed class AutonomyCycleHostedService(
 
     private async Task ConsumeMarketDataStreamAsync(WorkerRuntimeOptions runtime, CancellationToken stoppingToken)
     {
-        var subscriptions = runtime.ResolveAutonomySymbols()
-            .Select(s => new BinanceMarketSubscription(s, BinanceMarketStreamKind.Kline, runtime.AutonomyInterval))
-            .ToList();
+        var symbols = runtime.ResolveAutonomySymbols();
+        var subscriptions = new List<BinanceMarketSubscription>(symbols.Count * 2);
+        foreach (var s in symbols)
+        {
+            subscriptions.Add(new BinanceMarketSubscription(s, BinanceMarketStreamKind.Kline, runtime.AutonomyInterval));
+            subscriptions.Add(new BinanceMarketSubscription(s, BinanceMarketStreamKind.BookTicker));
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -172,6 +179,16 @@ internal sealed class AutonomyCycleHostedService(
                     if (marketEvent is BinanceKlineEvent kline && kline.IsClosed)
                     {
                         barCloseSignalChannel.Writer.TryWrite(kline.ReceivedAt);
+                    }
+                    else if (marketEvent is BinanceBookTickerStreamEvent tickerEvent)
+                    {
+                        streamBookTickers[tickerEvent.Symbol] = new BinanceBookTicker(
+                            tickerEvent.Symbol,
+                            tickerEvent.BestBidPrice,
+                            tickerEvent.BestBidQuantity,
+                            tickerEvent.BestAskPrice,
+                            tickerEvent.BestAskQuantity,
+                            tickerEvent.ReceivedAt);
                     }
                 }
             }
@@ -371,9 +388,19 @@ internal sealed class AutonomyCycleHostedService(
             currentEquityNotional,
             now,
             cancellationToken).ConfigureAwait(false);
-        var bookTicker = await marketClient.GetBookTickerAsync(
-            symbol,
-            cancellationToken).ConfigureAwait(false);
+        BinanceBookTicker bookTicker;
+        if (streamBookTickers.TryGetValue(symbol, out var cachedTicker) &&
+            cachedTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
+            DateTimeOffset.UtcNow - cachedTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+        {
+            bookTicker = cachedTicker;
+        }
+        else
+        {
+            bookTicker = await marketClient.GetBookTickerAsync(
+                symbol,
+                cancellationToken).ConfigureAwait(false);
+        }
         if (navSnapshots is not null && !unsupportedAssetBalance &&
             bookTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
             DateTimeOffset.UtcNow - bookTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
