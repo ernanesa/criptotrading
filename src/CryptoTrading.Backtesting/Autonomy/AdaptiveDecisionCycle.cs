@@ -246,9 +246,13 @@ public sealed class AdaptiveDecisionCycle
             ? Math.Max((comm.Standard.Maker + comm.Standard.Taker) * 10_000m, ProductionRealisticFeeFloorBps)
             : ProductionRealisticFeeFloorBps;
         var minProfitBps = Math.Max(22.0m, roundTripFeeBps + 7.0m);
-        var maxNoiseLossBps = bars.Count >= 20
-            ? (regime.Regime == MarketRegime.BearTrend || regime.TrendSlopeRate <= -0.000025m ? 9m : 14m)
-            : 12m;
+        var volBps = bars.Count >= 20 ? regime.VolatilityRate * 10_000m : 10m;
+        var dynamicNoiseLossBps = bars.Count >= 20
+            ? Math.Clamp(volBps * 1.5m, 8.0m, 18.0m)
+            : 12.0m;
+        var maxNoiseLossBps = (regime.Regime == MarketRegime.BearTrend || regime.TrendSlopeRate <= -0.000025m)
+            ? Math.Min(dynamicNoiseLossBps, 10.0m)
+            : dynamicNoiseLossBps;
         var isWithinCostBasisNoiseBand = request.Portfolio.PositionCostNotional > 0m &&
             (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps &&
             (request.Portfolio.PositionCostNotional - request.Portfolio.GrossExposureNotional) / request.Portfolio.PositionCostNotional * 10_000m < maxNoiseLossBps;
@@ -256,6 +260,7 @@ public sealed class AdaptiveDecisionCycle
         var currentUnrealizedProfitBps = request.Portfolio.PositionCostNotional > 0m
             ? (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m
             : 0m;
+        var targetProfitBps = Math.Max(minProfitBps, Math.Clamp(volBps * 3.5m, 25.0m, 55.0m));
 
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             request.HasPendingExitReplan &&
@@ -288,6 +293,21 @@ public sealed class AdaptiveDecisionCycle
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = "LOCK_PROFIT_ADVERSE_ORDER_BOOK: Locking net profit on strong adverse order-book imbalance.",
+                IsNoTrade = false
+            };
+        }
+        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+                 bars.Count >= 20 &&
+                 request.Portfolio.GrossExposureNotional > minTradableExposure &&
+                 currentUnrealizedProfitBps >= targetProfitBps &&
+                 (orderBookImbalance <= -0.15m || mlEval.MlWinProbability < 0.50m))
+        {
+            orchestration = orchestration with
+            {
+                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedSide = OrderSide.Sell,
+                SelectedNotional = request.Portfolio.GrossExposureNotional,
+                OrchestrationReason = $"TAKE_PROFIT_EXPANDED_TARGET: Locking {currentUnrealizedProfitBps:F1} bps profit on expanded target in {regime.Regime}.",
                 IsNoTrade = false
             };
         }
