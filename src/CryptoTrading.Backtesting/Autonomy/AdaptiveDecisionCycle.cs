@@ -33,7 +33,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     decimal ExplorationFactor = 0.10m,
     bool UseConservativeCommissionReserve = false,
     int ExecutionAttempt = 0,
-    bool HasPendingExitReplan = false)
+    bool HasPendingExitReplan = false,
+    string? PendingExitReplanStrategyId = null)
 {
     public void Validate()
     {
@@ -85,6 +86,7 @@ public sealed class AdaptiveDecisionCycle
 {
     public const string DefaultStrategyVersion = "3.0.0-adaptive";
     public const string DefaultStrategyId = "adaptive-multi-strategy-orchestrator";
+    public const decimal ProductionRealisticFeeFloorBps = 15.0m;
 
     private readonly ContextualMetaAllocator _metaAllocator;
 
@@ -241,9 +243,9 @@ public sealed class AdaptiveDecisionCycle
         }
 
         var roundTripFeeBps = request.EffectiveCommission is { } comm
-            ? (comm.Standard.Maker + comm.Standard.Taker) * 10_000m
-            : 0m;
-        var minProfitBps = Math.Max(6m, roundTripFeeBps + 5m);
+            ? Math.Max((comm.Standard.Maker + comm.Standard.Taker) * 10_000m, ProductionRealisticFeeFloorBps)
+            : ProductionRealisticFeeFloorBps;
+        var minProfitBps = Math.Max(22.0m, roundTripFeeBps + 7.0m);
         var maxNoiseLossBps = bars.Count >= 20
             ? (regime.Regime == MarketRegime.BearTrend || regime.TrendSlopeRate <= -0.000025m ? 9m : 14m)
             : 12m;
@@ -260,9 +262,13 @@ public sealed class AdaptiveDecisionCycle
             request.Portfolio.GrossExposureNotional > minTradableExposure &&
             (bars.Count < 20 || !isWithinCostBasisNoiseBand))
         {
+            var fallbackExitStrategy = !string.IsNullOrWhiteSpace(request.PendingExitReplanStrategyId)
+                ? request.PendingExitReplanStrategyId
+                : (orchestration.Candidates.FirstOrDefault(c => c.RecommendedSide == OrderSide.Sell)?.StrategyId ?? "trend-following-btcusdt");
+
             orchestration = orchestration with
             {
-                SelectedStrategyId = "breakout-momentum-btcusdt",
+                SelectedStrategyId = fallbackExitStrategy,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = "SELECTED: Pending exit replan candidate after TTL expiration.",
@@ -479,7 +485,7 @@ public sealed class AdaptiveDecisionCycle
             {
                 var unrealizedProfitBps = (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional)
                     / request.Portfolio.PositionCostNotional * 10_000m;
-                var maxHoldProfitBps = regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate >= 0.00018m ? 24m : 18m;
+                var maxHoldProfitBps = regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate >= 0.00018m ? 45m : 32m;
                 if (unrealizedProfitBps >= minProfitBps && unrealizedProfitBps < maxHoldProfitBps)
                 {
                     return CreateNoTradeResult(

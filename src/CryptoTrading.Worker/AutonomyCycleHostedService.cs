@@ -375,7 +375,8 @@ internal sealed class AutonomyCycleHostedService(
                 featureSnapshot,
                 UseConservativeCommissionReserve: true,
                 ExecutionAttempt: hasPendingExitReplan || hasPendingEntryReplan ? replanCandidate!.NextAttempt : 0,
-                HasPendingExitReplan: hasPendingExitReplan);
+                HasPendingExitReplan: hasPendingExitReplan,
+                PendingExitReplanStrategyId: hasPendingExitReplan ? "trend-following-btcusdt" : null);
 
             if (durablePerformances is not null)
             {
