@@ -48,6 +48,49 @@ public sealed class MultiStrategyOperationsTests
     }
 
     [Fact]
+    public void AdaptiveExecutionTacticScorerCalibratesPegOffsetAndImbalance()
+    {
+        // 1. Moderate urgency (0.72) promoted to Taker Immediate by high bid imbalance (+0.50)
+        var promotedToTaker = AdaptiveExecutionTacticScorer.SelectTactic(
+            signalUrgencyScore: 0.72m,
+            topOfBookSpreadBps: 4.0m,
+            expectedSlippageBps: 1.0m,
+            makerFeeRate: 0.0005m,
+            takerFeeRate: 0.001m,
+            orderBookImbalance: 0.50m);
+
+        Assert.Equal(ExecutionTactic.AggressiveTakerImmediate, promotedToTaker.SelectedTactic);
+        Assert.True(promotedToTaker.RequiresImmediateFill);
+        Assert.Equal(0.77m, promotedToTaker.UrgencyScore);
+
+        // 2. Tight spread (3.5 bps) with high volatility (25 bps) applies 1-tick peg offset for queue priority
+        var offsetPegged = AdaptiveExecutionTacticScorer.SelectTactic(
+            signalUrgencyScore: 0.20m,
+            topOfBookSpreadBps: 3.5m,
+            expectedSlippageBps: 0.5m,
+            makerFeeRate: 0.0005m,
+            takerFeeRate: 0.001m,
+            orderBookImbalance: 0.0m,
+            volatilityBps: 25.0m);
+
+        Assert.Equal(ExecutionTactic.PassiveMakerPegged, offsetPegged.SelectedTactic);
+        Assert.Equal(1, offsetPegged.PegOffsetTicks);
+
+        // 3. Low volatility and neutral imbalance keeps 0-tick peg offset at touch
+        var touchPegged = AdaptiveExecutionTacticScorer.SelectTactic(
+            signalUrgencyScore: 0.20m,
+            topOfBookSpreadBps: 2.0m,
+            expectedSlippageBps: 0.5m,
+            makerFeeRate: 0.0005m,
+            takerFeeRate: 0.001m,
+            orderBookImbalance: 0.0m,
+            volatilityBps: 10.0m);
+
+        Assert.Equal(ExecutionTactic.PassiveMakerPegged, touchPegged.SelectedTactic);
+        Assert.Equal(0, touchPegged.PegOffsetTicks);
+    }
+
+    [Fact]
     public void MultiStrategyComparativeHealthEnforcesPortfolioEligibilityAndQuarantine()
     {
         var now = DateTimeOffset.Parse("2026-09-21T18:00:00Z", CultureInfo.InvariantCulture);

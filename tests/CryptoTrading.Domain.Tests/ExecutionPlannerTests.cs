@@ -354,6 +354,158 @@ public sealed class ExecutionPlannerTests
         Assert.Equal(0m, plan.Quantity.Value % 0.00001m);
     }
 
+    [Fact]
+    public void ExecutionPlanRespectsPassiveMakerPeggedWithOffset()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(100.00m),
+            new Price(100.10m),
+            10_000m,
+            Now,
+            isComplete: true,
+            quantityStepSize: 0.01m,
+            priceTickSize: 0.01m);
+
+        var intent = new OrderIntent(
+            new OrderId(Guid.NewGuid()),
+            new ClientOrderId("ct-peg-test"),
+            new Symbol("BTCUSDT"),
+            OrderSide.Buy,
+            OrderType.Limit,
+            new Quantity(1m),
+            new Price(100m),
+            new CorrelationId(Guid.NewGuid()),
+            new IdempotencyKey("decision:peg-test"),
+            new RiskEvaluationRequest(100m, 0m, 0m, 0m, Now, Now),
+            Now);
+
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "risk-1", [RiskReasonCodes.TargetWithinLimits]);
+        var tactic = new ExecutionTacticDecision(
+            ExecutionTactic.PassiveMakerPegged,
+            0.20m,
+            0.5m,
+            1.0m,
+            false,
+            "MAKER_PEGGED",
+            PegOffsetTicks: 1);
+
+        var request = new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            attempt: 0,
+            tactic: tactic);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+
+        Assert.NotNull(plan);
+        Assert.Equal(100.01m, plan.LimitPrice.Value); // 1 tick inside spread
+    }
+
+    [Fact]
+    public void ExecutionPlanRespectsPassiveMakerDeep()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(100.00m),
+            new Price(100.10m),
+            10_000m,
+            Now,
+            isComplete: true,
+            quantityStepSize: 0.01m,
+            priceTickSize: 0.01m);
+
+        var intent = new OrderIntent(
+            new OrderId(Guid.NewGuid()),
+            new ClientOrderId("ct-deep-test"),
+            new Symbol("BTCUSDT"),
+            OrderSide.Buy,
+            OrderType.Limit,
+            new Quantity(1m),
+            new Price(100m),
+            new CorrelationId(Guid.NewGuid()),
+            new IdempotencyKey("decision:deep-test"),
+            new RiskEvaluationRequest(100m, 0m, 0m, 0m, Now, Now),
+            Now);
+
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "risk-1", [RiskReasonCodes.TargetWithinLimits]);
+        var tactic = new ExecutionTacticDecision(
+            ExecutionTactic.PassiveMakerDeep,
+            0.10m,
+            0.0m,
+            2.0m,
+            false,
+            "MAKER_DEEP");
+
+        var request = new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            attempt: 0,
+            tactic: tactic);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+
+        Assert.NotNull(plan);
+        Assert.Equal(99.99m, plan.LimitPrice.Value); // 1 tick behind best bid
+    }
+
+    [Fact]
+    public void ExecutionPlanRespectsPassiveMakerPeggedSellWithOffset()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(100.00m),
+            new Price(100.10m),
+            10_000m,
+            Now,
+            isComplete: true,
+            quantityStepSize: 0.01m,
+            priceTickSize: 0.01m);
+
+        var intent = new OrderIntent(
+            new OrderId(Guid.NewGuid()),
+            new ClientOrderId("ct-peg-sell-test"),
+            new Symbol("BTCUSDT"),
+            OrderSide.Sell,
+            OrderType.Limit,
+            new Quantity(1m),
+            new Price(100m),
+            new CorrelationId(Guid.NewGuid()),
+            new IdempotencyKey("decision:peg-sell-test"),
+            new RiskEvaluationRequest(100m, 100m, 0m, 0m, Now, Now),
+            Now);
+
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "risk-1", [RiskReasonCodes.TargetWithinLimits]);
+        var tactic = new ExecutionTacticDecision(
+            ExecutionTactic.PassiveMakerPegged,
+            0.20m,
+            0.5m,
+            1.0m,
+            false,
+            "MAKER_PEGGED",
+            PegOffsetTicks: 1);
+
+        var request = new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            attempt: 0,
+            tactic: tactic);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+
+        Assert.NotNull(plan);
+        Assert.Equal(100.09m, plan.LimitPrice.Value); // 1 tick inside spread from ask
+    }
+
     private static ExecutionPlanRequest Request(
         OrderSide side,
         ExecutionMarketSnapshot? market = null,
