@@ -106,7 +106,7 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
                    COALESCE(SUM(CASE WHEN actual_commission_quote IS NOT NULL AND commission_valuation_source IS NOT NULL AND commission_valuation_at IS NOT NULL THEN actual_commission_quote ELSE 0 END), 0),
                    COALESCE(SUM(CASE WHEN realized_pnl_quote > 0 THEN realized_pnl_quote ELSE 0 END), 0),
                    COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0),
-                   COALESCE(SUM(realized_pnl_quote - 0.0018m * (price * quantity)) FILTER (WHERE realized_pnl_quote IS NOT NULL), 0),
+                   ROUND(COALESCE(SUM(realized_pnl_quote - 0.0018 * (price * quantity)) FILTER (WHERE realized_pnl_quote IS NOT NULL), 0), 8),
                    ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote IS NOT NULL), 2),
                    ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote > 0), 2),
                    ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote < 0), 2)
