@@ -590,9 +590,9 @@ localDiagnostics.MapGet("/portfolio/performance", async (
     {
         throw;
     }
-    catch (Exception)
+    catch (Exception ex)
     {
-        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", "Durable portfolio snapshots could not be read.");
+        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", $"Durable portfolio snapshots could not be read: {ex.Message}");
     }
 
     var responseTimeUtc = DateTimeOffset.UtcNow;
