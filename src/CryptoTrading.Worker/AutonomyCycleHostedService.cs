@@ -409,10 +409,18 @@ internal sealed class AutonomyCycleHostedService(
             decimal? unrealized = baseQuantity == 0m ? 0m :
                 accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - baseQuantity) <= 0.00000001m
                     ? baseQuantity * valuationPrice - accounting.PositionCostNotional : null;
-            await navSnapshots.RecordNavSnapshotAsync(new PortfolioNavSnapshot(
-                symbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
-                totalQuoteBalance + baseQuantity * valuationPrice, unrealized,
-                null, "account-snapshot+observed-book-mid"), cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await navSnapshots.RecordNavSnapshotAsync(new PortfolioNavSnapshot(
+                    symbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
+                    totalQuoteBalance + baseQuantity * valuationPrice, unrealized,
+                    null, "account-snapshot+observed-book-mid"), cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Valuation telemetry must never stop trading or push the system into SafeMode.
+                AutonomyCycleLog.TelemetryWriteFailed(logger, "nav_snapshot", ex.GetType().Name);
+            }
             AutonomyCycleLog.Valuation(logger, symbol, bookTicker.ObservedAtUtc,
                 totalQuoteBalance + baseQuantity * valuationPrice, unrealized);
         }
@@ -522,7 +530,14 @@ internal sealed class AutonomyCycleHostedService(
 
             if (regimeStore is not null)
             {
-                await regimeStore.RecordMarketRegimeAsync(adaptiveResult.Regime, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await regimeStore.RecordMarketRegimeAsync(adaptiveResult.Regime, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    AutonomyCycleLog.TelemetryWriteFailed(logger, "market_regime", ex.GetType().Name);
+                }
             }
 
             if (driftStore is not null && adaptiveResult.Regime.VolatilityRate > MarketRegimeClassifier.DefaultMaxVolatilityThreshold)
@@ -535,7 +550,14 @@ internal sealed class AutonomyCycleHostedService(
                     AllowedDeviationThreshold: MarketRegimeClassifier.DefaultMaxVolatilityThreshold,
                     adaptiveResult.Regime.ObservedAtUtc);
                 var driftEval = DriftMonitoringEngine.Evaluate(driftObs);
-                await driftStore.RecordDriftObservationAsync(driftObs, driftEval, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await driftStore.RecordDriftObservationAsync(driftObs, driftEval, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    AutonomyCycleLog.TelemetryWriteFailed(logger, "drift_observation", ex.GetType().Name);
+                }
             }
 
             var adaptiveOutbox = hasCompleteTradingRules && adaptiveResult.Execution is { IsDispatchable: true } exec
@@ -879,6 +901,9 @@ internal static partial class AutonomyCycleLog
 
     [LoggerMessage(LogLevel.Warning, "Binance market data WebSocket stream disconnected. Reconnecting in 2 seconds...")]
     public static partial void StreamDisconnected(ILogger logger, Exception exception);
+
+    [LoggerMessage(LogLevel.Warning, "Non-critical telemetry write failed and was isolated. Kind={Kind} ErrorType={ErrorType}")]
+    public static partial void TelemetryWriteFailed(ILogger logger, string kind, string errorType);
 
     [LoggerMessage(LogLevel.Error, "Autonomy cycle could not enter SafeMode. ErrorType={ErrorType}")]
     public static partial void ControlFailure(ILogger logger, string errorType);

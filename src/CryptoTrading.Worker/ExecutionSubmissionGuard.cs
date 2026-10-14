@@ -77,7 +77,7 @@ internal sealed class ExecutionSubmissionGuard(
                 throw new ExecutionDispatchBlockedException("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST");
             }
 
-            ValidateOperationalState();
+            ValidateOperationalState(command);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -103,7 +103,7 @@ internal sealed class ExecutionSubmissionGuard(
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(message);
-        ValidateOperationalState();
+        ValidateOperationalState(command);
         var now = UtcNow;
         var expiry = command.ExecutionExpiresAtUtc ?? command.CreatedAtUtc.AddMinutes(1);
         if (command.CreatedAtUtc.Offset != TimeSpan.Zero || expiry.Offset != TimeSpan.Zero ||
@@ -211,15 +211,26 @@ internal sealed class ExecutionSubmissionGuard(
             ValidateFinalAvailableBalance(command, snapshot, rate, currentNotional);
         }
 
-        ValidateOperationalState();
+        ValidateOperationalState(command);
         ExecutionGuardLog.Approved(logger, message.MessageId, command.Symbol.Value, command.PolicyVersion,
             measuredRisk.ExpectedSlippageBps, measuredRisk.VolatilityBps, measuredRisk.AvailableLiquidityNotional);
         return new ValidationObservation(policy.DocumentHash, ticker.ObservedAtUtc, currentNotional);
     }
 
-    private void ValidateOperationalState()
+    private void ValidateOperationalState(SubmitOrderCommand command)
     {
-        if (control.Snapshot.BlocksNewEntries || !supervisor.Snapshot.CanCreateNewExposure)
+        // SafeMode blocks new exposure only: a SELL (risk reduction) remains allowed while the runtime is
+        // reconciled and connected. KillSwitch blocks every submission.
+        var runtime = supervisor.Snapshot;
+        if (command.Side == OrderSide.Sell &&
+            control.Snapshot.Mode == OperationalMode.SafeMode &&
+            runtime.ReconciliationHealthy &&
+            runtime.AccountStreamConnected)
+        {
+            return;
+        }
+
+        if (control.Snapshot.BlocksNewEntries || !runtime.CanCreateNewExposure)
         {
             throw new ExecutionDispatchBlockedException("OPERATIONAL_OR_RUNTIME_BLOCKED");
         }

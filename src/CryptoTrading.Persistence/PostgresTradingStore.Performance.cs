@@ -34,6 +34,10 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
                 NetAssetValueDeltaQuote = snapshots.NetAssetValueDeltaQuote,
                 UnrealizedPnlDeltaQuote = snapshots.UnrealizedPnlDeltaQuote,
                 SnapshotAvailability = snapshots.Availability,
+                RealisticNetProfitQuote = fills.RealisticNetPnlQuote,
+                AverageReturnBps = fills.AvgReturnBps,
+                AverageWinBps = fills.AvgWinBps,
+                AverageLossBps = fills.AvgLossBps,
             });
         }
 
@@ -47,6 +51,10 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
             CurrentNetAssetValueQuote = currentSnapshot?.NetAssetValueQuote,
             CurrentUnrealizedPnlQuote = currentSnapshot?.UnrealizedPnlQuote,
             UnvaluedFeeAmounts = unvaluedFees,
+            RealisticNetPnlQuote = totals.RealisticNetPnlQuote,
+            AverageReturnBps = totals.AvgReturnBps,
+            AverageWinBps = totals.AvgWinBps,
+            AverageLossBps = totals.AvgLossBps,
         };
     }
 
@@ -58,7 +66,8 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         const string sql = """
             INSERT INTO trading.portfolio_nav_snapshots
                 (symbol, quote_asset, observed_at, nav_quote, unrealized_pnl_quote, external_cash_flow_quote, source)
-            VALUES (@symbol, @quote_asset, @observed_at, @nav_quote, @unrealized_pnl_quote, @external_cash_flow_quote, @source);
+            VALUES (@symbol, @quote_asset, @observed_at, @nav_quote, @unrealized_pnl_quote, @external_cash_flow_quote, @source)
+            ON CONFLICT (symbol, quote_asset, observed_at) DO NOTHING;
             """;
         await ExecuteAsync(connection, null, sql,
         [
@@ -90,11 +99,17 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
     private static async Task<FillMetrics> ReadFillMetricsAsync(NpgsqlConnection connection, DateTimeOffset? startUtc, DateTimeOffset asOfUtc, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT COUNT(*), COUNT(*) FILTER (WHERE realized_pnl_quote > 0), COUNT(*) FILTER (WHERE realized_pnl_quote < 0),
+            SELECT COUNT(*) FILTER (WHERE realized_pnl_quote IS NOT NULL),
+                   COUNT(*) FILTER (WHERE realized_pnl_quote > 0),
+                   COUNT(*) FILTER (WHERE realized_pnl_quote < 0),
                    COALESCE(SUM(realized_pnl_quote), 0),
                    COALESCE(SUM(CASE WHEN actual_commission_quote IS NOT NULL AND commission_valuation_source IS NOT NULL AND commission_valuation_at IS NOT NULL THEN actual_commission_quote ELSE 0 END), 0),
                    COALESCE(SUM(CASE WHEN realized_pnl_quote > 0 THEN realized_pnl_quote ELSE 0 END), 0),
-                   COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0)
+                   COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0),
+                   COALESCE(SUM(realized_pnl_quote - 0.0018m * (price * quantity)) FILTER (WHERE realized_pnl_quote IS NOT NULL), 0),
+                   ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote IS NOT NULL), 2),
+                   ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote > 0), 2),
+                   ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote < 0), 2)
             FROM trading.execution_fills
             WHERE symbol = @symbol AND quote_asset = @quote_asset AND occurred_at <= @as_of_utc
               AND (@start_utc IS NULL OR occurred_at >= @start_utc);
@@ -106,8 +121,21 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         command.Parameters.Add(Parameter("start_utc", NpgsqlDbType.TimestampTz, startUtc));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         _ = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-        return new(checked((int)reader.GetInt64(0)), checked((int)reader.GetInt64(1)), checked((int)reader.GetInt64(2)),
-            reader.GetDecimal(3), reader.GetDecimal(4), reader.GetDecimal(5), reader.GetDecimal(6));
+        var avgReturnBps = await reader.IsDBNullAsync(8, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(8);
+        var avgWinBps = await reader.IsDBNullAsync(9, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(9);
+        var avgLossBps = await reader.IsDBNullAsync(10, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(10);
+        return new(
+            checked((int)reader.GetInt64(0)),
+            checked((int)reader.GetInt64(1)),
+            checked((int)reader.GetInt64(2)),
+            reader.GetDecimal(3),
+            reader.GetDecimal(4),
+            reader.GetDecimal(5),
+            reader.GetDecimal(6),
+            reader.GetDecimal(7),
+            avgReturnBps,
+            avgWinBps,
+            avgLossBps);
     }
 
     private static async Task<IReadOnlyList<AssetAmount>> ReadUnvaluedFeesAsync(NpgsqlConnection connection, DateTimeOffset asOfUtc, CancellationToken cancellationToken)
@@ -203,6 +231,17 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         if (snapshot.NetAssetValueQuote < 0m) throw new ArgumentOutOfRangeException(nameof(snapshot), "Net asset value cannot be negative.");
     }
 
-    private sealed record FillMetrics(int TradesCount, int WinningCount, int LosingCount, decimal RealizedPnlQuote, decimal FeesPaidQuote, decimal GrossProfitQuote, decimal GrossLossQuote);
+    private sealed record FillMetrics(
+        int TradesCount,
+        int WinningCount,
+        int LosingCount,
+        decimal RealizedPnlQuote,
+        decimal FeesPaidQuote,
+        decimal GrossProfitQuote,
+        decimal GrossLossQuote,
+        decimal RealisticNetPnlQuote,
+        decimal? AvgReturnBps,
+        decimal? AvgWinBps,
+        decimal? AvgLossBps);
     private sealed record SnapshotPeriodMetrics(decimal? NetAssetValueDeltaQuote, decimal? UnrealizedPnlDeltaQuote, PerformanceSnapshotAvailability Availability);
 }
