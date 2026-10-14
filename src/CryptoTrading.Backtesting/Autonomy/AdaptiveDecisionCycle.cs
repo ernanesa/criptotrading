@@ -311,6 +311,21 @@ public sealed class AdaptiveDecisionCycle
                 IsNoTrade = false
             };
         }
+        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+                 bars.Count >= 20 &&
+                 request.Portfolio.GrossExposureNotional > minTradableExposure &&
+                 currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
+                 (orderBookImbalance <= -0.35m || mlEval.MlWinProbability < 0.42m))
+        {
+            orchestration = orchestration with
+            {
+                SelectedStrategyId = "mean-reversion-btcusdt",
+                SelectedSide = OrderSide.Sell,
+                SelectedNotional = request.Portfolio.GrossExposureNotional,
+                OrchestrationReason = $"BREAK_EVEN_PROFIT_LOCK: Locking {currentUnrealizedProfitBps:F1} bps profit at break-even floor on softening momentum.",
+                IsNoTrade = false
+            };
+        }
 
         if (orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId))
         {
@@ -382,6 +397,7 @@ public sealed class AdaptiveDecisionCycle
 
         if (!isEntry &&
             request.Portfolio.PositionCostNotional > 0m &&
+            !orchestration.OrchestrationReason.StartsWith("BREAK_EVEN_PROFIT_LOCK", StringComparison.Ordinal) &&
             (request.Portfolio.GrossExposureNotional < request.Portfolio.PositionCostNotional ||
              (bars.Count >= 20 &&
               (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps)))
@@ -589,7 +605,10 @@ public sealed class AdaptiveDecisionCycle
         // 8. Adaptive Execution Tactic Selection
         var isMomentumEntry = orchestration.SelectedSide == OrderSide.Buy &&
             !string.Equals(orchestration.SelectedStrategyId, "mean-reversion-btcusdt", StringComparison.OrdinalIgnoreCase);
-        var urgency = isMomentumEntry ? 0.80m : (orchestration.SelectedSide == OrderSide.Sell ? 0.70m : 0.40m);
+        var isUrgentBreakout = isMomentumEntry && (mlEval.MlWinProbability >= 0.82m || volBps >= 22.0m);
+        var urgency = isUrgentBreakout
+            ? 0.85m
+            : (isMomentumEntry ? 0.55m : (orchestration.SelectedSide == OrderSide.Sell ? 0.50m : 0.35m));
         var topOfBookSpreadBps = request.ExecutionMarket is not null && request.ExecutionMarket.BestBid.Value > 0m
             ? Math.Round((request.ExecutionMarket.BestAsk.Value - request.ExecutionMarket.BestBid.Value) / request.ExecutionMarket.BestBid.Value * 10_000m, 2)
             : 3.0m;
