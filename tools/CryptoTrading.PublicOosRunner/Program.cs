@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using CryptoTrading.Backtesting;
+using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 
 var arguments = Arguments.Parse(args);
@@ -52,6 +53,7 @@ var sensitivityReport = arguments.IncludeSensitivity
 var trendComparison = baselineComparison.Strategies.Single(static result =>
     result.StrategyId.StartsWith("trend-following-", StringComparison.Ordinal));
 var microCapScenario = BuildMicroCapScenario(arguments.MicroCapital, loaded.Metadata, bars, windows, arguments.IncludeSensitivity);
+var mlCalibration = MlNetSystem1DecisionEngine.EvaluateWalkForwardCalibration(bars, windows);
 var report = new
 {
     schema_version = "public-oos-report/v3",
@@ -87,6 +89,27 @@ var report = new
         stress_half_spread_5bps = spreadStressComparison.Strategies.Select(ToCompactStrategyResult),
         sensitivity_study = sensitivityReport,
         spread_note = "Historical dataset has closes only; baseline sets additional spread to zero and stress adds 5 bps half-spread. Neither is observed spread.",
+    },
+    ml_system1_calibration = new
+    {
+        schema_version = "ml-system1-calibration/v1",
+        brier_score = mlCalibration.BrierScore,
+        expected_calibration_error = mlCalibration.ExpectedCalibrationError,
+        brier_threshold_met = mlCalibration.BrierScoreThresholdMet,
+        target_brier_threshold = mlCalibration.TargetBrierThreshold,
+        total_evaluations = mlCalibration.TotalEvaluations,
+        positive_outcomes = mlCalibration.PositiveOutcomes,
+        empirical_win_rate = mlCalibration.TotalEvaluations > 0 ? Math.Round((decimal)mlCalibration.PositiveOutcomes / mlCalibration.TotalEvaluations, 4) : 0m,
+        reliability_bins = mlCalibration.ReliabilityBins.Select(bin => new
+        {
+            bin_index = bin.BinIndex,
+            range = $"{bin.LowerBound:P0} - {bin.UpperBound:P0}",
+            sample_count = bin.SampleCount,
+            mean_confidence = bin.MeanConfidence,
+            empirical_win_rate = bin.EmpiricalWinRate,
+            calibration_error = bin.AbsoluteError,
+        }),
+        evaluated_at_utc = mlCalibration.EvaluatedAtUtc,
     },
     micro_cap_scenario = microCapScenario,
     generated_at_utc = DateTimeOffset.UtcNow
