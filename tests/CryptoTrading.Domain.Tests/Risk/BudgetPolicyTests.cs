@@ -162,4 +162,24 @@ public sealed class BudgetPolicyTests
 
         Assert.NotEqual(hashWithoutBudget, hashWithBudget);
     }
+
+    [Fact]
+    public void IsSymbolAllowedMatchesExactCommaSeparatedAndWildcard()
+    {
+        var single = new BudgetPolicy(allowedSymbol: "BTCUSDT");
+        Assert.True(single.IsSymbolAllowed("BTCUSDT"));
+        Assert.True(single.IsSymbolAllowed("btcusdt"));
+        Assert.False(single.IsSymbolAllowed("ETHUSDT"));
+        Assert.False(single.IsSymbolAllowed(string.Empty));
+
+        var multi = new BudgetPolicy(allowedSymbol: "BTCUSDT, ETHUSDT; SOLUSDT BNBUSDT");
+        Assert.True(multi.IsSymbolAllowed("BTCUSDT"));
+        Assert.True(multi.IsSymbolAllowed("ETHUSDT"));
+        Assert.True(multi.IsSymbolAllowed("SOLUSDT"));
+        Assert.True(multi.IsSymbolAllowed("BNBUSDT"));
+        Assert.False(multi.IsSymbolAllowed("ADAUSDT"));
+
+        var wildcard = new BudgetPolicy(allowedSymbol: "*");
+        Assert.True(wildcard.IsSymbolAllowed("DOGEUSDT"));
+    }
 }

@@ -362,7 +362,9 @@ internal sealed class ExecutionSubmissionGuard(
         bool commitDurableReservation,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(command.Symbol.Value, budgetPolicy.AllowedSymbol, StringComparison.OrdinalIgnoreCase))
+        var isAllowed = budgetPolicy.IsSymbolAllowed(command.Symbol.Value) ||
+                        options.Value.ResolveAutonomySymbols().Contains(command.Symbol.Value, StringComparer.OrdinalIgnoreCase);
+        if (!isAllowed)
         {
             throw new ExecutionDispatchBlockedException(RiskReasonCodes.DisallowedSymbol);
         }
