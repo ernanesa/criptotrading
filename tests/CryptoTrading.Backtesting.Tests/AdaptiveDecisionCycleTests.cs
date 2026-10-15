@@ -637,6 +637,73 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal("mean-reversion-btcusdt", result.SelectedStrategyId);
     }
 
+    [Fact]
+    public void EmitsConfluenceEntryWhenMlWinProbabilityAndOrderBookAreStrong()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var bars = Bars(prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(106.0m), new Price(106.1m), 10_000m, TestTime,
+                isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
+                bidQuantity: 18.0m, askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+        Assert.False(result.IsNoTrade);
+        Assert.NotNull(result.Execution);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.Equal("trend-following-btcusdt", result.SelectedStrategyId);
+        Assert.Contains("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
+        var trendCandidate = result.Candidates.First(c => c.StrategyId == "trend-following-btcusdt");
+        Assert.Equal(OrderSide.Buy, trendCandidate.RecommendedSide);
+        Assert.Equal("MlOrderBookConfluence", trendCandidate.Reason);
+    }
+
+    [Fact]
+    public void ConfluenceEntryIsSuppressedWhenTrendFollowingIsQuarantined()
+    {
+        var cycle = new AdaptiveDecisionCycle(quarantinedStrategies: ["trend-following-btcusdt"]);
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var bars = Bars(prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(106.0m), new Price(106.1m), 10_000m, TestTime,
+                isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
+                bidQuantity: 18.0m, askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.DoesNotContain("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfluenceEntryIsSuppressedWhenRegimeIsBearTrend()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // Declining prices produce a BearTrend
+        var prices = Enumerable.Range(0, 25).Select(i => 120m - (i * 0.50m)).ToArray();
+        var bars = Bars(prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(107.0m), new Price(107.1m), 10_000m, TestTime,
+                isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
+                bidQuantity: 18.0m, askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.DoesNotContain("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
     private static AdaptiveDecisionCycleRequest CreateDispatchableRequest() => new(
         Bars(100m, 100m, 100m, 100m, 100m, 95m),
         CreatePortfolio(),

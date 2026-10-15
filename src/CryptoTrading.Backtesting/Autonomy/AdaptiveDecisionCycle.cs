@@ -364,6 +364,37 @@ public sealed class AdaptiveDecisionCycle
             };
         }
 
+        var isTrendQuarantined = _quarantinedStrategies is not null && _quarantinedStrategies.Contains(trendFollowingId);
+        var trendPerf = _metaAllocator.GetPerformance(trendFollowingId, regime.Regime);
+        var isTrendNegativeExpectancy = (trendPerf is { ObservationCount: >= 3, AverageReward: < 0m }) ||
+                                        (trendPerf is { ObservationCount: >= 1, AverageReward: <= -0.0015m });
+
+        if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+            !hasOpenPosition &&
+            bars.Count >= 20 &&
+            !isTrendQuarantined &&
+            !isTrendNegativeExpectancy &&
+            mlEval.MlWinProbability >= 0.51m &&
+            orderBookImbalance >= 0.25m &&
+            regime.Regime == MarketRegime.BullTrend &&
+            regime.TrendSlopeRate > 0m)
+        {
+            var updatedCandidates = orchestration.Candidates.Select(c =>
+                string.Equals(c.StrategyId, trendFollowingId, StringComparison.OrdinalIgnoreCase)
+                    ? c with { RecommendedSide = OrderSide.Buy, ExpectedUtilityScore = 1.0m, RawSignal = "EnterLong", Reason = "MlOrderBookConfluence" }
+                    : c).ToList();
+
+            orchestration = orchestration with
+            {
+                Candidates = updatedCandidates,
+                SelectedStrategyId = trendFollowingId,
+                SelectedSide = OrderSide.Buy,
+                SelectedNotional = request.EntryTargetNotional,
+                OrchestrationReason = $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}) in {regime.Regime}.",
+                IsNoTrade = false
+            };
+        }
+
         if (orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId))
         {
             return CreateNoTradeResult(
@@ -548,7 +579,7 @@ public sealed class AdaptiveDecisionCycle
                     mlEval: mlEval);
             }
 
-            if (isEntry && (decisionConfidence < 0.65m || mlEval.MlWinProbability < 0.50m))
+            if (isEntry && (decisionConfidence < 0.60m || mlEval.MlWinProbability < 0.50m))
             {
                 return CreateNoTradeResult(
                     regime,
