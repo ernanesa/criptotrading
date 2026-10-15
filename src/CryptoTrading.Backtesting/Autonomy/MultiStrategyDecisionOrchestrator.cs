@@ -132,8 +132,8 @@ public static class MultiStrategyDecisionOrchestrator
                  bullFastMa > bullSlowMa &&
                  lastTrend.ClosePrice.Value >= bullFastMa &&
                  (bullFastMa - bullSlowMa) / bullSlowMa >= 0.00025m &&
-                 (lastTrend.ClosePrice.Value - bullFastMa) / bullFastMa <= 0.00085m &&
-                 (lastTrend.ClosePrice.Value - bullSlowMa) / bullSlowMa <= 0.00175m)
+                 (lastTrend.ClosePrice.Value - bullFastMa) / bullFastMa <= 0.0018m &&
+                 (lastTrend.ClosePrice.Value - bullSlowMa) / bullSlowMa <= 0.0035m)
         {
             trendSignal = TrendFollowingSignal.EnterLong;
             trendReason = TrendFollowingReason.FastCrossedAboveSlow;
@@ -192,11 +192,11 @@ public static class MultiStrategyDecisionOrchestrator
         }
         else if (bars.Count >= 20 && !hasOpenPosition && breakoutSignal == BreakoutSignal.NoTrade &&
                  isConfirmedBullTrend &&
-                 regime.VolatilityRate <= 0.0014m &&
-                 slowMaExtension <= 0.0012m &&
+                 regime.VolatilityRate <= 0.0020m &&
+                 slowMaExtension <= 0.0020m &&
                  lastBreakout.EntryChannelHigh is { } confirmedHigh &&
                  lastBreakout.ClosePrice.Value > confirmedHigh * 1.0005m &&
-                 (lastBreakout.ClosePrice.Value - confirmedHigh) / confirmedHigh <= 0.0018m)
+                 (lastBreakout.ClosePrice.Value - confirmedHigh) / confirmedHigh <= 0.0025m)
         {
             breakoutSignal = BreakoutSignal.EnterLong;
             breakoutReason = BreakoutReason.ChannelBreakoutAbove;

@@ -665,6 +665,68 @@ public sealed class AutonomyCycleExecutionGuardsTests
     }
 
     [Fact]
+    public async Task RunOnceDeductsMultiAssetTestnetFaucetBalancesContinuouslyWithoutCliffEdge()
+    {
+        var marketClient = new FakeMarketClient();
+        var balances = new List<BinanceBalance>
+        {
+            new("USDT", "10000", "0"),
+            new("BTC", "1.0", "0"),
+            new("ETH", "1.0", "0"),
+            new("SOL", "4.0", "0"),
+            new("BNB", "0.985", "0") // BNB burned from 1.0 down to 0.985 for fee discount
+        };
+        for (var i = 0; i < 20; i++)
+        {
+            balances.Add(new BinanceBalance($"FAUCET{i}", "0", "0"));
+        }
+        var accountClient = new FakeAccountClient(balances);
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BNBUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BNBUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 50,
+            ExecutionMode = "TESTNET",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        await hostedService.RunOnceAsync(options.Value, "BNBUSDT", TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(decisionCommitStore.Commits);
+        var latestCommit = decisionCommitStore.Commits[^1];
+        Assert.NotEqual("POSITION_BASIS_DRIFT", latestCommit.NoTradeReason);
+        Assert.DoesNotContain("POSITION_BASIS_DRIFT", latestCommit.NoTradeReason ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AutonomyCycleDispatchesAlertOnSafeModeTransition()
     {
         var marketClient = new FakeMarketClient();

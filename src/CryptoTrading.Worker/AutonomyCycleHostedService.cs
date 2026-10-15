@@ -383,13 +383,24 @@ internal sealed class AutonomyCycleHostedService(
             klineCache[symbol] = newList;
             lastKlineFetchUtc[symbol] = now;
         }
-        var closed = ValidateAndMapKlines(
-            klines,
-            symbol,
-            runtime.AutonomyInterval,
-            policyDocument.Policy.MaxMarketDataAge,
-            now,
-            lastProcessedCloseUtc);
+        List<ClosedBarEnvelope> closed;
+        try
+        {
+            closed = ValidateAndMapKlines(
+                klines,
+                symbol,
+                runtime.AutonomyInterval,
+                policyDocument.Policy.MaxMarketDataAge,
+                now,
+                lastProcessedCloseUtc);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("Stale", StringComparison.OrdinalIgnoreCase) ||
+                                                    ex.Message.Contains("GapDetected", StringComparison.OrdinalIgnoreCase) ||
+                                                    ex.Message.Contains("gap", StringComparison.OrdinalIgnoreCase))
+        {
+            AutonomyCycleLog.MarketDataRejected(logger, symbol, ex.Message);
+            return;
+        }
         if (closed.Count == 0 || lastProcessedCloseUtc is { } previous && closed[^1].Bar.CloseTimeUtc <= previous)
         {
             return;
@@ -484,9 +495,15 @@ internal sealed class AutonomyCycleHostedService(
         var rawBaseQuantity = ParseBalance(baseBalance?.Free) + ParseBalance(baseBalance?.Locked);
         var isTestnetFaucetWallet = string.Equals(runtime.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
             && account.Balances.Count > 20;
-        var baseQuantity = isTestnetFaucetWallet && string.Equals(baseAsset, "BTC", StringComparison.OrdinalIgnoreCase) && rawBaseQuantity >= 0.99m
-            ? Math.Max(0m, rawBaseQuantity - 1.0m)
-            : rawBaseQuantity;
+        var faucetEndowment = isTestnetFaucetWallet ? baseAsset.ToUpperInvariant() switch
+        {
+            "BTC" => 1.0m,
+            "ETH" => 1.0m,
+            "BNB" => 1.0m,
+            "SOL" => 4.0m,
+            _ => 0m
+        } : 0m;
+        var baseQuantity = Math.Max(0m, rawBaseQuantity - faucetEndowment);
         var quoteAsset = new Asset("USDT");
         var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
         var availableQuoteLiquidity = ParseBalance(quote?.Free);
@@ -1037,6 +1054,9 @@ internal static partial class AutonomyCycleLog
 
     [LoggerMessage(LogLevel.Warning, "Binance market data WebSocket stream disconnected. Reconnecting in 2 seconds...")]
     public static partial void StreamDisconnected(ILogger logger, Exception exception);
+
+    [LoggerMessage(LogLevel.Warning, "Autonomy cycle market data for {Symbol} rejected by quality gate: {Reason}. Skipping cycle for symbol.")]
+    public static partial void MarketDataRejected(ILogger logger, string symbol, string reason);
 
     [LoggerMessage(LogLevel.Warning, "Non-critical telemetry write failed and was isolated. Kind={Kind} ErrorType={ErrorType}")]
     public static partial void TelemetryWriteFailed(ILogger logger, string kind, string errorType);
