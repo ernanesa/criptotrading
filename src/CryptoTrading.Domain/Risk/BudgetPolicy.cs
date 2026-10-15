@@ -238,6 +238,23 @@ public sealed record BudgetPolicy
     public decimal MinOrderNotionalUsdt { get; }
     public string AllowedSymbol { get; }
 
+    /// <summary>Checks whether a given symbol is allowed under the policy.</summary>
+    public bool IsSymbolAllowed(string symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol))
+        {
+            return false;
+        }
+
+        if (string.Equals(AllowedSymbol, "*", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var tokens = AllowedSymbol.Split([',', ';', '|', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return tokens.Any(token => string.Equals(token, symbol, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Round-trip taker fees (2 * 10 bps) plus reserve buffer (25 bps) = 45 bps (0.0045).</summary>
     public decimal RoundTripFeeAndReserveRate => ((TakerFeeBps * 2m) + FeeReserveBufferBps) / 10_000m;
 

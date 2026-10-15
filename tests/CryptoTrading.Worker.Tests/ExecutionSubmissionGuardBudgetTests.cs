@@ -32,6 +32,21 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     }
 
     [Fact]
+    public async Task AllowedSymbolFromAutonomyOptionsAllowsSubmissionWhenBudgetPolicyIsDefault()
+    {
+        await using var supervisor = await CreateReadySupervisorAsync();
+        var runtimeOptions = new WorkerRuntimeOptions
+        {
+            AutonomySymbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"
+        };
+        var guard = CreateGuard(supervisor, new BudgetPolicy(allowedSymbol: "BTCUSDT"), runtimeOptions: runtimeOptions);
+        var (command, message) = CreateCommand("ETHUSDT", 10m);
+
+        // Must not throw ExecutionDispatchBlockedException:
+        await guard.ValidateAsync(command, message, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task StaleFxQuoteBlocksPreValidation()
     {
         await using var supervisor = await CreateReadySupervisorAsync();
@@ -130,11 +145,12 @@ public sealed class ExecutionSubmissionGuardBudgetTests
         BudgetPolicy budgetPolicy,
         TestMarketClient? market = null,
         TestAccountClient? account = null,
-        ICapitalReservationStore? reservations = null)
+        ICapitalReservationStore? reservations = null,
+        WorkerRuntimeOptions? runtimeOptions = null)
     {
         var policyStore = new TestPolicyStore(budgetPolicy);
         var control = new InMemoryOperationalControl(new AllowResetAuthorizer());
-        var runtimeOptions = Options.Create(new WorkerRuntimeOptions
+        var options = Options.Create(runtimeOptions ?? new WorkerRuntimeOptions
         {
             ReconciliationAccount = "test-reconciliation-account",
         });
@@ -151,7 +167,7 @@ public sealed class ExecutionSubmissionGuardBudgetTests
             new TestSubmissionStore(),
             market ?? new TestMarketClient(),
             accountClient,
-            runtimeOptions,
+            options,
             NullLogger<ExecutionSubmissionGuard>.Instance,
             new FixedTimeProvider(NowUtc),
             capitalReservations: reservations);
