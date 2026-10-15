@@ -64,6 +64,44 @@ if (args.Contains("--run-f20-lifecycle-drill", StringComparer.Ordinal))
     }
 }
 
+if (args.Contains("--reset-operational-mode", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var latest = await s.ReadLatestOperationalControlAuditEventAsync();
+        var currentMode = latest?.To ?? OperationalMode.SafeMode;
+        var auditEvent = new OperationalControlAuditEvent(
+            Guid.NewGuid(),
+            currentMode,
+            OperationalMode.Normal,
+            "operator",
+            "Operator authorized reset to Normal mode after audit verification",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow,
+            "operator-approval");
+        var appended = await s.AppendOperationalControlAuditEventAsync(auditEvent);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = appended ? "OK" : "ALREADY_PRESENT",
+            fromMode = currentMode.ToString(),
+            toMode = OperationalMode.Normal.ToString(),
+            eventId = auditEvent.EventId
+        }));
+        return appended ? 0 : 1;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
 await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
 
 var now = DateTimeOffset.UtcNow;
