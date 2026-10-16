@@ -62,6 +62,58 @@ public sealed class BinanceRequestResilienceTests
         Assert.Equal(localReceived.AddSeconds(4), estimator.EstimateServerNow());
         Assert.True(estimator.IsWithinTolerance(TimeSpan.FromSeconds(4)));
         Assert.False(estimator.IsWithinTolerance(TimeSpan.FromSeconds(3.999)));
+        Assert.True(estimator.HasFreshObservation(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(5)));
+        Assert.False(estimator.HasFreshObservation(TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(3.999)));
+    }
+
+    [Fact]
+    public async Task SpotOrderClientSkipsRedundantTimeSyncWhenClockObservationIsFresh()
+    {
+        var now = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FixedTimeProvider(now);
+        var clock = new BinanceClockDriftEstimator(timeProvider);
+        clock.Observe(now.ToUnixTimeMilliseconds(), now.AddMilliseconds(-20), now);
+
+        var requests = new List<HttpRequestMessage>();
+        using var handler = new DelegatingCallbackHandler(req =>
+        {
+            requests.Add(req);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = req,
+                Content = new StringContent(
+                    "{\"symbol\":\"BTCUSDT\",\"orderId\":42,\"clientOrderId\":\"ct-fast-1\",\"price\":\"100.50\",\"origQty\":\"0.010\",\"executedQty\":\"0\",\"status\":\"NEW\",\"transactTime\":1789905600000}",
+                    System.Text.Encoding.UTF8,
+                    "application/json")
+            };
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new BinanceSpotOrderClient(
+            httpClient,
+            new BinanceSpotOrderClientOptions
+            {
+                RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+                ApiKey = "test-api-key",
+                ApiSecret = "test-api-secret",
+                EnableOrderExecution = true,
+                ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
+            },
+            timeProvider,
+            clock);
+
+        var result = await client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-fast-1", 100.50m),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(42, result.OrderId);
+        Assert.Single(requests);
+        Assert.Equal("/api/v3/order", requests[0].RequestUri!.AbsolutePath);
+    }
+
+    private sealed class DelegatingCallbackHandler(Func<HttpRequestMessage, HttpResponseMessage> callback) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(callback(request));
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider

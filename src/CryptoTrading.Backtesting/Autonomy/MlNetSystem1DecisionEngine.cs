@@ -51,6 +51,21 @@ public sealed record MlProbabilityCalibrationBin(
 
 public static class MlNetSystem1DecisionEngine
 {
+    private const int MaxCachedEvaluations = 256;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<EvaluationCacheKey, MlNetSystem1Evaluation> EvaluationCache = new();
+
+    private readonly record struct EvaluationCacheKey(
+        string Symbol,
+        int BarCount,
+        long LastBarCloseUtcTicks,
+        decimal LastBarClosePrice,
+        OrderSide EffectiveSide,
+        MarketRegime Regime,
+        decimal RegimeConfidence,
+        decimal OrderBookImbalanceRounded,
+        int EmpiricalObservationCount,
+        decimal EmpiricalAverageRewardRounded);
+
     public static MlNetSystem1Evaluation Evaluate(
         IReadOnlyList<CloseBar> bars,
         MarketRegimeSnapshot regime,
@@ -72,6 +87,25 @@ public static class MlNetSystem1DecisionEngine
                 IsSsaStructuralBreakdown: false);
         }
 
+        var effectiveSide = candidateSide ?? OrderSide.Buy;
+        var lastBar = bars[^1];
+        var cacheKey = new EvaluationCacheKey(
+            lastBar.Symbol.Value,
+            bars.Count,
+            lastBar.CloseTimeUtc.UtcTicks,
+            lastBar.ClosePrice.Value,
+            effectiveSide,
+            regime.Regime,
+            Math.Round(regime.Confidence, 4),
+            Math.Round(orderBookImbalance, 4),
+            empiricalPerformance?.ObservationCount ?? 0,
+            Math.Round(empiricalPerformance?.AverageReward ?? 0m, 4));
+
+        if (EvaluationCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
         var mlContext = new MLContext(seed: 42);
 
         // 1. Evaluate SSA Change-Point and Spike Detection on 1-minute returns
@@ -82,18 +116,26 @@ public static class MlNetSystem1DecisionEngine
             mlContext,
             bars,
             regime,
-            candidateSide ?? OrderSide.Buy,
+            effectiveSide,
             orderBookImbalance,
             changePointPValue,
             empiricalPerformance);
 
-        return new MlNetSystem1Evaluation(
+        var result = new MlNetSystem1Evaluation(
             MlWinProbability: winProbability,
             MlRawScore: rawScore,
             SsaChangePointPValue: changePointPValue,
             SsaMartingaleScore: martingaleScore,
             SsaSpikePValue: spikePValue,
             IsSsaStructuralBreakdown: isBreakdown);
+
+        if (EvaluationCache.Count >= MaxCachedEvaluations)
+        {
+            EvaluationCache.Clear();
+        }
+
+        EvaluationCache[cacheKey] = result;
+        return result;
     }
 
     private static (decimal ChangePointPValue, decimal MartingaleScore, decimal SpikePValue, bool IsBreakdown) EvaluateSsaTimeSeries(

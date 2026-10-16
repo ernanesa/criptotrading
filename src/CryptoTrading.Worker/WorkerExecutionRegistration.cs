@@ -15,6 +15,8 @@ internal static class WorkerExecutionRegistration
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
+        services.AddSingleton<IOutboxWakeupSignal, OutboxWakeupSignal>();
+
         services.AddSingleton<IOutboxMessageExecutor>(serviceProvider =>
         {
             var runtimeOptions = serviceProvider.GetRequiredService<IOptions<WorkerRuntimeOptions>>();
@@ -79,7 +81,8 @@ internal static class WorkerExecutionRegistration
                 RestBaseAddress = trading.Binance.RestBaseUrl,
                 ApiKey = trading.Binance.ApiKey,
                 ApiSecret = trading.Binance.ApiSecret,
-                EnableOrderExecution = true
+                EnableOrderExecution = true,
+                ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
             };
             return new BinanceSpotOrderClient(
                 serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("BinanceSpotOrder"),

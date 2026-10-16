@@ -247,12 +247,53 @@ public sealed class PaperOutboxMessageExecutor(
     }
 }
 
+public interface IOutboxWakeupSignal
+{
+    void Notify();
+
+    ValueTask WaitForSignalOrDelayAsync(int delayMilliseconds, CancellationToken cancellationToken = default);
+}
+
+public sealed class OutboxWakeupSignal : IOutboxWakeupSignal
+{
+    private readonly System.Threading.Channels.Channel<bool> channel =
+        System.Threading.Channels.Channel.CreateBounded<bool>(
+            new System.Threading.Channels.BoundedChannelOptions(1)
+            {
+                FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false
+            });
+
+    public void Notify() => _ = channel.Writer.TryWrite(true);
+
+    public async ValueTask WaitForSignalOrDelayAsync(int delayMilliseconds, CancellationToken cancellationToken = default)
+    {
+        if (channel.Reader.TryRead(out _))
+        {
+            return;
+        }
+
+        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        delayCts.CancelAfter(delayMilliseconds);
+        try
+        {
+            _ = await channel.Reader.ReadAsync(delayCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Normal poll timeout elapsed without an early wake-up signal.
+        }
+    }
+}
+
 /// <summary>Leases and dispatches durable commands with bounded retries.</summary>
 public sealed class OutboxDispatcher(
     IEnumerable<IOutboxStore> stores,
     IEnumerable<IOutboxMessageExecutor> executors,
     IOptions<WorkerRuntimeOptions> options,
-    ILogger<OutboxDispatcher> logger) : BackgroundService
+    ILogger<OutboxDispatcher> logger,
+    IOutboxWakeupSignal? wakeupSignal = null) : BackgroundService
 {
     private readonly string leaseOwner = $"worker-{Environment.MachineName}-{Guid.NewGuid():N}";
 
@@ -289,7 +330,14 @@ public sealed class OutboxDispatcher(
                 }
             }
 
-            await Task.Delay(runtime.PollIntervalMilliseconds, stoppingToken).ConfigureAwait(false);
+            if (wakeupSignal is not null)
+            {
+                await wakeupSignal.WaitForSignalOrDelayAsync(runtime.PollIntervalMilliseconds, stoppingToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await Task.Delay(runtime.PollIntervalMilliseconds, stoppingToken).ConfigureAwait(false);
+            }
         }
     }
 

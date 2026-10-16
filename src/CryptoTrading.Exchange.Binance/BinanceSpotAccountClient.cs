@@ -46,7 +46,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
 
     public async Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default)
     {
-        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
         var account = await SendSignedAsync<BinanceAccountSnapshot>("v3/account", [], cancellationToken).ConfigureAwait(false);
         var allowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet &&
                                              options.AllowTestnetWithdrawCapability;
@@ -57,7 +57,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         string? symbol = null,
         CancellationToken cancellationToken = default)
     {
-        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
         var parameters = new List<KeyValuePair<string, string>>();
         if (symbol is not null)
         {
@@ -76,7 +76,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         var normalizedSymbol = NormalizeSymbol(symbol);
         query ??= new BinanceTradeQuery();
         query.Validate();
-        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
 
         var parameters = new List<KeyValuePair<string, string>> { new("symbol", normalizedSymbol) };
         if (query.FromId is { } fromId)
@@ -108,7 +108,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         CancellationToken cancellationToken = default)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
-        await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+        await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
         var response = await SendSignedAsync<BinanceCommissionResponse>(
             "v3/account/commission",
             [new("symbol", normalizedSymbol)],
@@ -116,6 +116,17 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         return new(
             BinanceAuthenticatedResponseValidator.Validate(response, normalizedSymbol),
             timeProvider.GetUtcNow());
+    }
+
+    private ValueTask EnsureClockSynchronizedAsync(CancellationToken cancellationToken)
+    {
+        if (options.ClockSyncCacheDuration > TimeSpan.Zero &&
+            clock.HasFreshObservation(options.ClockSyncCacheDuration, options.ClockDriftTolerance))
+        {
+            return ValueTask.CompletedTask;
+        }
+
+        return new ValueTask(SynchronizeClockAsync(cancellationToken));
     }
 
     public async Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default)

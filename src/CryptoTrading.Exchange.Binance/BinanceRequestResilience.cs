@@ -177,9 +177,13 @@ public interface IBinanceClockDriftEstimator
 {
     TimeSpan Offset { get; }
 
+    DateTimeOffset? LastObservedAtUtc { get; }
+
     DateTimeOffset EstimateServerNow();
 
     bool IsWithinTolerance(TimeSpan tolerance);
+
+    bool HasFreshObservation(TimeSpan maxAge, TimeSpan tolerance);
 
     void Observe(long serverTimeMilliseconds, DateTimeOffset localSentAt, DateTimeOffset localReceivedAt);
 }
@@ -191,22 +195,48 @@ public interface IBinanceClockDriftEstimator
 public sealed class BinanceClockDriftEstimator : IBinanceClockDriftEstimator
 {
     private readonly TimeProvider timeProvider;
-    private TimeSpan offset;
+    private long offsetTicks;
+    private long lastObservedUtcTicks;
 
     public BinanceClockDriftEstimator(TimeProvider? timeProvider = null)
     {
         this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public TimeSpan Offset => offset;
+    public TimeSpan Offset => TimeSpan.FromTicks(Interlocked.Read(ref offsetTicks));
 
-    public DateTimeOffset EstimateServerNow() => timeProvider.GetUtcNow() + offset;
+    public DateTimeOffset? LastObservedAtUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref lastObservedUtcTicks);
+            return ticks > 0 ? new DateTimeOffset(ticks, TimeSpan.Zero) : null;
+        }
+    }
+
+    public DateTimeOffset EstimateServerNow() => timeProvider.GetUtcNow() + Offset;
 
     public bool IsWithinTolerance(TimeSpan tolerance)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(tolerance, TimeSpan.Zero);
 
-        return offset.Duration() <= tolerance;
+        return Offset.Duration() <= tolerance;
+    }
+
+    public bool HasFreshObservation(TimeSpan maxAge, TimeSpan tolerance)
+    {
+        if (maxAge <= TimeSpan.Zero || tolerance < TimeSpan.Zero)
+        {
+            return false;
+        }
+
+        if (LastObservedAtUtc is not { } observedAt)
+        {
+            return false;
+        }
+
+        var age = timeProvider.GetUtcNow() - observedAt;
+        return age >= TimeSpan.Zero && age <= maxAge && IsWithinTolerance(tolerance);
     }
 
     public void Observe(long serverTimeMilliseconds, DateTimeOffset localSentAt, DateTimeOffset localReceivedAt)
@@ -218,6 +248,7 @@ public sealed class BinanceClockDriftEstimator : IBinanceClockDriftEstimator
 
         var midpoint = localSentAt + ((localReceivedAt - localSentAt) / 2);
         var serverTime = DateTimeOffset.FromUnixTimeMilliseconds(serverTimeMilliseconds);
-        offset = serverTime - midpoint;
+        Interlocked.Exchange(ref offsetTicks, (serverTime - midpoint).Ticks);
+        Interlocked.Exchange(ref lastObservedUtcTicks, localReceivedAt.UtcDateTime.Ticks);
     }
 }
