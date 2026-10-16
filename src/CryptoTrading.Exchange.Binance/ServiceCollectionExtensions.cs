@@ -24,6 +24,7 @@ public static class ServiceCollectionExtensions
                 ? BinanceEnvironment.Demo
                 : BinanceEnvironment.Testnet;
             options.AllowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet;
+            options.ClockSyncCacheDuration = TimeSpan.FromSeconds(30);
         });
     }
 

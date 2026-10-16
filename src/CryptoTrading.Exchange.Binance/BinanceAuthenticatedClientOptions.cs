@@ -21,6 +21,12 @@ public sealed class BinanceAuthenticatedClientOptions
     public TimeSpan ClockDriftTolerance { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    /// Optional TTL for reusing a recently observed exchange clock offset before
+    /// issuing another GET /api/v3/time round-trip. Defaults to zero (always sync).
+    /// </summary>
+    public TimeSpan ClockSyncCacheDuration { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
     /// Allows a Spot Testnet account payload to report <c>canWithdraw=true</c>.
     /// This is an observation-only compatibility switch for Testnet diagnostics;
     /// it neither enables nor adds a withdrawal endpoint.

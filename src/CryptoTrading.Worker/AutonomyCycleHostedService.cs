@@ -48,7 +48,8 @@ internal sealed class AutonomyCycleHostedService(
     IPortfolioNavSnapshotStore? navSnapshots = null,
     IStrategyRegimePerformanceStore? durablePerformances = null,
     IBinanceSpotMarketDataClient? marketDataStreamClient = null,
-    CryptoTrading.Observability.TradingAlertDispatcher? alertDispatcher = null) : BackgroundService
+    CryptoTrading.Observability.TradingAlertDispatcher? alertDispatcher = null,
+    IOutboxWakeupSignal? outboxWakeupSignal = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
     private readonly System.Threading.Channels.Channel<DateTimeOffset> barCloseSignalChannel =
@@ -84,9 +85,13 @@ internal sealed class AutonomyCycleHostedService(
                 try
                 {
                     var symbols = runtime.ResolveAutonomySymbols();
-                    foreach (var symbol in symbols)
+                    if (symbols.Count == 1)
                     {
-                        await RunOnceAsync(runtime, symbol, stoppingToken).ConfigureAwait(false);
+                        await RunOnceAsync(runtime, symbols[0], stoppingToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await Task.WhenAll(symbols.Select(symbol => RunOnceAsync(runtime, symbol, stoppingToken))).ConfigureAwait(false);
                     }
                     consecutiveTransientFailures = 0;
                     var currentControl = operationalControl.Snapshot;
@@ -829,6 +834,7 @@ internal sealed class AutonomyCycleHostedService(
             }
 
             AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, adaptiveOutbox.Command.ClientOrderId.Value, adaptiveOutbox.Command.Side.ToString());
+            outboxWakeupSignal?.Notify();
             return;
         }
 
@@ -879,6 +885,7 @@ internal sealed class AutonomyCycleHostedService(
         }
 
         AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
+        outboxWakeupSignal?.Notify();
     }
 
     private static AutonomyDecisionCommit CreateAdaptiveDecisionCommit(

@@ -132,6 +132,12 @@ public sealed class BinanceSpotOrderClientOptions
 
     public TimeSpan ClockDriftTolerance { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// Optional TTL for reusing a recently observed exchange clock offset before
+    /// issuing another GET /api/v3/time round-trip. Defaults to zero (always sync).
+    /// </summary>
+    public TimeSpan ClockSyncCacheDuration { get; set; } = TimeSpan.Zero;
+
     /// <summary>Must be explicitly enabled by a controlled Testnet configuration.</summary>
     public bool EnableOrderExecution { get; set; }
 
@@ -443,6 +449,12 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
 
     private async Task SynchronizeClockAsync(CancellationToken cancellationToken)
     {
+        if (options.ClockSyncCacheDuration > TimeSpan.Zero &&
+            clock.HasFreshObservation(options.ClockSyncCacheDuration, options.ClockDriftTolerance))
+        {
+            return;
+        }
+
         var sentAt = timeProvider.GetUtcNow();
         using var response = await httpClient.GetAsync(new Uri(restBaseAddress, "v3/time"), cancellationToken).ConfigureAwait(false);
         var receivedAt = timeProvider.GetUtcNow();
