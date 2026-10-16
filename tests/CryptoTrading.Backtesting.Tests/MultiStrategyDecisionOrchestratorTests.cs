@@ -168,6 +168,30 @@ public sealed class MultiStrategyDecisionOrchestratorTests
         Assert.Equal("StrategyQuarantinedForNegativeExpectancy", breakoutCandidate.Reason);
     }
 
+    [Fact]
+    public void OrchestratorSuppressesExitWhenPositionOwnedByAnotherStrategy()
+    {
+        var prices = new List<decimal>(25);
+        for (var i = 0; i < 25; i++)
+        {
+            prices.Add(83000m - (i * 15m));
+        }
+
+        var bars = Bars(prices.ToArray());
+        // Position was opened by "mean-reversion-btcusdt", so trend-following exit is suppressed
+        var result = MultiStrategyDecisionOrchestrator.Orchestrate(
+            BtcUsdt,
+            bars,
+            1000m,
+            TestTime,
+            hasOpenPosition: true,
+            positionOriginatingStrategyId: "mean-reversion-btcusdt");
+
+        var trendCandidate = Assert.Single(result.Candidates, c => c.StrategyId == "trend-following-btcusdt");
+        Assert.Null(trendCandidate.RecommendedSide);
+        Assert.Equal("PositionOwnedByAnotherStrategy", trendCandidate.Reason);
+    }
+
     private static List<CloseBar> Bars(params decimal[] prices)
     {
         var start = DateTimeOffset.Parse("2026-09-01T00:00:00Z", CultureInfo.InvariantCulture);

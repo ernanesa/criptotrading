@@ -356,8 +356,8 @@ public static class MlNetSystem1DecisionEngine
                 }
             }
 
-            var minProfitableMoveBps = Math.Max(22.0m, volBps * 2.0m);
-            var maxAllowedStopBps = Math.Max(12.0m, volBps * 1.2m);
+            var minProfitableMoveBps = Math.Max(35.0m, volBps * 2.5m);
+            var maxAllowedStopBps = Math.Max(18.0m, volBps * 1.5m);
             var hitTakeProfitBeforeStop = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
             var recencyRatio = (float)(i - lookback) / maxSampleSpan;
             var recencyWeight = 0.50f + (1.00f * recencyRatio);
@@ -608,8 +608,8 @@ public static class MlNetSystem1DecisionEngine
                 }
 
                 var volBps = regime.VolatilityRate * 10_000m;
-                var minProfitableMoveBps = Math.Max(22.0m, volBps * 2.0m);
-                var maxAllowedStopBps = Math.Max(12.0m, volBps * 1.2m);
+                var minProfitableMoveBps = Math.Max(35.0m, volBps * 2.5m);
+                var maxAllowedStopBps = Math.Max(18.0m, volBps * 1.5m);
                 var actualOutcome = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
                 samples.Add((eval.MlWinProbability, actualOutcome));
             }

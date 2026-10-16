@@ -535,7 +535,8 @@ public sealed class AdaptiveDecisionCycleTests
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
             84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
             84_201m, 84_200m, 84_201m, 84_200m, 84_200m, 84_200m);
-        var portfolio = CreatePortfolio(11.6450m) with { PositionCostNotional = 11.6000m };
+        // Position entered at 11.6000 and current notional is 11.6560 (+48.27 bps gain >= 45 bps target)
+        var portfolio = CreatePortfolio(11.6560m) with { PositionCostNotional = 11.6000m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
@@ -719,6 +720,128 @@ public sealed class AdaptiveDecisionCycleTests
         CommissionMaximumAge = TimeSpan.FromMinutes(1),
         UseConservativeCommissionReserve = true,
     };
+
+    [Fact]
+    public void LocksProfitOnTrailingStopWithLifetimePeakAcrossWindowConsolidation()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 35 bars: position entered at 84_000, spiked to 84_350 at bar index 10 (>20 bars ago),
+        // followed by 24 bars of top consolidation and slight pullback to 84_210 (+25.0 bps gain)
+        var prices = new List<decimal>
+        {
+            84_000m, 84_020m, 84_050m, 84_080m, 84_120m, 84_150m,
+            84_180m, 84_220m, 84_260m, 84_300m, 84_350m // peak at index 10
+        };
+        for (var i = 0; i < 24; i++)
+        {
+            prices.Add(84_210m);
+        }
+
+        var bars = Bars(prices.ToArray());
+        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime,
+            LifetimePeakProfitBps: 41.6m) // 41.6 bps peak preserved across lifetime
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_209m),
+                new Price(84_211m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.50m,
+                askQuantity: 0.50m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("TRAILING_STOP_CHANDELIER_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttributesExitToPositionOriginatingStrategy()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_000m, 84_020m, 84_050m, 84_080m, 84_120m, 84_150m,
+            84_180m, 84_220m, 84_260m, 84_300m, 84_330m, 84_350m,
+            84_340m, 84_320m, 84_300m, 84_280m, 84_260m, 84_240m,
+            84_230m, 84_220m, 84_215m, 84_210m, 84_210m, 84_210m);
+        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-btcusdt")
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_209m),
+                new Price(84_211m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.50m,
+                askQuantity: 0.50m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Equal("trend-following-btcusdt", result.SelectedStrategyId);
+    }
+
+    [Fact]
+    public void DoesNotTriggerPhantomTrailingStopWhenPreEntryHighExceedsDipEntry()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // Pre-entry bars were at 85_000, dipped to 84_000 where position was opened,
+        // and now sits at 84_160 (+19.0 bps gain). LifetimePeakProfitBps is 19.0 bps.
+        // Without lifetimePeakProfitBps precedence, 85_000 would look like a +119 bps peak and trigger a phantom exit.
+        var prices = new List<decimal>
+        {
+            85_000m, 84_900m, 84_800m, 84_700m, 84_600m,
+            84_500m, 84_400m, 84_300m, 84_200m, 84_100m,
+            84_050m, 84_040m, 84_030m, 84_020m, 84_010m,
+            84_000m, 84_020m, 84_050m, 84_080m, 84_110m,
+            84_130m, 84_140m, 84_150m, 84_160m
+        };
+        var bars = Bars(prices.ToArray());
+        var portfolio = CreatePortfolio(10.0190m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt",
+            LifetimePeakProfitBps: 19.0m)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_159m),
+                new Price(84_161m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.60m,
+                askQuantity: 0.40m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.DoesNotContain("TRAILING_STOP_CHANDELIER_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
 
     private static EffectiveCommissionSnapshot CreateCommission(DateTimeOffset observedAtUtc) => new(
         BtcUsdt, "testnet", "account",

@@ -34,7 +34,9 @@ public sealed record AdaptiveDecisionCycleRequest(
     bool UseConservativeCommissionReserve = false,
     int ExecutionAttempt = 0,
     bool HasPendingExitReplan = false,
-    string? PendingExitReplanStrategyId = null)
+    string? PendingExitReplanStrategyId = null,
+    string? PositionOriginatingStrategyId = null,
+    decimal? LifetimePeakProfitBps = null)
 {
     public void Validate()
     {
@@ -193,13 +195,25 @@ public sealed class AdaptiveDecisionCycle
             : 0m;
         var hasOpenPosition = request.Portfolio.GrossExposureNotional > minTradableExposure;
 
+        if (!hasOpenPosition && request.RiskPolicy.BudgetPolicy is { } budgetPolicy && !budgetPolicy.IsSymbolAllowed(symbol.Value))
+        {
+            return CreateNoTradeResult(
+                regime,
+                [],
+                null,
+                $"SYMBOL_NOT_AUTHORIZED_IN_BUDGET_POLICY:{symbol.Value}",
+                orderBookImbalance: orderBookImbalance,
+                mlEval: mlEval);
+        }
+
         var orchestration = MultiStrategyDecisionOrchestrator.Orchestrate(
             symbol,
             bars,
             request.EntryTargetNotional,
             request.EvaluatedAtUtc,
             hasOpenPosition,
-            _quarantinedStrategies);
+            _quarantinedStrategies,
+            request.PositionOriginatingStrategyId);
 
         if (bars.Count >= 20 && orchestration.Candidates.Count > 0)
         {
@@ -262,7 +276,7 @@ public sealed class AdaptiveDecisionCycle
         var roundTripFeeBps = request.EffectiveCommission is { } comm
             ? Math.Max((comm.Standard.Maker + comm.Standard.Taker) * 10_000m, ProductionRealisticFeeFloorBps)
             : ProductionRealisticFeeFloorBps;
-        var minProfitBps = Math.Max(22.0m, roundTripFeeBps + 7.0m);
+        var minProfitBps = Math.Max(28.0m, roundTripFeeBps + 8.0m);
         var volBps = bars.Count >= 20 ? regime.VolatilityRate * 10_000m : 10m;
         var dynamicNoiseLossBps = bars.Count >= 20
             ? Math.Clamp(volBps * 1.5m, 8.0m, 18.0m)
@@ -278,9 +292,12 @@ public sealed class AdaptiveDecisionCycle
             ? (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m
             : 0m;
         var totalRealisticCostBps = roundTripFeeBps + 3.0m;
-        var minTargetProfitBps = Math.Max(36.0m, totalRealisticCostBps * 2.0m);
-        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(65.0m, volBps * 4.0m));
+        var minTargetProfitBps = Math.Max(45.0m, totalRealisticCostBps * 2.25m);
+        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(80.0m, volBps * 4.5m));
         var targetProfitBps = Math.Clamp(volBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
+        var exitStrategyId = !string.IsNullOrWhiteSpace(request.PositionOriginatingStrategyId)
+            ? request.PositionOriginatingStrategyId
+            : meanReversionId;
 
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             request.HasPendingExitReplan &&
@@ -289,7 +306,9 @@ public sealed class AdaptiveDecisionCycle
         {
             var fallbackExitStrategy = !string.IsNullOrWhiteSpace(request.PendingExitReplanStrategyId)
                 ? request.PendingExitReplanStrategyId
-                : (orchestration.Candidates.FirstOrDefault(c => c.RecommendedSide == OrderSide.Sell)?.StrategyId ?? trendFollowingId);
+                : (!string.IsNullOrWhiteSpace(request.PositionOriginatingStrategyId)
+                    ? request.PositionOriginatingStrategyId
+                    : (orchestration.Candidates.FirstOrDefault(c => c.RecommendedSide == OrderSide.Sell)?.StrategyId ?? trendFollowingId));
 
             orchestration = orchestration with
             {
@@ -309,7 +328,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = meanReversionId,
+                SelectedStrategyId = exitStrategyId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = "LOCK_PROFIT_ADVERSE_ORDER_BOOK: Locking net profit on strong adverse order-book imbalance.",
@@ -324,7 +343,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = meanReversionId,
+                SelectedStrategyId = exitStrategyId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = $"TAKE_PROFIT_EXPANDED_TARGET: Locking {currentUnrealizedProfitBps:F1} bps profit on expanded target in {regime.Regime}.",
@@ -337,11 +356,11 @@ public sealed class AdaptiveDecisionCycle
                  request.Portfolio.PositionCostNotional > 0m &&
                  bars[^1].ClosePrice.Value > 0m &&
                  currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
-                 EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, out var chandelierReason))
+                 EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, request.LifetimePeakProfitBps, out var chandelierReason))
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = meanReversionId,
+                SelectedStrategyId = exitStrategyId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = chandelierReason,
@@ -356,7 +375,7 @@ public sealed class AdaptiveDecisionCycle
         {
             orchestration = orchestration with
             {
-                SelectedStrategyId = meanReversionId,
+                SelectedStrategyId = exitStrategyId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = $"BREAK_EVEN_PROFIT_LOCK: Locking {currentUnrealizedProfitBps:F1} bps profit at break-even floor on softening momentum.",
@@ -926,6 +945,7 @@ public sealed class AdaptiveDecisionCycle
         decimal currentUnrealizedProfitBps,
         decimal roundTripFeeBps,
         decimal volBps,
+        decimal? lifetimePeakProfitBps,
         out string reason)
     {
         reason = string.Empty;
@@ -934,12 +954,21 @@ public sealed class AdaptiveDecisionCycle
             return false;
         }
 
-        var lookbackBars = Math.Min(15, bars.Count);
-        var peakRecentClose = bars.TakeLast(lookbackBars).Max(b => b.ClosePrice.Value);
-        var currentPrice = bars[^1].ClosePrice.Value;
-        var heldQuantity = portfolio.GrossExposureNotional / currentPrice;
-        var peakNotional = peakRecentClose * heldQuantity;
-        var peakProfitBps = (peakNotional - portfolio.PositionCostNotional) / portfolio.PositionCostNotional * 10_000m;
+        decimal peakProfitBps;
+        if (lifetimePeakProfitBps.HasValue)
+        {
+            peakProfitBps = Math.Max(lifetimePeakProfitBps.Value, currentUnrealizedProfitBps);
+        }
+        else
+        {
+            var lookbackBars = Math.Min(15, bars.Count);
+            var peakRecentClose = bars.TakeLast(lookbackBars).Max(b => b.ClosePrice.Value);
+            var currentPrice = bars[^1].ClosePrice.Value;
+            var heldQuantity = portfolio.GrossExposureNotional / currentPrice;
+            var peakNotional = peakRecentClose * heldQuantity;
+            peakProfitBps = (peakNotional - portfolio.PositionCostNotional) / portfolio.PositionCostNotional * 10_000m;
+        }
+
         var trailingGapBps = Math.Clamp(volBps * 1.5m, 10.0m, 20.0m);
         var pullbackBps = peakProfitBps - currentUnrealizedProfitBps;
 

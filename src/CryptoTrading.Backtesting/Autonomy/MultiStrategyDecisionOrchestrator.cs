@@ -39,7 +39,8 @@ public static class MultiStrategyDecisionOrchestrator
         decimal baseTargetNotional,
         DateTimeOffset evaluatedAtUtc,
         bool hasOpenPosition = false,
-        IReadOnlySet<string>? quarantinedStrategies = null)
+        IReadOnlySet<string>? quarantinedStrategies = null,
+        string? positionOriginatingStrategyId = null)
     {
         ArgumentNullException.ThrowIfNull(bars);
         if (bars.Count < 5)
@@ -357,6 +358,27 @@ public static class MultiStrategyDecisionOrchestrator
                 SelectedNotional: 0m,
                 OrchestrationReason: $"NO_TRADE: Market regime {regime.Regime} prohibits new exposure.",
                 IsNoTrade: true);
+        }
+
+        // Isolate position ownership: When an open position is owned by a specific strategy,
+        // prevent other strategies from triggering exits on it.
+        if (hasOpenPosition && !string.IsNullOrWhiteSpace(positionOriginatingStrategyId))
+        {
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                var candidate = candidates[i];
+                if (candidate.RecommendedSide == OrderSide.Sell &&
+                    !string.Equals(candidate.StrategyId, positionOriginatingStrategyId, StringComparison.OrdinalIgnoreCase))
+                {
+                    candidates[i] = candidate with
+                    {
+                        RecommendedSide = null,
+                        ExpectedUtilityScore = 0m,
+                        RawSignal = "NoTrade",
+                        Reason = "PositionOwnedByAnotherStrategy"
+                    };
+                }
+            }
         }
 
         // Select candidate with highest expected utility score > 0
