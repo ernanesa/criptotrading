@@ -843,6 +843,25 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.DoesNotContain("TRAILING_STOP_CHANDELIER_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ExecutionMarketSnapshotCalculatesStoikovMicroPriceAndDivergence()
+    {
+        var snapshot = new ExecutionMarketSnapshot(
+            new Price(10_000m),
+            new Price(10_010m),
+            50_000m,
+            TestTime,
+            bidQuantity: 3.0m,
+            askQuantity: 1.0m);
+
+        Assert.Equal(10_005m, snapshot.MidPrice);
+        // MicroPrice = (3 * 10010 + 1 * 10000) / 4 = 40030 / 4 = 10007.5
+        Assert.Equal(10_007.5m, snapshot.MicroPrice);
+        // DivergenceBps = (10007.5 - 10005) / 10005 * 10000 = 2.4988 bps
+        Assert.True(snapshot.MicroPriceDivergenceBps > 2.0m);
+        Assert.Equal(0.50m, snapshot.OrderBookImbalance);
+    }
+
     private static EffectiveCommissionSnapshot CreateCommission(DateTimeOffset observedAtUtc) => new(
         BtcUsdt, "testnet", "account",
         new CommissionRateSet(.004m, .002m, 0m, 0m),

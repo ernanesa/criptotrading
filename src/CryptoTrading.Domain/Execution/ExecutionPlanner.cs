@@ -57,6 +57,28 @@ public sealed record ExecutionMarketSnapshot
         BidQuantity is { } bidQty && AskQuantity is { } askQty && (bidQty + askQty) > 0m
             ? Math.Round((bidQty - askQty) / (bidQty + askQty), 4)
             : 0m;
+
+    /// <summary>Arithmetic mid-price between best bid and best ask.</summary>
+    public decimal MidPrice => (BestBid.Value + BestAsk.Value) / 2m;
+
+    /// <summary>
+    /// Stoikov (2018) volume-weighted Micro-Price:
+    /// P_micro = (Q_bid * P_ask + Q_ask * P_bid) / (Q_bid + Q_ask).
+    /// Leads arithmetic mid-price by 100-500ms in limit order books.
+    /// </summary>
+    public decimal MicroPrice =>
+        BidQuantity is { } bidQty && AskQuantity is { } askQty && (bidQty + askQty) > 0m
+            ? (bidQty * BestAsk.Value + askQty * BestBid.Value) / (bidQty + askQty)
+            : MidPrice;
+
+    /// <summary>
+    /// Signed divergence between Stoikov Micro-Price and arithmetic Mid-Price in basis points:
+    /// (MicroPrice - MidPrice) / MidPrice * 10,000.
+    /// </summary>
+    public decimal MicroPriceDivergenceBps =>
+        MidPrice > 0m
+            ? Math.Round((MicroPrice - MidPrice) / MidPrice * 10_000m, 4)
+            : 0m;
 }
 
 /// <summary>Inputs for one deterministic execution attempt.</summary>
