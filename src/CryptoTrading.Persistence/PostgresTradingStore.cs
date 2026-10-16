@@ -595,11 +595,11 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                 (policy_version, max_order_notional, max_exposure_notional, max_daily_loss,
                  max_drawdown, max_market_data_age_ticks, withdrawals_enabled,
                  max_slippage_bps, max_volatility_bps, min_liquidity_notional,
-                 effective_from, expires_at, document_hash, created_by)
+                 effective_from, expires_at, document_hash, created_by, budget_policy_json)
             VALUES
                 (@version, @max_order, @max_exposure, @max_daily_loss, @max_drawdown,
                  @max_age_ticks, @withdrawals, @max_slippage, @max_volatility,
-                 @min_liquidity, @effective_from, @expires_at, @document_hash, @created_by)
+                 @min_liquidity, @effective_from, @expires_at, @document_hash, @created_by, @budget_policy_json)
             ON CONFLICT (policy_version) DO NOTHING
             RETURNING policy_version;
             """,
@@ -3413,7 +3413,8 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         DateTimeOffset EffectiveFromUtc,
         DateTimeOffset ExpiresAtUtc,
         string DocumentHash,
-        string CreatedBy);
+        string CreatedBy,
+        string? BudgetPolicyJson = null);
 
     private sealed record RiskPolicyEventRow(
         Guid EventId,
@@ -3439,6 +3440,10 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         Parameter("expires_at", NpgsqlDbType.TimestampTz, document.ExpiresAtUtc.UtcDateTime),
         Parameter("document_hash", NpgsqlDbType.Char, document.DocumentHash),
         Parameter("created_by", NpgsqlDbType.Varchar, document.CreatedBy),
+        Parameter("budget_policy_json", NpgsqlDbType.Text,
+            document.Policy.BudgetPolicy is null
+                ? (object)DBNull.Value
+                : System.Text.Json.JsonSerializer.Serialize(document.Policy.BudgetPolicy)),
     ];
 
     private static async Task InsertRiskPolicyEventAsync(
@@ -3478,7 +3483,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             SELECT policy_version, max_order_notional, max_exposure_notional, max_daily_loss,
                    max_drawdown, max_market_data_age_ticks, withdrawals_enabled,
                    max_slippage_bps, max_volatility_bps, min_liquidity_notional,
-                   effective_from, expires_at, document_hash, created_by
+                   effective_from, expires_at, document_hash, created_by, budget_policy_json
             FROM trading.risk_policies
             WHERE policy_version = @version;
             """, connection, transaction);
@@ -3566,7 +3571,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             SELECT p.policy_version, p.max_order_notional, p.max_exposure_notional, p.max_daily_loss,
                    p.max_drawdown, p.max_market_data_age_ticks, p.withdrawals_enabled,
                    p.max_slippage_bps, p.max_volatility_bps, p.min_liquidity_notional,
-                   p.effective_from, p.expires_at, p.document_hash, p.created_by
+                   p.effective_from, p.expires_at, p.document_hash, p.created_by, p.budget_policy_json
             FROM trading.risk_policies p
             INNER JOIN latest ON latest.policy_version = p.policy_version
             WHERE latest.lifecycle = 'Active'
@@ -3612,6 +3617,19 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         RiskPolicyEventRow eventRow,
         RiskPolicyLifecycle lifecycle)
     {
+        BudgetPolicy? budgetPolicy = null;
+        if (!string.IsNullOrWhiteSpace(row.BudgetPolicyJson))
+        {
+            try
+            {
+                budgetPolicy = System.Text.Json.JsonSerializer.Deserialize<BudgetPolicy>(row.BudgetPolicyJson);
+            }
+            catch
+            {
+                budgetPolicy = null;
+            }
+        }
+
         var policy = new RiskPolicy(
             row.PolicyVersion,
             row.MaxOrderNotional,
@@ -3622,7 +3640,9 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             row.WithdrawalsEnabled,
             row.MaxSlippageBps,
             row.MaxVolatilityBps,
-            row.MinLiquidityNotional);
+            row.MinLiquidityNotional,
+            budgetPolicy);
+
         if (!string.Equals(
                 RiskPolicyDocument.ComputeHash(policy, row.EffectiveFromUtc, row.ExpiresAtUtc),
                 row.DocumentHash,
@@ -3646,6 +3666,28 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                     StringComparison.OrdinalIgnoreCase))
             {
                 policy = policyWithDefaultBudget;
+            }
+            else
+            {
+                var policyWithMultiAssetBudget = new RiskPolicy(
+                    row.PolicyVersion,
+                    row.MaxOrderNotional,
+                    row.MaxExposureNotional,
+                    row.MaxDailyLoss,
+                    row.MaxDrawdown,
+                    TimeSpan.FromTicks(row.MaxMarketDataAgeTicks),
+                    row.WithdrawalsEnabled,
+                    row.MaxSlippageBps,
+                    row.MaxVolatilityBps,
+                    row.MinLiquidityNotional,
+                    new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"));
+                if (string.Equals(
+                        RiskPolicyDocument.ComputeHash(policyWithMultiAssetBudget, row.EffectiveFromUtc, row.ExpiresAtUtc),
+                        row.DocumentHash,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    policy = policyWithMultiAssetBudget;
+                }
             }
         }
 
@@ -3676,7 +3718,8 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         new DateTimeOffset(reader.GetDateTime(10), TimeSpan.Zero),
         new DateTimeOffset(reader.GetDateTime(11), TimeSpan.Zero),
         reader.GetString(12).Trim(),
-        reader.GetString(13));
+        reader.GetString(13),
+        reader.FieldCount > 14 && !reader.IsDBNull(14) ? reader.GetString(14) : null);
 
     private static RiskPolicyEventRow ReadRiskPolicyEvent(NpgsqlDataReader reader) => new(
         reader.GetGuid(0),

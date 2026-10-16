@@ -181,5 +181,9 @@ public sealed class BudgetPolicyTests
 
         var wildcard = new BudgetPolicy(allowedSymbol: "*");
         Assert.True(wildcard.IsSymbolAllowed("DOGEUSDT"));
+
+        var mixedWildcard = new BudgetPolicy(allowedSymbol: "BTCUSDT, *");
+        Assert.True(mixedWildcard.IsSymbolAllowed("ETHUSDT"));
+        Assert.True(mixedWildcard.IsSymbolAllowed("SOLUSDT"));
     }
 }

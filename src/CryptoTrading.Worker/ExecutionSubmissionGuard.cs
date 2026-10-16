@@ -1,4 +1,5 @@
 #pragma warning disable CA1515 // Public contract enables host-level safety tests.
+#pragma warning disable CA1031 // Defensive ticker catch in multi-asset position valuation.
 
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
@@ -151,20 +152,111 @@ internal sealed class ExecutionSubmissionGuard(
         var baseBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == baseAsset);
         var quoteBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == quote);
         var rawPositionQuantity = Parse(baseBalance?.Free) + Parse(baseBalance?.Locked);
+        var configuredUniverseAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            quote,
+            "BNB"
+        };
+        foreach (var s in options.Value.ResolveAutonomySymbols())
+        {
+            var b = s.EndsWith(quote, StringComparison.OrdinalIgnoreCase) ? s[..^quote.Length] : s;
+            configuredUniverseAssets.Add(b);
+        }
+
         var isTestnetFaucetWallet = string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
             && snapshot.Balances.Count > 20;
-        var positionQuantity = isTestnetFaucetWallet && rawPositionQuantity >= 0.99m
-            ? Math.Max(0m, rawPositionQuantity - 1.0m)
-            : rawPositionQuantity;
+        var faucetEndowment = isTestnetFaucetWallet ? baseAsset switch
+        {
+            "BTC" => 1.0m,
+            "ETH" => 1.0m,
+            "BNB" => 1.0m,
+            "SOL" => 4.0m,
+            _ => 0m
+        } : 0m;
+        var positionQuantity = Math.Max(0m, rawPositionQuantity - faucetEndowment);
         var quoteQuantity = Parse(quoteBalance?.Free) + Parse(quoteBalance?.Locked);
         var mid = (ticker.BidPrice + ticker.AskPrice) / 2m;
-        var unsupportedAsset = !isTestnetFaucetWallet && snapshot.Balances.Any(item => item.Asset != baseAsset && item.Asset != quote &&
-            Parse(item.Free) + Parse(item.Locked) > 0m);
+        var unsupportedAsset = !isTestnetFaucetWallet && snapshot.Balances
+            .Where(item => !configuredUniverseAssets.Contains(item.Asset))
+            .Any(item => Parse(item.Free) + Parse(item.Locked) > 0m);
+
+        decimal totalOtherPositionsNotional = 0m;
+        int aggregateOpenPositionsCount = positionQuantity * mid > (isTestnetFaucetWallet ? 5m : 0m) ? 1 : 0;
+
+        var otherSymbolsToFetch = new List<(string Symbol, decimal NetQty)>();
+        foreach (var otherSymbol in options.Value.ResolveAutonomySymbols())
+        {
+            if (string.Equals(otherSymbol, command.Symbol.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var otherBase = otherSymbol.EndsWith(quote, StringComparison.OrdinalIgnoreCase) ? otherSymbol[..^quote.Length] : otherSymbol;
+            var otherBal = snapshot.Balances.FirstOrDefault(b => string.Equals(b.Asset, otherBase, StringComparison.OrdinalIgnoreCase));
+            if (otherBal is null)
+            {
+                continue;
+            }
+
+            var otherRaw = Parse(otherBal.Free) + Parse(otherBal.Locked);
+            var otherEndw = isTestnetFaucetWallet ? otherBase switch
+            {
+                "BTC" => 1.0m,
+                "ETH" => 1.0m,
+                "BNB" => 1.0m,
+                "SOL" => 4.0m,
+                _ => 0m
+            } : 0m;
+            var otherNet = Math.Max(0m, otherRaw - otherEndw);
+            if (otherNet > 0m)
+            {
+                otherSymbolsToFetch.Add((otherSymbol, otherNet));
+            }
+        }
+
+        if (otherSymbolsToFetch.Count > 0)
+        {
+            BinanceBookTicker[] otherTickers;
+            try
+            {
+                var tickerTasks = otherSymbolsToFetch
+                    .Select(item => market.GetBookTickerAsync(item.Symbol, cancellationToken))
+                    .ToArray();
+                otherTickers = await Task.WhenAll(tickerTasks).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new ExecutionDispatchBlockedException("PRE_SUBMIT_MARKET_DATA_UNAVAILABLE", ex);
+            }
+
+            for (var i = 0; i < otherSymbolsToFetch.Count; i++)
+            {
+                var otherTicker = otherTickers[i];
+                if (otherTicker is null || otherTicker.BidPrice <= 0m || otherTicker.AskPrice <= 0m)
+                {
+                    throw new ExecutionDispatchBlockedException("PRE_SUBMIT_MARKET_DATA_UNAVAILABLE");
+                }
+
+                var otherPrice = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
+                var otherNotional = otherSymbolsToFetch[i].NetQty * otherPrice;
+                if (otherNotional > (isTestnetFaucetWallet ? 5m : 0m))
+                {
+                    totalOtherPositionsNotional += otherNotional;
+                    aggregateOpenPositionsCount++;
+                }
+            }
+        }
+
         var evaluatedAt = UtcNow;
+        decimal? currentEquityNotional = unsupportedAsset ? null : quoteQuantity + positionQuantity * mid + totalOtherPositionsNotional;
         var accounting = await riskContexts.RecordAutonomyRiskContextAsync(
             $"equity:{options.Value.ReconciliationAccount}:{command.Symbol.Value}:{quote}",
             command.Symbol, new Asset(quote), new DateTimeOffset(evaluatedAt.UtcDateTime.Date, TimeSpan.Zero),
-            unsupportedAsset ? null : quoteQuantity + positionQuantity * mid, evaluatedAt, cancellationToken).ConfigureAwait(false);
+            currentEquityNotional, evaluatedAt, cancellationToken).ConfigureAwait(false);
         var executionPrice = command.Type == OrderType.Limit ? command.ReferencePrice.Value :
             command.Side == OrderSide.Buy ? ticker.AskPrice : ticker.BidPrice;
         var currentNotional = command.Quantity.Value * executionPrice;
@@ -194,12 +286,14 @@ internal sealed class ExecutionSubmissionGuard(
         }
         if (policy.Policy.BudgetPolicy is { } budgetPolicy && command.Side == OrderSide.Buy)
         {
+            decimal aggregateOpenPositionsUsdt = positionQuantity * mid + totalOtherPositionsNotional;
             await ValidateAndReserveOperatorBudgetAsync(
                 command,
                 message,
                 budgetPolicy,
                 quote,
-                positionQuantity * mid,
+                aggregateOpenPositionsUsdt,
+                aggregateOpenPositionsCount,
                 accounting.RealizedDailyLossNotional,
                 currentNotional,
                 measuredRisk.ExpectedSlippageBps,
@@ -356,15 +450,14 @@ internal sealed class ExecutionSubmissionGuard(
         BudgetPolicy budgetPolicy,
         string quoteAsset,
         decimal openPositionsUsdt,
+        int openPositionsCount,
         decimal realizedLossUsdt,
         decimal candidateNotionalUsdt,
         decimal expectedSlippageBps,
         bool commitDurableReservation,
         CancellationToken cancellationToken)
     {
-        var isAllowed = budgetPolicy.IsSymbolAllowed(command.Symbol.Value) ||
-                        options.Value.ResolveAutonomySymbols().Contains(command.Symbol.Value, StringComparer.OrdinalIgnoreCase);
-        if (!isAllowed)
+        if (!budgetPolicy.IsSymbolAllowed(command.Symbol.Value))
         {
             throw new ExecutionDispatchBlockedException(RiskReasonCodes.DisallowedSymbol);
         }
@@ -415,14 +508,11 @@ internal sealed class ExecutionSubmissionGuard(
             8,
             MidpointRounding.ToPositiveInfinity);
 
-        var isTestnet = string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase);
-        var effectiveOpenPositionsCount = openPositionsUsdt > (isTestnet ? 5m : 0m) ? 1 : 0;
-
         var commitment = budgetPolicy.EvaluateCommitment(
             new BudgetCommitmentRequest(
                 requestedOrderNotionalUsdt: candidateNotionalUsdt,
                 openPositionsNotionalUsdt: openPositionsUsdt,
-                openPositionsCount: effectiveOpenPositionsCount,
+                openPositionsCount: openPositionsCount,
                 pendingOrdersReservedUsdt: otherReservedUsdt,
                 unknownOrdersLockedUsdt: lockedUnknownUsdt,
                 dailyRealizedLossUsdt: Math.Max(0m, realizedLossUsdt),
@@ -454,7 +544,7 @@ internal sealed class ExecutionSubmissionGuard(
                     workerInstanceId: string.IsNullOrWhiteSpace(message.LeaseOwner) ? "worker" : message.LeaseOwner,
                     fencingToken: fencingToken,
                     occurredAtUtc: now,
-                    openPositionsCount: effectiveOpenPositionsCount,
+                    openPositionsCount: openPositionsCount,
                     maxOpenPositions: budgetPolicy.MaxOpenPositions),
                 cancellationToken).ConfigureAwait(false);
 

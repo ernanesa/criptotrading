@@ -523,9 +523,59 @@ internal sealed class AutonomyCycleHostedService(
         var unsupportedAssetBalance = !isTestnetFaucetWallet && account.Balances
             .Where(balance => !configuredUniverseAssets.Contains(balance.Asset))
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
+
+        decimal totalOtherPositionsNotional = 0m;
+        foreach (var otherSymbol in runtime.ResolveAutonomySymbols())
+        {
+            if (string.Equals(otherSymbol, symbol, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var otherBase = otherSymbol.EndsWith(quoteAsset.Value, StringComparison.OrdinalIgnoreCase) ? otherSymbol[..^quoteAsset.Value.Length] : otherSymbol;
+            var otherBal = account.Balances.FirstOrDefault(b => string.Equals(b.Asset, otherBase, StringComparison.OrdinalIgnoreCase));
+            if (otherBal is null)
+            {
+                continue;
+            }
+
+            var otherRawQty = ParseBalance(otherBal.Free) + ParseBalance(otherBal.Locked);
+            var otherFaucet = isTestnetFaucetWallet ? otherBase switch
+            {
+                "BTC" => 1.0m,
+                "ETH" => 1.0m,
+                "BNB" => 1.0m,
+                "SOL" => 4.0m,
+                _ => 0m
+            } : 0m;
+            var otherNetQty = Math.Max(0m, otherRawQty - otherFaucet);
+            if (otherNetQty > 0m)
+            {
+                if (streamBookTickers.TryGetValue(otherSymbol, out var otherTicker) &&
+                    DateTimeOffset.UtcNow - otherTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+                {
+                    var otherMid = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
+                    totalOtherPositionsNotional += otherNetQty * otherMid;
+                }
+                else
+                {
+                    try
+                    {
+                        var restTicker = await marketClient.GetBookTickerAsync(otherSymbol, cancellationToken).ConfigureAwait(false);
+                        var otherMid = (restTicker.BidPrice + restTicker.AskPrice) / 2m;
+                        totalOtherPositionsNotional += otherNetQty * otherMid;
+                    }
+                    catch
+                    {
+                        // Fallback: omit if ticker is unreachable
+                    }
+                }
+            }
+        }
+
         decimal? currentEquityNotional = unsupportedAssetBalance
             ? null
-            : totalQuoteBalance + (baseQuantity * latest.ClosePrice.Value);
+            : totalQuoteBalance + (baseQuantity * latest.ClosePrice.Value) + totalOtherPositionsNotional;
         var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
         // Unlike the decision checkpoint, the equity scope must survive
         // strategy-version changes; otherwise a new strategy could reset the

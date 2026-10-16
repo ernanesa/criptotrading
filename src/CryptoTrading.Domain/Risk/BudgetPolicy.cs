@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 
 namespace CryptoTrading.Domain.Risk;
 
@@ -164,6 +165,7 @@ public sealed record BudgetPolicy
     public const decimal DefaultMinOrderNotionalUsdt = 5.00m;
     public const string DefaultAllowedSymbol = "BTCUSDT";
 
+    [JsonConstructor]
     public BudgetPolicy(
         string owner = DefaultOwner,
         decimal nominalBudgetBrl = DefaultNominalBudgetBrl,
@@ -246,13 +248,9 @@ public sealed record BudgetPolicy
             return false;
         }
 
-        if (string.Equals(AllowedSymbol, "*", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
+        var trimmedSymbol = symbol.Trim();
         var tokens = AllowedSymbol.Split([',', ';', '|', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return tokens.Any(token => string.Equals(token, symbol, StringComparison.OrdinalIgnoreCase));
+        return tokens.Any(token => token == "*" || string.Equals(token, trimmedSymbol, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Round-trip taker fees (2 * 10 bps) plus reserve buffer (25 bps) = 45 bps (0.0045).</summary>
