@@ -47,11 +47,12 @@ public sealed class PersistenceMigrationsTests
  "031_reconciliation_events.down.sql", "031_reconciliation_events.up.sql",
  "032_open_order_exchange_update_time.down.sql", "032_open_order_exchange_update_time.up.sql",
  "033_capital_reservations.down.sql", "033_capital_reservations.up.sql",
+ "034_risk_policy_budget.down.sql", "034_risk_policy_budget.up.sql",
             ],
             migrations.Select(static migration => migration.FileName));
         Assert.All(migrations, static migration => Assert.NotEmpty(migration.Sql));
         Assert.Equal(
-    ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029", "030", "030", "031", "031", "032", "032", "033", "033"],
+    ["001", "001", "002", "002", "003", "003", "004", "004", "005", "005", "006", "006", "007", "007", "008", "008", "009", "009", "010", "010", "011", "011", "012", "012", "013", "013", "014", "014", "015", "015", "016", "016", "017", "017", "018", "018", "019", "019", "020", "020", "021", "021", "022", "022", "023", "023", "024", "024", "025", "025", "026", "026", "027", "027", "028", "028", "029", "029", "030", "030", "031", "031", "032", "032", "033", "033", "034", "034"],
             migrations.Select(static migration => migration.Version));
     }
 

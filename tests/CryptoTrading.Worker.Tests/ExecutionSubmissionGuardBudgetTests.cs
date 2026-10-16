@@ -32,18 +32,65 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     }
 
     [Fact]
-    public async Task AllowedSymbolFromAutonomyOptionsAllowsSubmissionWhenBudgetPolicyIsDefault()
+    public async Task MultiAssetBudgetPolicyAuthorizesConfiguredSymbols()
     {
         await using var supervisor = await CreateReadySupervisorAsync();
-        var runtimeOptions = new WorkerRuntimeOptions
-        {
-            AutonomySymbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"
-        };
-        var guard = CreateGuard(supervisor, new BudgetPolicy(allowedSymbol: "BTCUSDT"), runtimeOptions: runtimeOptions);
+        var guard = CreateGuard(supervisor, new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"));
         var (command, message) = CreateCommand("ETHUSDT", 10m);
 
         // Must not throw ExecutionDispatchBlockedException:
         await guard.ValidateAsync(command, message, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ExistingPositionInOtherUniverseAssetEnforcesMaxOpenPositions()
+    {
+        await using var supervisor = await CreateReadySupervisorAsync();
+        var account = new TestAccountClient { BtcFree = "0.00019" }; // Holding BTC position
+        var runtimeOptions = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "PAPER",
+            AutonomySymbols = "BTCUSDT,ETHUSDT"
+        };
+        var guard = CreateGuard(
+            supervisor,
+            new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT", maxOpenPositions: 1),
+            account: account,
+            runtimeOptions: runtimeOptions);
+        var (command, message) = CreateCommand("ETHUSDT", 10m);
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            guard.ValidateAsync(command, message, TestContext.Current.CancellationToken));
+
+        Assert.Equal(RiskReasonCodes.MaxOpenPositionsExceeded, exception.Message);
+    }
+
+    [Fact]
+    public async Task OtherUniverseAssetTickerFailureFailsClosed()
+    {
+        await using var supervisor = await CreateReadySupervisorAsync();
+        var account = new TestAccountClient { BtcFree = "0.00019" }; // Holding BTC position
+        var runtimeOptions = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "PAPER",
+            AutonomySymbols = "BTCUSDT,ETHUSDT"
+        };
+        var market = new TestMarketClient
+        {
+            FailTickerForSymbol = s => string.Equals(s, "BTCUSDT", StringComparison.OrdinalIgnoreCase)
+        };
+        var guard = CreateGuard(
+            supervisor,
+            new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT", maxOpenPositions: 2),
+            market: market,
+            account: account,
+            runtimeOptions: runtimeOptions);
+        var (command, message) = CreateCommand("ETHUSDT", 10m);
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            guard.ValidateAsync(command, message, TestContext.Current.CancellationToken));
+
+        Assert.Equal("PRE_SUBMIT_MARKET_DATA_UNAVAILABLE", exception.Message);
     }
 
     [Fact]
@@ -242,6 +289,7 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     {
         public TimeSpan TickerAge { get; init; } = TimeSpan.Zero;
         public decimal AskPrice { get; init; } = 100m;
+        public Func<string, bool>? FailTickerForSymbol { get; init; }
 
         public Task PingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default) =>
@@ -264,6 +312,11 @@ public sealed class ExecutionSubmissionGuardBudgetTests
 
         public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default)
         {
+            if (FailTickerForSymbol?.Invoke(symbol) == true)
+            {
+                throw new HttpRequestException("Simulated exchange ticker failure.");
+            }
+
             if (string.Equals(symbol, "USDTBRL", StringComparison.OrdinalIgnoreCase))
             {
                 return Task.FromResult(new BinanceBookTicker(symbol, 5.50m, 100m, 5.50m, 100m, NowUtc - TickerAge));
@@ -342,10 +395,17 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     {
         public decimal PositionQuantity { get; init; }
 
-        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, PositionQuantity, true, valuationAtUtc, currentEquityNotional, currentEquityNotional, 0m, true, true));
-        public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, PositionQuantity, true, dayStartUtc, 1000m, 1000m, 0m, true, true));
+        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default)
+        {
+            var qty = string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase) ? PositionQuantity : 0m;
+            return Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, qty, true, valuationAtUtc, currentEquityNotional, currentEquityNotional, 0m, true, true));
+        }
+
+        public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default)
+        {
+            var qty = string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase) ? PositionQuantity : 0m;
+            return Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, qty, true, dayStartUtc, 1000m, 1000m, 0m, true, true));
+        }
     }
 
     private sealed class TestOpenOrderStore : ILocalOpenOrderStore

@@ -73,33 +73,21 @@ WHERE created_at >= NOW() - INTERVAL '3 hours'
 GROUP BY event_type;
 "
 
-# 6. High-Water Mark & Self-Healing Drawdown Drift Check
-echo "[6/7] Checking High-Water Mark & Drawdown Drift..."
+# 6. High-Water Mark & Circuit Breaker Inspection (Strictly Read-Only)
+echo "[6/7] Inspecting High-Water Mark & Circuit Breaker Status..."
 HWM_ROWS=$(docker compose exec -T postgres psql -U cryptotrading -d cryptotrading -P pager=off -t -A -F '|' -c "
 SELECT scope, equity_notional, high_water_mark_notional, drawdown_notional
 FROM trading.autonomy_equity_high_water_marks;
 ")
 
-NEED_RECALIBRATION=false
+DRAWDOWN_BREACH_DETECTED=false
 while IFS='|' read -r scope equity hwm drawdown; do
     echo "      ${scope}: Equity=${equity} HWM=${hwm} Drawdown=${drawdown}"
-    # If drawdown is > $5 and there is no open position (equity is flat around 10k), it's artificial
     if awk -v d="${drawdown}" "BEGIN {exit !(d > 5.0)}"; then
-        echo "      [WARN] Detected artificial drawdown drift on ${scope} (${drawdown} USDT > 5.0). Auto-recalibrating..."
-        NEED_RECALIBRATION=true
+        echo "      [ALERT] Drawdown threshold exceeded on ${scope}: ${drawdown} USDT > 5.0 USDT"
+        DRAWDOWN_BREACH_DETECTED=true
     fi
 done <<< "${HWM_ROWS}"
-
-if [ "${NEED_RECALIBRATION}" = true ]; then
-    echo "      Applying automatic HWM recalibration in PostgreSQL..."
-    docker compose exec -T postgres psql -U cryptotrading -d cryptotrading -P pager=off -c "
-    UPDATE trading.autonomy_equity_high_water_marks 
-    SET high_water_mark_notional = equity_notional, 
-        drawdown_notional = 0, 
-        updated_at = transaction_timestamp();
-    "
-    echo "      HWM Recalibration Complete."
-fi
 
 # 7. Operational Mode
 echo "[7/7] Active Operational Control State..."
@@ -116,7 +104,7 @@ cat << AUDIT_ENTRY >> "${AUDIT_LOG_FILE}"
 - **Operational Mode:** ${OP_MODE}
 - **Realized PnL (3h):** ${REALIZED_PNL} USDT
 - **Execution Fills (3h):** ${TOTAL_FILLS} (Wins: ${WINS}, Losses: ${LOSSES})
-- **Self-Healing Recalibration Applied:** ${NEED_RECALIBRATION}
+- **Drawdown Breach Detected:** ${DRAWDOWN_BREACH_DETECTED}
 
 AUDIT_ENTRY
 

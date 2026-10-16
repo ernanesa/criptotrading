@@ -711,20 +711,20 @@ static async Task<int> BootstrapTestnetAutonomyAsync(IConfiguration configuratio
 
     var now = DateTimeOffset.UtcNow;
     var activePolicy = await store.GetActiveRiskPolicyAsync(now).ConfigureAwait(false);
-    if (activePolicy is null || !string.Equals(activePolicy.Policy.Version, "v2-r100-testnet-live-sim", StringComparison.Ordinal))
+    if (activePolicy is null || !string.Equals(activePolicy.Policy.Version, "v3-multiasset-r100-testnet", StringComparison.Ordinal))
     {
         var riskPolicy = new RiskPolicy(
-            version: "v2-r100-testnet-live-sim",
+            version: "v3-multiasset-r100-testnet",
             maxOrderNotional: 20m,
             maxExposureNotional: 20m,
             maxDailyLoss: 2m,
             maxDrawdown: 5m,
             maxMarketDataAge: TimeSpan.FromMinutes(5),
             withdrawalsEnabled: false,
-            budgetPolicy: BudgetPolicy.ApprovedMicroLiveDefault);
+            budgetPolicy: new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT"));
         var draft = RiskPolicyDocument.CreateDraft(riskPolicy, now.AddMinutes(-5), now.AddDays(90), "policy-author");
         await store.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
-        _ = await store.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v2-testnet-live-sim", "Ernane", now.AddMinutes(-4)).ConfigureAwait(false);
+        _ = await store.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v3-multiasset-r100-testnet", "Ernane", now.AddMinutes(-4)).ConfigureAwait(false);
         activePolicy = await store.ActivateRiskPolicyAsync(riskPolicy.Version, now.AddMinutes(-3)).ConfigureAwait(false);
     }
 
