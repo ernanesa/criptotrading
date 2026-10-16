@@ -139,6 +139,46 @@ public sealed class AutonomyCycleExecutionGuardsTests
     }
 
     [Fact]
+    public async Task RunOnceSkipsCandidateGenerationWhenSymbolOutsideBudgetPolicy()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient();
+        var budgetPolicy = new BudgetPolicy(allowedSymbol: "ETHUSDT");
+        var policy = new RiskPolicy("v1", 1000m, 5000m, 500m, 1000m, TimeSpan.FromMinutes(15), withdrawalsEnabled: false, budgetPolicy: budgetPolicy);
+        var draft = RiskPolicyDocument.CreateDraft(policy, DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10), "creator");
+        draft = draft.Approve("app-1", "approver", DateTimeOffset.UtcNow.AddDays(-1));
+        var doc = draft.Activate(DateTimeOffset.UtcNow.AddDays(-1));
+        var policyStore = new FakePolicyStore(doc);
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = CreateOptions();
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        await hostedService.RunOnceAsync(options.Value, TestContext.Current.CancellationToken);
+
+        // Commits a NO_TRADE record to advance checkpoint without creating an outbox dead-letter
+        var latestCommit = Assert.Single(decisionCommitStore.Commits);
+        Assert.Equal("NO_TRADE", latestCommit.Outcome);
+        Assert.Equal("SYMBOL_NOT_AUTHORIZED_IN_BUDGET_POLICY:BTCUSDT", latestCommit.NoTradeReason);
+        Assert.Null(latestCommit.OutboxRecord);
+    }
+
+    [Fact]
     public async Task RunOnceFailsClosedWhenTradingRulesAreIncomplete()
     {
         var decisionCommitStore = new FakeDecisionCommitStore();
@@ -281,8 +321,14 @@ public sealed class AutonomyCycleExecutionGuardsTests
     {
         private readonly RiskPolicyDocument document;
 
-        public FakePolicyStore()
+        public FakePolicyStore(RiskPolicyDocument? customDocument = null)
         {
+            if (customDocument is not null)
+            {
+                document = customDocument;
+                return;
+            }
+
             var policy = new RiskPolicy("v1", 1000m, 5000m, 500m, 1000m, TimeSpan.FromMinutes(15), withdrawalsEnabled: false);
             var draft = RiskPolicyDocument.CreateDraft(policy, DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10), "creator");
             draft = draft.Approve("app-1", "approver", DateTimeOffset.UtcNow.AddDays(-1));

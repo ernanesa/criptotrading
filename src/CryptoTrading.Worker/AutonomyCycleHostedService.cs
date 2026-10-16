@@ -62,6 +62,8 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, BinanceBookTicker> streamBookTickers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, List<BinanceSpotKline>> klineCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastKlineFetchUtc = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> positionOriginatingStrategy = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, decimal> positionLifetimePeakProfitBps = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
@@ -669,6 +671,29 @@ internal sealed class AutonomyCycleHostedService(
             accounting.PositionCostNotional,
             riskContextComplete,
             riskContextReason);
+
+        var hasOpenExposure = portfolio.GrossExposureNotional > 5m;
+        var isUnauthorizedEntrySymbol = !hasOpenExposure &&
+                                        policyDocument.Policy.BudgetPolicy is { } bp &&
+                                        !bp.IsSymbolAllowed(symbol);
+
+        decimal? lifetimePeakBps = null;
+        string? originatingStrat = null;
+        if (hasOpenExposure && accounting.HasPositionBasis && accounting.PositionCostNotional > 0m)
+        {
+            var curProfitBps = (portfolio.GrossExposureNotional - accounting.PositionCostNotional) / accounting.PositionCostNotional * 10_000m;
+            lifetimePeakBps = positionLifetimePeakProfitBps.AddOrUpdate(symbol, curProfitBps, (_, peak) => Math.Max(peak, curProfitBps));
+            if (positionOriginatingStrategy.TryGetValue(symbol, out var strat))
+            {
+                originatingStrat = strat;
+            }
+        }
+        else if (!hasOpenExposure)
+        {
+            positionLifetimePeakProfitBps.TryRemove(symbol, out _);
+            positionOriginatingStrategy.TryRemove(symbol, out _);
+        }
+
         var candles = closed.Select(item => new MarketCandle(item.Bar.CloseTimeUtc, item.Bar.ClosePrice.Value)).ToArray();
         var bids = new[] { new MarketBookLevel(bookTicker.BidPrice, bookTicker.BidQuantity) };
         var asks = new[] { new MarketBookLevel(bookTicker.AskPrice, bookTicker.AskQuantity) };
@@ -720,8 +745,10 @@ internal sealed class AutonomyCycleHostedService(
                 ExecutionAttempt: hasPendingExitReplan || hasPendingEntryReplan ? replanCandidate!.NextAttempt : 0,
                 HasPendingExitReplan: hasPendingExitReplan,
 #pragma warning disable CA1308 // Strategy identifiers use lowercase slugs by design
-                PendingExitReplanStrategyId: hasPendingExitReplan ? $"trend-following-{symbol.ToLowerInvariant()}" : null);
+                PendingExitReplanStrategyId: hasPendingExitReplan ? $"trend-following-{symbol.ToLowerInvariant()}" : null,
 #pragma warning restore CA1308
+                PositionOriginatingStrategyId: originatingStrat,
+                LifetimePeakProfitBps: lifetimePeakBps);
 
             if (durablePerformances is not null)
             {
@@ -761,15 +788,17 @@ internal sealed class AutonomyCycleHostedService(
                 }
             }
 
-            var adaptiveOutbox = hasCompleteTradingRules && adaptiveResult.Execution is { IsDispatchable: true } exec
+            var adaptiveOutbox = hasCompleteTradingRules && !isUnauthorizedEntrySymbol && adaptiveResult.Execution is { IsDispatchable: true } exec
                 ? exec.OutboxRecord
                 : null;
-            var adaptiveOutcome = !hasCompleteTradingRules || adaptiveResult.IsNoTrade
+            var adaptiveOutcome = !hasCompleteTradingRules || isUnauthorizedEntrySymbol || adaptiveResult.IsNoTrade
                 ? "NO_TRADE"
                 : adaptiveOutbox is not null ? "DISPATCHABLE" : "BLOCKED";
-            var adaptiveReason = !hasCompleteTradingRules
-                ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
-                : adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
+            var adaptiveReason = isUnauthorizedEntrySymbol
+                ? $"SYMBOL_NOT_AUTHORIZED_IN_BUDGET_POLICY:{symbol}"
+                : !hasCompleteTradingRules
+                    ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
+                    : adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
 
             await decisionCommitStore.CommitAsync(
                 CreateAdaptiveDecisionCommit(runtime, new Symbol(symbol), adaptiveCheckpointScope, featureSnapshot, adaptiveResult, adaptiveOutcome, adaptiveReason, adaptiveOutbox, replanCandidate),
@@ -789,6 +818,14 @@ internal sealed class AutonomyCycleHostedService(
                     latest.CloseTimeUtc,
                     adaptiveReason);
                 return;
+            }
+
+            if (adaptiveOutbox.Command.Side == CryptoTrading.Domain.Orders.OrderSide.Buy)
+            {
+#pragma warning disable CA1308 // Strategy identifiers use lowercase slugs by design
+                positionOriginatingStrategy[symbol] = adaptiveResult.SelectedStrategyId ?? $"trend-following-{symbol.ToLowerInvariant()}";
+#pragma warning restore CA1308
+                positionLifetimePeakProfitBps[symbol] = 0m;
             }
 
             AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, adaptiveOutbox.Command.ClientOrderId.Value, adaptiveOutbox.Command.Side.ToString());
@@ -813,18 +850,20 @@ internal sealed class AutonomyCycleHostedService(
             featureSnapshot,
             UseConservativeCommissionReserve: true);
         var result = activeCycle.Evaluate(request);
-        var outbox = hasCompleteTradingRules ? GetDispatchableOutbox(result) : null;
-        var outcome = !hasCompleteTradingRules || result.IsNoTrade
+        var outbox = hasCompleteTradingRules && !isUnauthorizedEntrySymbol ? GetDispatchableOutbox(result) : null;
+        var outcome = !hasCompleteTradingRules || isUnauthorizedEntrySymbol || result.IsNoTrade
             ? "NO_TRADE"
             : outbox is not null ? "DISPATCHABLE" : "BLOCKED";
-        var reason = !hasCompleteTradingRules
-            ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
-            : result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
+        var reason = isUnauthorizedEntrySymbol
+            ? $"SYMBOL_NOT_AUTHORIZED_IN_BUDGET_POLICY:{symbol}"
+            : !hasCompleteTradingRules
+                ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
+                : result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
         await decisionCommitStore.CommitAsync(
             CreateDecisionCommit(runtime, checkpointScope, featureSnapshot, result, outcome, reason, outbox, replanCandidate),
             cancellationToken).ConfigureAwait(false);
         lastProcessedCloseUtc = latest.CloseTimeUtc;
-        if (!hasCompleteTradingRules || result.IsNoTrade)
+        if (!hasCompleteTradingRules || isUnauthorizedEntrySymbol || result.IsNoTrade)
         {
             AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, reason);
             return;
