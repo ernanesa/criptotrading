@@ -66,7 +66,7 @@ public static class AdaptiveExecutionTacticScorer
         }
 
         // Case 2: Tight spread & low slippage -> Passive maker pegged to near touch
-        if (topOfBookSpreadBps <= 5.0m)
+        if (topOfBookSpreadBps <= 8.0m)
         {
             // If spread permits (> 3 bps) and market has moderate volatility, step 1 tick inside spread to gain execution priority
             var pegOffsetTicks = (topOfBookSpreadBps >= 3.0m && volatilityBps >= 20.0m) || orderBookImbalance > 0.25m ? 1 : 0;

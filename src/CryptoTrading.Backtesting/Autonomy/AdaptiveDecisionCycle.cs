@@ -158,6 +158,7 @@ public sealed class AdaptiveDecisionCycle
             request.EvaluatedAtUtc,
             trendSlopeThreshold: trendSlopeThreshold);
         var orderBookImbalance = request.ExecutionMarket?.OrderBookImbalance ?? 0m;
+        var microPriceDivergenceBps = request.ExecutionMarket?.MicroPriceDivergenceBps ?? 0m;
         var mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, orderBookImbalance);
 
         // 3. Operational Mode & Risk Pre-checks
@@ -394,7 +395,7 @@ public sealed class AdaptiveDecisionCycle
             !isTrendQuarantined &&
             !isTrendNegativeExpectancy &&
             mlEval.MlWinProbability >= 0.51m &&
-            orderBookImbalance >= 0.25m &&
+            (orderBookImbalance >= 0.25m || (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m)) &&
             regime.Regime == MarketRegime.BullTrend &&
             regime.TrendSlopeRate > 0m)
         {
@@ -409,7 +410,7 @@ public sealed class AdaptiveDecisionCycle
                 SelectedStrategyId = trendFollowingId,
                 SelectedSide = OrderSide.Buy,
                 SelectedNotional = request.EntryTargetNotional,
-                OrchestrationReason = $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}) in {regime.Regime}.",
+                OrchestrationReason = $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}, MicroPriceDiv={microPriceDivergenceBps:+0.00;-0.00}bps) in {regime.Regime}.",
                 IsNoTrade = false
             };
         }
@@ -704,10 +705,10 @@ public sealed class AdaptiveDecisionCycle
         // 8. Adaptive Execution Tactic Selection
         var isMomentumEntry = orchestration.SelectedSide == OrderSide.Buy &&
             (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase));
-        var isUrgentBreakout = isMomentumEntry && (mlEval.MlWinProbability >= 0.82m || volBps >= 22.0m);
+        var isUrgentBreakout = isMomentumEntry && (mlEval.MlWinProbability >= 0.85m || volBps >= 25.0m);
         var urgency = isUrgentBreakout
             ? 0.85m
-            : (isMomentumEntry ? 0.55m : (orchestration.SelectedSide == OrderSide.Sell ? 0.50m : 0.35m));
+            : (isMomentumEntry ? 0.50m : (orchestration.SelectedSide == OrderSide.Sell ? 0.45m : 0.30m));
         var topOfBookSpreadBps = request.ExecutionMarket is not null && request.ExecutionMarket.BestBid.Value > 0m
             ? Math.Round((request.ExecutionMarket.BestAsk.Value - request.ExecutionMarket.BestBid.Value) / request.ExecutionMarket.BestBid.Value * 10_000m, 2)
             : 3.0m;
@@ -850,6 +851,7 @@ public sealed class AdaptiveDecisionCycle
             SsaMartingaleScore = mlEval.SsaMartingaleScore,
             IsSsaStructuralBreakdown = mlEval.IsSsaStructuralBreakdown,
             OrderBookImbalance = orderBookImbalance,
+            MicroPriceDivergenceBps = microPriceDivergenceBps,
             TrendSlope = regime.TrendSlopeRate,
             Volatility = regime.VolatilityRate,
             SelectedStrategy = orchestration.SelectedStrategyId,
