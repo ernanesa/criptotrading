@@ -24,14 +24,16 @@ internal sealed class PeriodicReconciliationHostedService(
         }
 
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(options.Value.ReconciliationIntervalMinutes));
+        var isFirstTick = true;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (!await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+                if (!isFirstTick && !await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
                 {
                     break;
                 }
+                isFirstTick = false;
 
                 var result = await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
                 if (!result.IsHealthy)
