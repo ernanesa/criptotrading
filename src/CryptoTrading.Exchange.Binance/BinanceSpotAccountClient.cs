@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -18,6 +19,11 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     private readonly IBinanceClockDriftEstimator clock;
     private readonly TimeProvider timeProvider;
     private readonly BinanceRequestRetryPolicy retryPolicy;
+    private volatile CachedAccountEntry? cachedAccount;
+    private readonly ConcurrentDictionary<string, CachedCommissionEntry> cachedCommissions = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record CachedAccountEntry(BinanceAccountSnapshot Snapshot, DateTimeOffset FetchedAtUtc);
+    private sealed record CachedCommissionEntry(BinanceCommissionSnapshot Snapshot, DateTimeOffset FetchedAtUtc);
 
     public BinanceSpotAccountClient(
         HttpClient httpClient,
@@ -46,11 +52,26 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
 
     public async Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default)
     {
+        var now = timeProvider.GetUtcNow();
+        if (options.AccountSnapshotCacheDuration > TimeSpan.Zero &&
+            cachedAccount is { } cached &&
+            now >= cached.FetchedAtUtc &&
+            now - cached.FetchedAtUtc <= options.AccountSnapshotCacheDuration)
+        {
+            return cached.Snapshot;
+        }
+
         await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
         var account = await SendSignedAsync<BinanceAccountSnapshot>("v3/account", [], cancellationToken).ConfigureAwait(false);
         var allowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet &&
                                              options.AllowTestnetWithdrawCapability;
-        return BinanceAuthenticatedResponseValidator.Validate(account, allowTestnetWithdrawCapability);
+        var validated = BinanceAuthenticatedResponseValidator.Validate(account, allowTestnetWithdrawCapability);
+        if (options.AccountSnapshotCacheDuration > TimeSpan.Zero)
+        {
+            cachedAccount = new CachedAccountEntry(validated, timeProvider.GetUtcNow());
+        }
+
+        return validated;
     }
 
     public async Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(
@@ -108,14 +129,30 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         CancellationToken cancellationToken = default)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
+        var now = timeProvider.GetUtcNow();
+        if (options.CommissionCacheDuration > TimeSpan.Zero &&
+            cachedCommissions.TryGetValue(normalizedSymbol, out var cached) &&
+            now >= cached.FetchedAtUtc &&
+            now - cached.FetchedAtUtc <= options.CommissionCacheDuration)
+        {
+            return cached.Snapshot;
+        }
+
         await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
         var response = await SendSignedAsync<BinanceCommissionResponse>(
             "v3/account/commission",
             [new("symbol", normalizedSymbol)],
             cancellationToken).ConfigureAwait(false);
-        return new(
+        var fetchedAt = timeProvider.GetUtcNow();
+        var snapshot = new BinanceCommissionSnapshot(
             BinanceAuthenticatedResponseValidator.Validate(response, normalizedSymbol),
-            timeProvider.GetUtcNow());
+            fetchedAt);
+        if (options.CommissionCacheDuration > TimeSpan.Zero)
+        {
+            cachedCommissions[normalizedSymbol] = new CachedCommissionEntry(snapshot, fetchedAt);
+        }
+
+        return snapshot;
     }
 
     private ValueTask EnsureClockSynchronizedAsync(CancellationToken cancellationToken)

@@ -27,6 +27,19 @@ public sealed class BinanceAuthenticatedClientOptions
     public TimeSpan ClockSyncCacheDuration { get; set; } = TimeSpan.Zero;
 
     /// <summary>
+    /// Optional TTL for reusing a recently fetched GET /api/v3/account snapshot
+    /// across concurrent symbol evaluations or back-to-back pre-submit checks.
+    /// Defaults to zero (always fetch fresh).
+    /// </summary>
+    public TimeSpan AccountSnapshotCacheDuration { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
+    /// Optional TTL for reusing a recently fetched GET /api/v3/account/commission
+    /// snapshot per symbol. Defaults to zero (always fetch fresh).
+    /// </summary>
+    public TimeSpan CommissionCacheDuration { get; set; } = TimeSpan.Zero;
+
+    /// <summary>
     /// Allows a Spot Testnet account payload to report <c>canWithdraw=true</c>.
     /// This is an observation-only compatibility switch for Testnet diagnostics;
     /// it neither enables nor adds a withdrawal endpoint.

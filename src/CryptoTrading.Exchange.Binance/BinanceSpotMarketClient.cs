@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Extensions.Options;
 
 namespace CryptoTrading.Exchange.Binance;
 
@@ -7,10 +9,33 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient httpClient;
+    private readonly BinanceClientOptions options;
+    private readonly TimeProvider timeProvider;
+    private readonly ConcurrentDictionary<string, CachedKlineEntry> cachedKlines = new(StringComparer.OrdinalIgnoreCase);
+
+    private sealed record CachedKlineEntry(IReadOnlyList<BinanceSpotKline> Klines, DateTimeOffset FetchedAtUtc);
 
     public BinanceSpotMarketClient(HttpClient httpClient)
+        : this(httpClient, new BinanceClientOptions(), TimeProvider.System)
+    {
+    }
+
+    public BinanceSpotMarketClient(
+        HttpClient httpClient,
+        BinanceClientOptions options,
+        TimeProvider? timeProvider = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public BinanceSpotMarketClient(
+        HttpClient httpClient,
+        IOptions<BinanceClientOptions> options)
+        : this(httpClient, options?.Value ?? new BinanceClientOptions())
+    {
     }
 
     public async Task PingAsync(CancellationToken cancellationToken = default)
@@ -42,6 +67,18 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         if (limit is < 1 or > 1000)
         {
             throw new ArgumentOutOfRangeException(nameof(limit), "Kline limit must be between 1 and 1000.");
+        }
+
+        var cacheKey = $"{normalizedSymbol}:{normalizedInterval}:{limit}";
+        var now = timeProvider.GetUtcNow();
+        if (options.KlineCacheDuration > TimeSpan.Zero &&
+            startTimeUtc is null &&
+            endTimeUtc is null &&
+            cachedKlines.TryGetValue(cacheKey, out var cached) &&
+            now >= cached.FetchedAtUtc &&
+            now - cached.FetchedAtUtc <= options.KlineCacheDuration)
+        {
+            return cached.Klines;
         }
 
         var query = new List<string>
@@ -88,6 +125,11 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
                 ParseDecimal(row[4]),
                 ParseDecimal(row[5]),
                 normalizedInterval));
+        }
+
+        if (options.KlineCacheDuration > TimeSpan.Zero && startTimeUtc is null && endTimeUtc is null)
+        {
+            cachedKlines[cacheKey] = new CachedKlineEntry(result, timeProvider.GetUtcNow());
         }
 
         return result;

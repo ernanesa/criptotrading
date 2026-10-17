@@ -14,6 +14,13 @@ public sealed class BinanceClientOptions
 
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Optional TTL for reusing a recently fetched GET /api/v3/klines response
+    /// for the same (symbol, interval, limit) when startTimeUtc and endTimeUtc are null.
+    /// Defaults to zero (always fetch fresh).
+    /// </summary>
+    public TimeSpan KlineCacheDuration { get; set; } = TimeSpan.Zero;
+
     internal Uri GetRestBaseAddress()
     {
         var defaultAddress = Environment switch

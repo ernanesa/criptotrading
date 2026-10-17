@@ -25,6 +25,8 @@ public static class ServiceCollectionExtensions
                 : BinanceEnvironment.Testnet;
             options.AllowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet;
             options.ClockSyncCacheDuration = TimeSpan.FromSeconds(30);
+            options.AccountSnapshotCacheDuration = TimeSpan.FromSeconds(1.5);
+            options.CommissionCacheDuration = TimeSpan.FromMinutes(2);
         });
     }
 
@@ -35,7 +37,11 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddOptions<BinanceClientOptions>()
-            .Configure(options => configure?.Invoke(options))
+            .Configure(options =>
+            {
+                options.KlineCacheDuration = TimeSpan.FromSeconds(1.5);
+                configure?.Invoke(options);
+            })
             .Validate(options =>
             {
                 try

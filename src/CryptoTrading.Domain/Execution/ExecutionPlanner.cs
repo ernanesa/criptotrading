@@ -303,6 +303,18 @@ public static class ExecutionPlanner
                 else // PassiveMakerPegged or IcebergChunked (maker)
                 {
                     var offset = Math.Max(0, tacticDecision.PegOffsetTicks);
+                    var spreadTicks = (market.BestAsk.Value - market.BestBid.Value) / tickSize;
+                    if (offset == 0 && spreadTicks >= 2m)
+                    {
+                        var favorableMicroPrice = intent.Side is OrderSide.Buy
+                            ? market.MicroPriceDivergenceBps >= 0.25m
+                            : market.MicroPriceDivergenceBps <= -0.25m;
+                        if (favorableMicroPrice)
+                        {
+                            offset = 1;
+                        }
+                    }
+
                     if (intent.Side is OrderSide.Buy)
                     {
                         var maxBuy = market.BestAsk.Value - tickSize;

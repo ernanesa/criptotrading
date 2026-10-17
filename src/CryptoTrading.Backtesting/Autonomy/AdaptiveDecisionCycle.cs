@@ -36,7 +36,9 @@ public sealed record AdaptiveDecisionCycleRequest(
     bool HasPendingExitReplan = false,
     string? PendingExitReplanStrategyId = null,
     string? PositionOriginatingStrategyId = null,
-    decimal? LifetimePeakProfitBps = null)
+    decimal? LifetimePeakProfitBps = null,
+    decimal? LeaderReturnBps = null,
+    decimal? LeaderOrderBookImbalance = null)
 {
     public void Validate()
     {
@@ -389,13 +391,20 @@ public sealed class AdaptiveDecisionCycle
         var isTrendNegativeExpectancy = (trendPerf is { ObservationCount: >= 3, AverageReward: < 0m }) ||
                                         (trendPerf is { ObservationCount: >= 1, AverageReward: <= -0.0015m });
 
+        var isAltcoin = !string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase);
+        var hasCrossAssetLeaderMomentum = isAltcoin &&
+                                          request.LeaderReturnBps is >= 6.0m &&
+                                          request.LeaderOrderBookImbalance is >= 0.20m;
+
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             !hasOpenPosition &&
             bars.Count >= 20 &&
             !isTrendQuarantined &&
             !isTrendNegativeExpectancy &&
             mlEval.MlWinProbability >= 0.51m &&
-            (orderBookImbalance >= 0.25m || (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m)) &&
+            (orderBookImbalance >= 0.25m ||
+             (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m) ||
+             (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.10m && microPriceDivergenceBps >= 0.15m)) &&
             regime.Regime == MarketRegime.BullTrend &&
             regime.TrendSlopeRate > 0m)
         {
@@ -410,7 +419,7 @@ public sealed class AdaptiveDecisionCycle
                 SelectedStrategyId = trendFollowingId,
                 SelectedSide = OrderSide.Buy,
                 SelectedNotional = request.EntryTargetNotional,
-                OrchestrationReason = $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}, MicroPriceDiv={microPriceDivergenceBps:+0.00;-0.00}bps) in {regime.Regime}.",
+                OrchestrationReason = $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}, MicroPriceDiv={microPriceDivergenceBps:+0.00;-0.00}bps, LeaderRet={request.LeaderReturnBps ?? 0m:+0.0;-0.0}bps) in {regime.Regime}.",
                 IsNoTrade = false
             };
         }
@@ -564,7 +573,8 @@ public sealed class AdaptiveDecisionCycle
             : 0m;
         var bookAlignment = isEntry ? orderBookImbalance : -orderBookImbalance;
         var bookBonus = Math.Clamp(bookAlignment * 0.15m, -0.22m, 0.10m);
-        var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus, 0.05m, 0.99m);
+        var leaderBonus = isEntry && hasCrossAssetLeaderMomentum ? 0.035m : 0m;
+        var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus + leaderBonus, 0.05m, 0.99m);
         var decisionConfidence = bars.Count >= 20
             ? Math.Round(Math.Clamp((baseConfidence * 0.58m) + (mlEval.MlWinProbability * 0.42m), 0.05m, 0.99m), 4)
             : Math.Round(baseConfidence, 4);
@@ -653,13 +663,15 @@ public sealed class AdaptiveDecisionCycle
         else if (bars.Count >= 20 && isEntry && request.ExecutionMarket?.QuantityStepSize is not null && request.EntryTargetNotional >= 6m && targetNotional > 0m)
         {
             var baseTarget = Math.Min(request.EntryTargetNotional, request.RiskPolicy.MaxOrderNotional);
-            var kellyMultiplier = (decisionConfidence >= 0.82m && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
-                ? 1.35m
-                : (decisionConfidence >= 0.74m && mlEval.MlWinProbability >= 0.54m)
-                    ? 1.18m
-                    : (decisionConfidence < 0.70m || mlEval.MlWinProbability < 0.45m)
-                        ? 0.85m
-                        : 1.06m;
+            var kellyMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.72m && orderBookImbalance >= 0.30m && microPriceDivergenceBps >= 0.35m)
+                ? 1.55m
+                : (decisionConfidence >= 0.82m && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
+                    ? 1.35m
+                    : (decisionConfidence >= 0.74m && mlEval.MlWinProbability >= 0.54m)
+                        ? 1.18m
+                        : (decisionConfidence < 0.70m || mlEval.MlWinProbability < 0.45m)
+                            ? 0.85m
+                            : 1.06m;
             targetNotional = Math.Clamp(
                 Math.Round(baseTarget * kellyMultiplier, 2),
                 Math.Min(10m, request.RiskPolicy.MaxOrderNotional),
