@@ -88,6 +88,33 @@ public sealed class AutonomyCycleMarketDataTests
         Assert.Contains("Stale", ex.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RestKlinesSnapshotAllowsResumeWhenCheckpointIsOlderThanSnapshotWindow()
+    {
+        var start = DateTimeOffset.Parse("2026-09-20T12:00:00Z", CultureInfo.InvariantCulture);
+        var klines = new List<BinanceSpotKline>(25);
+        for (var i = 0; i < 25; i++)
+        {
+            klines.Add(Kline(start.AddMinutes(i), 100m + i));
+        }
+
+        var now = start.AddMinutes(25).AddSeconds(10);
+        // Checkpoint from 2 hours prior to the snapshot window
+        var oldCheckpoint = start.AddHours(-2);
+
+        var mapped = AutonomyCycleHostedService.ValidateAndMapKlines(
+            klines,
+            "BTCUSDT",
+            "1m",
+            TimeSpan.FromMinutes(2),
+            now,
+            previousCloseUtc: oldCheckpoint);
+
+        Assert.Equal(25, mapped.Count);
+        Assert.Equal(start.AddMinutes(1), mapped[0].Bar.CloseTimeUtc);
+        Assert.Equal(start.AddMinutes(25), mapped[^1].Bar.CloseTimeUtc);
+    }
+
     private static BinanceSpotKline Kline(DateTimeOffset open, decimal close) => new(
         open,
         open.AddMinutes(1).AddMilliseconds(-1),
