@@ -1186,10 +1186,13 @@ internal sealed class AutonomyCycleHostedService(
         if (previousCloseUtc is { } previous && accepted.Count > 0)
         {
             var expectedNext = AddInterval(previous, interval);
-            var firstAfterCheckpoint = accepted.FirstOrDefault(bar => bar.Bar.CloseTimeUtc > previous);
-            if (firstAfterCheckpoint is not null && firstAfterCheckpoint.Bar.CloseTimeUtc > expectedNext)
+            if (previous >= accepted[0].Bar.CloseTimeUtc || expectedNext >= accepted[0].Bar.CloseTimeUtc)
             {
-                throw new InvalidOperationException("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.");
+                var firstAfterCheckpoint = accepted.FirstOrDefault(bar => bar.Bar.CloseTimeUtc > previous);
+                if (firstAfterCheckpoint is not null && firstAfterCheckpoint.Bar.CloseTimeUtc > expectedNext)
+                {
+                    throw new InvalidOperationException("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.");
+                }
             }
         }
 
