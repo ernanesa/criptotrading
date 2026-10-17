@@ -730,6 +730,30 @@ internal sealed class AutonomyCycleHostedService(
             var hasPendingEntryReplan = replanCandidate is { Side: CryptoTrading.Domain.Orders.OrderSide.Buy } entryRc &&
                                         portfolio.GrossExposureNotional <= 5m &&
                                         entryRc.CreatedAtUtc >= now.AddMinutes(-2);
+            decimal? leaderReturnBps = null;
+            decimal? leaderOrderBookImbalance = null;
+            if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
+            {
+                if (klineCache.TryGetValue("BTCUSDT", out var btcKlines))
+                {
+                    lock (btcKlines)
+                    {
+                        if (btcKlines.Count >= 2 && btcKlines[^2].Close > 0m)
+                        {
+                            leaderReturnBps = Math.Round((btcKlines[^1].Close - btcKlines[^2].Close) / btcKlines[^2].Close * 10_000m, 4);
+                        }
+                    }
+                }
+
+                if (streamBookTickers.TryGetValue("BTCUSDT", out var btcTicker) &&
+                    (btcTicker.BidQuantity + btcTicker.AskQuantity) > 0m)
+                {
+                    leaderOrderBookImbalance = Math.Round(
+                        (btcTicker.BidQuantity - btcTicker.AskQuantity) / (btcTicker.BidQuantity + btcTicker.AskQuantity),
+                        4);
+                }
+            }
+
             var adaptiveRequest = new AdaptiveDecisionCycleRequest(
                 bars,
                 portfolio,
@@ -753,7 +777,9 @@ internal sealed class AutonomyCycleHostedService(
                 PendingExitReplanStrategyId: hasPendingExitReplan ? $"trend-following-{symbol.ToLowerInvariant()}" : null,
 #pragma warning restore CA1308
                 PositionOriginatingStrategyId: originatingStrat,
-                LifetimePeakProfitBps: lifetimePeakBps);
+                LifetimePeakProfitBps: lifetimePeakBps,
+                LeaderReturnBps: leaderReturnBps,
+                LeaderOrderBookImbalance: leaderOrderBookImbalance);
 
             if (durablePerformances is not null)
             {

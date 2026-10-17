@@ -862,6 +862,57 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal(0.50m, snapshot.OrderBookImbalance);
     }
 
+    [Fact]
+    public void ExecutionPlannerAppliesPennyJumpWhenStoikovMicroPriceDivergenceIsStrongAndSpreadHasHeadroom()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(10_000m),
+            new Price(10_005m),
+            50_000m,
+            TestTime,
+            quantityStepSize: 0.001m,
+            priceTickSize: 1.0m,
+            bidQuantity: 4.0m,
+            askQuantity: 1.0m);
+
+        var riskReq = new RiskEvaluationRequest(100m, 0m, 0m, 0m, TestTime, TestTime);
+        var intent = new OrderIntent(
+            OrderId.New(),
+            ClientOrderId.New(),
+            BtcUsdt,
+            OrderSide.Buy,
+            OrderType.Limit,
+            new Quantity(0.01m),
+            new Price(10_000m),
+            CorrelationId.New(),
+            IdempotencyKey.New(),
+            riskReq,
+            TestTime);
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "v1", [RiskReasonCodes.TargetWithinLimits]);
+        var tactic = new ExecutionTacticDecision(
+            ExecutionTactic.PassiveMakerPegged,
+            UrgencyScore: 0.40m,
+            ExpectedSlippageBps: 1.0m,
+            NetExpectedBenefitBps: 5.0m,
+            RequiresImmediateFill: false,
+            Reason: "Maker pegged",
+            PegOffsetTicks: 0);
+
+        var planResult = ExecutionPlanner.Plan(new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            TestTime,
+            TimeSpan.FromMinutes(5),
+            TimeSpan.FromMinutes(1),
+            tactic: tactic));
+
+        Assert.NotNull(planResult.Plan);
+        // BestBid is 10_000, BestAsk is 10_005, tickSize is 1.0.
+        // Because MicroPriceDivergenceBps > +0.25 bps and spreadTicks >= 2, Penny-Jump places limit order at 10_001!
+        Assert.Equal(10_001m, planResult.Plan!.LimitPrice.Value);
+    }
+
     private static EffectiveCommissionSnapshot CreateCommission(DateTimeOffset observedAtUtc) => new(
         BtcUsdt, "testnet", "account",
         new CommissionRateSet(.004m, .002m, 0m, 0m),

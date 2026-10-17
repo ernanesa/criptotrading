@@ -138,6 +138,37 @@ public sealed class BinanceSpotMarketClientTests
         await Assert.ThrowsAsync<ArgumentException>(() => client.GetExchangeInfoAsync(symbol, cancellationToken: TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task GetKlinesReusesShortLivedCacheWithinConfiguredWindow()
+    {
+        using var handler = new CountingHandler("[[1720000000000,\"60000.00\",\"61000.00\",\"59000.00\",\"60500.00\",\"12.5\",1720086399999,\"756250.00\",100,\"605000.00\",10,\"0\"]]");
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        var options = new BinanceClientOptions { KlineCacheDuration = TimeSpan.FromSeconds(1.5) };
+        var client = new BinanceSpotMarketClient(httpClient, options);
+
+        var first = await client.GetKlinesAsync("BTCUSDT", "1m", limit: 100, cancellationToken: TestContext.Current.CancellationToken);
+        var second = await client.GetKlinesAsync("BTCUSDT", "1m", limit: 100, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(first);
+        Assert.Same(first, second);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    private sealed class CountingHandler(string payload, HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
+    {
+        public int CallCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            CallCount++;
+            return Task.FromResult(new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(payload),
+                RequestMessage = request
+            });
+        }
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "HttpClient owns and disposes its message handler in the test fixture.")]
     private static HttpClient CreateHttpClient(string payload, HttpStatusCode statusCode = HttpStatusCode.OK)
     {
