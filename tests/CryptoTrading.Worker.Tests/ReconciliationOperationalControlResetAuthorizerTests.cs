@@ -34,6 +34,56 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     }
 
     [Fact]
+    public void IsAuthorizedWhenSafeModeRestoredByWorkerBootstrapReturnsTrue()
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "worker-bootstrap",
+            Reason: "RESTORED_DURABLE_STOP:abc123");
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsAuthorizedWhenSafeModeEnteredByPeriodicReconciliationReturnsTrue()
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "periodic-reconciliation",
+            Reason: "PERIODIC_RECONCILIATION_FAILURE");
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
+    [Fact]
     public void IsAuthorizedWhenSafeModeEnteredByAutonomyA2ReturnsFalse()
     {
         var current = new OperationalControlSnapshot(
