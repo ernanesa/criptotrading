@@ -24,10 +24,15 @@ internal sealed class PeriodicReconciliationHostedService(
         }
 
         using var timer = new PeriodicTimer(TimeSpan.FromMinutes(options.Value.ReconciliationIntervalMinutes));
-        try
+        while (!stoppingToken.IsCancellationRequested)
         {
-            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            try
             {
+                if (!await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+                {
+                    break;
+                }
+
                 var result = await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
                 if (!result.IsHealthy)
                 {
@@ -40,7 +45,7 @@ internal sealed class PeriodicReconciliationHostedService(
                     result.IsHealthy,
                     result.Events.Count,
                     result.MismatchCount,
-            result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count,
+                    result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count,
                     result.OpenOrderCount), stoppingToken).ConfigureAwait(false);
                 _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, stoppingToken).ConfigureAwait(false);
                 await runtimeSupervisor.MarkReconciliationAsync(
@@ -72,33 +77,34 @@ internal sealed class PeriodicReconciliationHostedService(
                     PeriodicReconciliationLog.Blocked(logger, result.CorrelationId.ToString(), reportPath);
                 }
             }
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-            // Normal host shutdown.
-        }
-        catch (Exception exception)
-        {
-            using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
-            try
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
-                _ = await operationalControl.EnterSafeModeAsync(new OperationalControlCommand(
-                    "periodic-reconciliation",
-                    "PERIODIC_RECONCILIATION_FAILURE",
-                    IdempotencyKey.New(),
-                    DateTimeOffset.UtcNow), stoppingToken).ConfigureAwait(false);
+                break;
             }
-            catch (InvalidOperationException controlException)
+#pragma warning disable CA1031 // Periodic reconciliation converts unexpected tick failures into SafeMode and retries next tick instead of crashing host.
+            catch (Exception exception)
             {
-                PeriodicReconciliationLog.ControlFailure(logger, controlException.GetType().Name);
-            }
-            catch (ArgumentException controlException)
-            {
-                PeriodicReconciliationLog.ControlFailure(logger, controlException.GetType().Name);
-            }
+                using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
+                try
+                {
+                    _ = await operationalControl.EnterSafeModeAsync(new OperationalControlCommand(
+                        "account-reconciliation",
+                        "PERIODIC_RECONCILIATION_FAILURE",
+                        IdempotencyKey.New(),
+                        DateTimeOffset.UtcNow), stoppingToken).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException controlException)
+                {
+                    PeriodicReconciliationLog.ControlFailure(logger, controlException.GetType().Name);
+                }
+                catch (ArgumentException controlException)
+                {
+                    PeriodicReconciliationLog.ControlFailure(logger, controlException.GetType().Name);
+                }
 
-            PeriodicReconciliationLog.Failed(logger, exception.GetType().Name);
-            throw new InvalidOperationException("Periodic reconciliation failed closed; inspect the correlated structured failure event.");
+                PeriodicReconciliationLog.Failed(logger, exception.GetType().Name);
+            }
+#pragma warning restore CA1031
         }
     }
 }
