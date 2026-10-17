@@ -29,7 +29,9 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
         // 4. Only reset if the reset command and authorization are issued by account-reconciliation.
         // 5. Must have explicit reconciliation-auto-recovery approval identifier.
         return current.Mode == OperationalMode.SafeMode &&
-               string.Equals(current.ChangedBy, ReconciliationActor, StringComparison.Ordinal) &&
+               (string.Equals(current.ChangedBy, ReconciliationActor, StringComparison.Ordinal) ||
+                string.Equals(current.ChangedBy, "worker-bootstrap", StringComparison.Ordinal) ||
+                string.Equals(current.ChangedBy, "periodic-reconciliation", StringComparison.Ordinal)) &&
                string.Equals(resetCommand.Actor, ReconciliationActor, StringComparison.Ordinal) &&
                string.Equals(authorization.Actor, ReconciliationActor, StringComparison.Ordinal) &&
                authorization.ApprovalId.StartsWith(AutoRecoveryApprovalPrefix, StringComparison.Ordinal);
