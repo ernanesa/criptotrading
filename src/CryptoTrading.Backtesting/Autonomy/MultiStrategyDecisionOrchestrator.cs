@@ -348,8 +348,9 @@ public static class MultiStrategyDecisionOrchestrator
 
         // 4. Evaluate Volatility Squeeze (Carter Compression Breakout)
         var squeezePeriod = bars.Count >= 20 ? 20 : Math.Max(5, bars.Count);
+        var bollingerMultiplier = regime.VolatilityRate < 0.0003m ? 1.8m : 2.0m;
         var squeezeStrategy = new VolatilitySqueezeStrategy(new VolatilitySqueezeParameters(
-            squeezeStrategyId, "1.0.0", symbol, period: squeezePeriod, bollingerMultiplier: 2.0m, keltnerMultiplier: 1.5m, feeRate: 0.001m, slippageRate: 0.0005m));
+            squeezeStrategyId, "1.0.0", symbol, period: squeezePeriod, bollingerMultiplier: bollingerMultiplier, keltnerMultiplier: 1.5m, feeRate: 0.001m, slippageRate: 0.0005m));
         var squeezeDecisions = squeezeStrategy.Evaluate(bars);
         var lastSqueeze = squeezeDecisions[^1];
         var squeezeSignal = bars.Count >= 20 ? lastSqueeze.Signal : VolatilitySqueezeSignal.NoTrade;

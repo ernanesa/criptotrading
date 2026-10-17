@@ -38,7 +38,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     string? PositionOriginatingStrategyId = null,
     decimal? LifetimePeakProfitBps = null,
     decimal? LeaderReturnBps = null,
-    decimal? LeaderOrderBookImbalance = null)
+    decimal? LeaderOrderBookImbalance = null,
+    DateTimeOffset? LastClosedTradeAtUtc = null)
 {
     public void Validate()
     {
@@ -59,6 +60,11 @@ public sealed record AdaptiveDecisionCycleRequest(
         if (EvaluatedAtUtc.Offset != TimeSpan.Zero)
         {
             throw new ArgumentException("Evaluation time must be UTC.", nameof(EvaluatedAtUtc));
+        }
+
+        if (LastClosedTradeAtUtc is { Offset: not { Ticks: 0 } })
+        {
+            throw new ArgumentException("Last closed trade time must be UTC.", nameof(LastClosedTradeAtUtc));
         }
     }
 }
@@ -373,8 +379,8 @@ public sealed class AdaptiveDecisionCycle
         else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
                  bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
-                 currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
-                 (orderBookImbalance <= -0.35m || mlEval.MlWinProbability < 0.42m))
+                 currentUnrealizedProfitBps >= (roundTripFeeBps + 2.0m) &&
+                 (orderBookImbalance <= -0.15m || mlEval.MlWinProbability < 0.46m))
         {
             orchestration = orchestration with
             {
@@ -579,8 +585,25 @@ public sealed class AdaptiveDecisionCycle
             ? Math.Round(Math.Clamp((baseConfidence * 0.58m) + (mlEval.MlWinProbability * 0.42m), 0.05m, 0.99m), 4)
             : Math.Round(baseConfidence, 4);
 
+        var isMomentumEntry = orchestration.SelectedSide == OrderSide.Buy &&
+            (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase));
+
         if (bars.Count >= 20)
         {
+            if (isEntry && request.LastClosedTradeAtUtc is { } lastClose &&
+                lastClose > DateTimeOffset.MinValue &&
+                (request.EvaluatedAtUtc - lastClose) < TimeSpan.FromMinutes(4))
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "POST_TRADE_COOLDOWN_ACTIVE",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval);
+            }
+
             if (isEntry && mlEval.IsSsaStructuralBreakdown)
             {
                 return CreateNoTradeResult(
@@ -604,6 +627,20 @@ public sealed class AdaptiveDecisionCycle
                     orchestration.Candidates,
                     null,
                     "ADVERSE_ORDER_BOOK_IMBALANCE",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval);
+            }
+
+            if (isEntry && regime.Regime == MarketRegime.MeanRevertingRange &&
+                isMomentumEntry &&
+                (mlEval.MlWinProbability < 0.53m || orderBookImbalance < 0.10m))
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "RANGE_MOMENTUM_REQUIRES_ML_AND_BOOK_CONFIRMATION",
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval);
@@ -715,11 +752,12 @@ public sealed class AdaptiveDecisionCycle
         }
 
         // 8. Adaptive Execution Tactic Selection
-        var isMomentumEntry = orchestration.SelectedSide == OrderSide.Buy &&
-            (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase));
-        var isUrgentBreakout = isMomentumEntry && (mlEval.MlWinProbability >= 0.85m || volBps >= 25.0m);
+        var isUrgentBreakout = isMomentumEntry &&
+            (mlEval.MlWinProbability >= 0.65m ||
+             volBps >= 20.0m ||
+             (request.ExecutionMarket is not null && request.ExecutionMarket.OrderBookImbalance >= 0.30m));
         var urgency = isUrgentBreakout
-            ? 0.85m
+            ? 0.80m
             : (isMomentumEntry ? 0.50m : (orchestration.SelectedSide == OrderSide.Sell ? 0.45m : 0.30m));
         var topOfBookSpreadBps = request.ExecutionMarket is not null && request.ExecutionMarket.BestBid.Value > 0m
             ? Math.Round((request.ExecutionMarket.BestAsk.Value - request.ExecutionMarket.BestBid.Value) / request.ExecutionMarket.BestBid.Value * 10_000m, 2)

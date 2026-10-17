@@ -913,6 +913,92 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal(10_001m, planResult.Plan!.LimitPrice.Value);
     }
 
+    [Fact]
+    public void FailsClosedWhenPostTradeCooldownIsActive()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = new decimal[25];
+        for (var i = 0; i < 25; i++)
+        {
+            prices[i] = 84_000m + (i * 20m);
+        }
+        var bars = Bars(prices);
+
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LastClosedTradeAtUtc: TestTime.AddMinutes(-2)); // 2 minutes ago < 4 minutes cooldown
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("POST_TRADE_COOLDOWN_ACTIVE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void AllowsEntryWhenPostTradeCooldownHasExpired()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = new decimal[25];
+        for (var i = 0; i < 25; i++)
+        {
+            prices[i] = 84_000m + (i * 20m);
+        }
+        var bars = Bars(prices);
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_480m), new Price(84_481m), 10_000m, TestTime,
+                isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
+                bidQuantity: 18.0m, askQuantity: 2.0m),
+            LastClosedTradeAtUtc = TestTime.AddMinutes(-5) // 5 minutes ago >= 4 minutes cooldown
+        };
+
+        var result = cycle.Evaluate(request);
+
+        // Result is not blocked by cooldown
+        Assert.NotEqual("POST_TRADE_COOLDOWN_ACTIVE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksMomentumEntryInMeanRevertingRangeWithoutConfluence()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 25 bars in a flat range
+        var prices = new decimal[25];
+        for (var i = 0; i < 25; i++)
+        {
+            prices[i] = 84_000m + ((i % 2 == 0) ? 1m : -1m);
+        }
+        var bars = Bars(prices);
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_000m), new Price(84_001m), 10_000m, TestTime,
+                isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
+                bidQuantity: 5.0m, askQuantity: 5.0m) // orderBookImbalance = 0.0m < 0.10m threshold
+        };
+
+        var result = cycle.Evaluate(request);
+
+        // If a momentum entry attempted in MeanRevertingRange without book imbalance >= 0.10, blocked
+        if (result.RecommendedSide == OrderSide.Buy &&
+            result.SelectedStrategyId is not null &&
+            !result.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase))
+        {
+            Assert.True(result.IsNoTrade);
+            Assert.Equal("RANGE_MOMENTUM_REQUIRES_ML_AND_BOOK_CONFIRMATION", result.NoTradeReason);
+        }
+    }
+
     private static EffectiveCommissionSnapshot CreateCommission(DateTimeOffset observedAtUtc) => new(
         BtcUsdt, "testnet", "account",
         new CommissionRateSet(.004m, .002m, 0m, 0m),

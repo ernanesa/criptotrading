@@ -27,9 +27,10 @@ internal static class OperationalControlRegistration
                 ?? throw new InvalidOperationException("The in-memory operational audit sink must support async append."));
         }
 
+        _ = services.AddSingleton<IOperationalControlResetAuthorizer, ReconciliationOperationalControlResetAuthorizer>();
         _ = services.AddSingleton<IOperationalControl>(serviceProvider =>
             new InMemoryOperationalControl(
-                new DenyOperationalControlResetAuthorizer(),
+                serviceProvider.GetRequiredService<IOperationalControlResetAuthorizer>(),
                 serviceProvider.GetRequiredService<IOperationalControlAuditSink>(),
                 serviceProvider.GetRequiredService<IAsyncOperationalControlAuditSink>()));
         _ = services.AddSingleton<IAsyncOperationalControl>(serviceProvider =>

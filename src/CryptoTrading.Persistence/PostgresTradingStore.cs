@@ -1560,14 +1560,24 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
     /// intentionally incomplete, requiring one subsequent coherent valuation
     /// before autonomous entries can be authorized.
     /// </summary>
-    public async Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(
+    public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(
         string scope,
         Symbol symbol,
         Asset quoteAsset,
         DateTimeOffset dayStartUtc,
         decimal? currentEquityNotional,
         DateTimeOffset valuationAtUtc,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ExecuteWithRetryAsync(ct => RecordAutonomyRiskContextCoreAsync(scope, symbol, quoteAsset, dayStartUtc, currentEquityNotional, valuationAtUtc, ct), cancellationToken: cancellationToken);
+
+    private async Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextCoreAsync(
+        string scope,
+        Symbol symbol,
+        Asset quoteAsset,
+        DateTimeOffset dayStartUtc,
+        decimal? currentEquityNotional,
+        DateTimeOffset valuationAtUtc,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scope);
         if (dayStartUtc.Offset != TimeSpan.Zero)
@@ -3913,6 +3923,30 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         }
     }
 
+    private static bool IsTransientPostgresException(PostgresException pex) =>
+        pex.SqlState is "40001" or "40P01" ||
+        pex.SqlState.StartsWith("08", StringComparison.Ordinal) ||
+        pex.SqlState.StartsWith("57P", StringComparison.Ordinal);
+
+    private static async Task<TResult> ExecuteWithRetryAsync<TResult>(
+        Func<CancellationToken, Task<TResult>> operation,
+        int maxRetries = 3,
+        CancellationToken cancellationToken = default)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await operation(cancellationToken).ConfigureAwait(false);
+            }
+            catch (PostgresException pex) when (IsTransientPostgresException(pex) && attempt <= maxRetries)
+            {
+                var delayMs = (attempt * 25) + System.Security.Cryptography.RandomNumberGenerator.GetInt32(10, 30);
+                await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
     private static async Task ExecuteAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -3948,9 +3982,14 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             ?? throw new InvalidOperationException("The existence query returned no value."));
     }
 
-    public async Task<CapitalReservationResult> TryReserveCapitalAsync(
+    public Task<CapitalReservationResult> TryReserveCapitalAsync(
         CapitalReservationRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ExecuteWithRetryAsync(ct => TryReserveCapitalCoreAsync(request, ct), cancellationToken: cancellationToken);
+
+    private async Task<CapitalReservationResult> TryReserveCapitalCoreAsync(
+        CapitalReservationRequest request,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -4097,7 +4136,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         return result.Reservation;
     }
 
-    public async Task<CapitalReservationRecord> TransitionReservationAsync(
+    public Task<CapitalReservationRecord> TransitionReservationAsync(
         string clientOrderId,
         CapitalReservationStatus targetStatus,
         decimal consumedAmount,
@@ -4105,7 +4144,18 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         long fencingToken,
         DateTimeOffset occurredAtUtc,
         string? reason = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        ExecuteWithRetryAsync(ct => TransitionReservationCoreAsync(clientOrderId, targetStatus, consumedAmount, workerInstanceId, fencingToken, occurredAtUtc, reason, ct), cancellationToken: cancellationToken);
+
+    private async Task<CapitalReservationRecord> TransitionReservationCoreAsync(
+        string clientOrderId,
+        CapitalReservationStatus targetStatus,
+        decimal consumedAmount,
+        string workerInstanceId,
+        long fencingToken,
+        DateTimeOffset occurredAtUtc,
+        string? reason,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(clientOrderId);
         ArgumentException.ThrowIfNullOrWhiteSpace(workerInstanceId);
