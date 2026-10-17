@@ -21,6 +21,12 @@ public sealed class BinanceClientOptions
     /// </summary>
     public TimeSpan KlineCacheDuration { get; set; } = TimeSpan.Zero;
 
+    /// <summary>
+    /// Optional TTL for reusing a recently fetched GET /api/v3/ticker/bookTicker response
+    /// for the same symbol. Defaults to zero (always fetch fresh).
+    /// </summary>
+    public TimeSpan BookTickerCacheDuration { get; set; } = TimeSpan.Zero;
+
     internal Uri GetRestBaseAddress()
     {
         var defaultAddress = Environment switch

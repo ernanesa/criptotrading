@@ -12,8 +12,10 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
     private readonly BinanceClientOptions options;
     private readonly TimeProvider timeProvider;
     private readonly ConcurrentDictionary<string, CachedKlineEntry> cachedKlines = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CachedBookTickerEntry> cachedBookTickers = new(StringComparer.OrdinalIgnoreCase);
 
     private sealed record CachedKlineEntry(IReadOnlyList<BinanceSpotKline> Klines, DateTimeOffset FetchedAtUtc);
+    private sealed record CachedBookTickerEntry(BinanceBookTicker Ticker, DateTimeOffset FetchedAtUtc);
 
     public BinanceSpotMarketClient(HttpClient httpClient)
         : this(httpClient, new BinanceClientOptions(), TimeProvider.System)
@@ -204,6 +206,15 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         CancellationToken cancellationToken = default)
     {
         var normalizedSymbol = NormalizeSymbol(symbol);
+        var now = timeProvider.GetUtcNow();
+        if (options.BookTickerCacheDuration > TimeSpan.Zero &&
+            cachedBookTickers.TryGetValue(normalizedSymbol, out var cached) &&
+            now >= cached.FetchedAtUtc &&
+            now - cached.FetchedAtUtc <= options.BookTickerCacheDuration)
+        {
+            return cached.Ticker;
+        }
+
         using var response = await httpClient.GetAsync(
             new Uri($"v3/ticker/bookTicker?symbol={Uri.EscapeDataString(normalizedSymbol)}", UriKind.Relative),
             cancellationToken).ConfigureAwait(false);
@@ -236,13 +247,20 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
             throw new JsonException("Binance book ticker contains an invalid top-of-book quote.");
         }
 
-        return new BinanceBookTicker(
+        var ticker = new BinanceBookTicker(
             normalizedSymbol,
             bidPrice,
             bidQuantity,
             askPrice,
             askQuantity,
-            DateTimeOffset.UtcNow);
+            timeProvider.GetUtcNow());
+
+        if (options.BookTickerCacheDuration > TimeSpan.Zero)
+        {
+            cachedBookTickers[normalizedSymbol] = new CachedBookTickerEntry(ticker, timeProvider.GetUtcNow());
+        }
+
+        return ticker;
     }
 
     public Task<BinanceExchangeInfo> GetExchangeInfoAsync(

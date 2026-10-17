@@ -154,6 +154,22 @@ public sealed class BinanceSpotMarketClientTests
         Assert.Equal(1, handler.CallCount);
     }
 
+    [Fact]
+    public async Task GetBookTickerReusesShortLivedCacheWithinConfiguredWindow()
+    {
+        using var handler = new CountingHandler("{\"symbol\":\"BTCUSDT\",\"bidPrice\":\"60000.00\",\"bidQty\":\"0.25\",\"askPrice\":\"60001.00\",\"askQty\":\"0.10\"}");
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        var options = new BinanceClientOptions { BookTickerCacheDuration = TimeSpan.FromSeconds(1.5) };
+        var client = new BinanceSpotMarketClient(httpClient, options);
+
+        var first = await client.GetBookTickerAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
+        var second = await client.GetBookTickerAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(60000m, first.BidPrice);
+        Assert.Same(first, second);
+        Assert.Equal(1, handler.CallCount);
+    }
+
     private sealed class CountingHandler(string payload, HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public int CallCount { get; private set; }
