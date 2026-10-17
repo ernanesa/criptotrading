@@ -65,6 +65,8 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastKlineFetchUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> positionOriginatingStrategy = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, decimal> positionLifetimePeakProfitBps = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (decimal CostNotional, decimal Quantity)> positionCostBases = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarTriggerUtc = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
@@ -297,6 +299,29 @@ internal sealed class AutonomyCycleHostedService(
                             tickerEvent.BestAskPrice,
                             tickerEvent.BestAskQuantity,
                             tickerEvent.ReceivedAt);
+
+                        if (positionCostBases.TryGetValue(tickerEvent.Symbol, out var basis) &&
+                            basis.CostNotional > 0m && basis.Quantity > 0m &&
+                            tickerEvent.BestBidPrice > 0m)
+                        {
+                            var curValueNotional = basis.Quantity * tickerEvent.BestBidPrice;
+                            var curProfitBps = (curValueNotional - basis.CostNotional) / basis.CostNotional * 10_000m;
+                            var peakBps = positionLifetimePeakProfitBps.AddOrUpdate(tickerEvent.Symbol, curProfitBps, (_, peak) => Math.Max(peak, curProfitBps));
+
+                            var isTakeProfitTrigger = curProfitBps >= 45.0m;
+                            var isChandelierTrigger = peakBps >= 25.0m && (peakBps - curProfitBps) >= 12.0m && curProfitBps >= 15.0m;
+
+                            if (isTakeProfitTrigger || isChandelierTrigger)
+                            {
+                                var nowUtc = tickerEvent.ReceivedAt;
+                                if (!lastIntrabarTriggerUtc.TryGetValue(tickerEvent.Symbol, out var lastTrigger) ||
+                                    nowUtc - lastTrigger >= TimeSpan.FromSeconds(2))
+                                {
+                                    lastIntrabarTriggerUtc[tickerEvent.Symbol] = nowUtc;
+                                    barCloseSignalChannel.Writer.TryWrite(nowUtc);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -686,15 +711,33 @@ internal sealed class AutonomyCycleHostedService(
         string? originatingStrat = null;
         if (hasOpenExposure && accounting.HasPositionBasis && accounting.PositionCostNotional > 0m)
         {
+            positionCostBases[symbol] = (accounting.PositionCostNotional, baseQuantity);
             var curProfitBps = (portfolio.GrossExposureNotional - accounting.PositionCostNotional) / accounting.PositionCostNotional * 10_000m;
-            lifetimePeakBps = positionLifetimePeakProfitBps.AddOrUpdate(symbol, curProfitBps, (_, peak) => Math.Max(peak, curProfitBps));
-            if (positionOriginatingStrategy.TryGetValue(symbol, out var strat))
+
+            // Reconstruct historical lifetime peak from closed bars if unrecorded (e.g. after daemon restart)
+            var avgEntryPrice = baseQuantity > 0m ? accounting.PositionCostNotional / baseQuantity : 0m;
+            var highestRecentPrice = avgEntryPrice > 0m && closed.Count > 0 ? closed.Max(c => c.Bar.ClosePrice.Value) : 0m;
+            var reconstructedPeakBps = avgEntryPrice > 0m && highestRecentPrice > avgEntryPrice
+                ? (highestRecentPrice - avgEntryPrice) / avgEntryPrice * 10_000m
+                : curProfitBps;
+
+            lifetimePeakBps = positionLifetimePeakProfitBps.AddOrUpdate(
+                symbol,
+                Math.Max(curProfitBps, reconstructedPeakBps),
+                (_, peak) => Math.Max(peak, Math.Max(curProfitBps, reconstructedPeakBps)));
+
+            if (!positionOriginatingStrategy.TryGetValue(symbol, out var strat) || string.IsNullOrWhiteSpace(strat))
             {
-                originatingStrat = strat;
+#pragma warning disable CA1308 // Strategy identifiers use lowercase slugs by design
+                strat = $"trend-following-{symbol.ToLowerInvariant()}";
+#pragma warning restore CA1308
+                positionOriginatingStrategy[symbol] = strat;
             }
+            originatingStrat = strat;
         }
         else if (!hasOpenExposure)
         {
+            positionCostBases.TryRemove(symbol, out _);
             positionLifetimePeakProfitBps.TryRemove(symbol, out _);
             positionOriginatingStrategy.TryRemove(symbol, out _);
         }

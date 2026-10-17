@@ -102,6 +102,7 @@ public static class MultiStrategyDecisionOrchestrator
         var trendStrategyId = $"trend-following-{symKey}";
         var breakoutStrategyId = $"breakout-momentum-{symKey}";
         var meanRevStrategyId = $"mean-reversion-{symKey}";
+        var squeezeStrategyId = $"volatility-squeeze-{symKey}";
         var candidates = new List<StrategyCandidateEvaluation>(4);
 
         // 1. Evaluate Trend Following
@@ -344,6 +345,67 @@ public static class MultiStrategyDecisionOrchestrator
         decimal meanRevScore = meanRevSide.HasValue ? (regime.FavorsMeanReversion ? 1.6m : 0.3m) : 0.0m;
         candidates.Add(new StrategyCandidateEvaluation(
             meanRevStrategyId, "1.0.0", meanRevSide, meanRevScore, meanRevSignal.ToString(), meanRevReasonText));
+
+        // 4. Evaluate Volatility Squeeze (Carter Compression Breakout)
+        var squeezePeriod = bars.Count >= 20 ? 20 : Math.Max(5, bars.Count);
+        var squeezeStrategy = new VolatilitySqueezeStrategy(new VolatilitySqueezeParameters(
+            squeezeStrategyId, "1.0.0", symbol, period: squeezePeriod, bollingerMultiplier: 2.0m, keltnerMultiplier: 1.5m, feeRate: 0.001m, slippageRate: 0.0005m));
+        var squeezeDecisions = squeezeStrategy.Evaluate(bars);
+        var lastSqueeze = squeezeDecisions[^1];
+        var squeezeSignal = bars.Count >= 20 ? lastSqueeze.Signal : VolatilitySqueezeSignal.NoTrade;
+        var squeezeReason = bars.Count >= 20 ? lastSqueeze.Reason : VolatilitySqueezeReason.InsufficientHistory;
+
+        if (hasOpenPosition && string.Equals(positionOriginatingStrategyId, squeezeStrategyId, StringComparison.OrdinalIgnoreCase) &&
+            squeezeSignal == VolatilitySqueezeSignal.NoTrade &&
+            lastSqueeze.RollingMean is { } squeezeMean &&
+            (lastSqueeze.Momentum < 0m || lastSqueeze.ClosePrice.Value < squeezeMean))
+        {
+            squeezeSignal = VolatilitySqueezeSignal.ExitLong;
+            squeezeReason = VolatilitySqueezeReason.MomentumDecayExit;
+        }
+
+        if (hasOpenPosition && !string.Equals(positionOriginatingStrategyId, squeezeStrategyId, StringComparison.OrdinalIgnoreCase) &&
+            squeezeSignal == VolatilitySqueezeSignal.ExitLong)
+        {
+            squeezeSignal = VolatilitySqueezeSignal.NoTrade;
+            squeezeReason = VolatilitySqueezeReason.WithinNormalBand;
+        }
+
+        var squeezeReasonText = squeezeReason.ToString();
+        if (IsQuarantined(squeezeStrategyId, quarantinedStrategies) && squeezeSignal == VolatilitySqueezeSignal.EnterLong)
+        {
+            squeezeSignal = VolatilitySqueezeSignal.NoTrade;
+            squeezeReasonText = "StrategyQuarantinedForNegativeExpectancy";
+        }
+        else if (squeezeSignal == VolatilitySqueezeSignal.EnterLong && isFallingKnifeBreakdown)
+        {
+            squeezeSignal = VolatilitySqueezeSignal.NoTrade;
+            squeezeReasonText = "FallingKnifeBreakdownBlocked";
+        }
+        else if (bars.Count >= 20 && squeezeSignal == VolatilitySqueezeSignal.EnterLong && !isConfirmedBullTrend && !isRecoveringRange)
+        {
+            squeezeSignal = VolatilitySqueezeSignal.NoTrade;
+            squeezeReasonText = "SqueezeEntryBlockedOutsideConfirmedRegime";
+        }
+        else if (bars.Count >= 20 &&
+                 ((!hasOpenPosition && squeezeSignal == VolatilitySqueezeSignal.ExitLong) ||
+                  (hasOpenPosition && squeezeSignal == VolatilitySqueezeSignal.EnterLong)))
+        {
+            squeezeSignal = VolatilitySqueezeSignal.NoTrade;
+            squeezeReasonText = VolatilitySqueezeReason.WithinNormalBand.ToString();
+        }
+
+        OrderSide? squeezeSide = squeezeSignal switch
+        {
+            VolatilitySqueezeSignal.EnterLong => OrderSide.Buy,
+            VolatilitySqueezeSignal.ExitLong => OrderSide.Sell,
+            _ => null
+        };
+        decimal squeezeScore = squeezeSide.HasValue
+            ? (regime.Regime == MarketRegime.BullTrend ? 1.4m : (isRecoveringRange ? 1.1m : 0.5m))
+            : 0.0m;
+        candidates.Add(new StrategyCandidateEvaluation(
+            squeezeStrategyId, "1.0.0", squeezeSide, squeezeScore, squeezeSignal.ToString(), squeezeReasonText));
 
         // If regime prohibits exposure (Chop or Stale), enforce NO_TRADE
         if (regime.ProhibitsNewExposure)

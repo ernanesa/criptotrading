@@ -40,6 +40,7 @@ public static class ServiceCollectionExtensions
             .Configure(options =>
             {
                 options.KlineCacheDuration = TimeSpan.FromSeconds(1.5);
+                options.BookTickerCacheDuration = TimeSpan.FromSeconds(1.5);
                 configure?.Invoke(options);
             })
             .Validate(options =>
