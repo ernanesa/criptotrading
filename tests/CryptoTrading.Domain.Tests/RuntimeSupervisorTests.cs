@@ -69,6 +69,27 @@ public sealed class RuntimeSupervisorTests
     }
 
     [Fact]
+    public async Task RecoveryFromSafeModeWhenOperationalModeRestoredToNormalAdvancesToReady()
+    {
+        using var supervisor = new RuntimeSupervisor(timeProvider: new FixedTimeProvider(Now));
+        await supervisor.BeginBootstrappingAsync("startup", TestContext.Current.CancellationToken);
+        await supervisor.MarkReconciliationAsync(true, "reconciled", TestContext.Current.CancellationToken);
+        await supervisor.MarkWarmupAsync(true, "warmed", TestContext.Current.CancellationToken);
+        await supervisor.MarkAccountStreamAsync(true, "connected", TestContext.Current.CancellationToken);
+        Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
+
+        await supervisor.ObserveOperationalControlAsync(new(
+            OperationalMode.SafeMode, 1, Now, "worker-bootstrap", "RESTORED_DURABLE_STOP"), TestContext.Current.CancellationToken);
+        Assert.Equal(RuntimeState.SafeMode, supervisor.Snapshot.State);
+        Assert.True(supervisor.Snapshot.BlocksNewExposure);
+
+        await supervisor.ObserveOperationalControlAsync(new(
+            OperationalMode.Normal, 2, Now, "account-reconciliation", "reconciliation-healthy"), TestContext.Current.CancellationToken);
+        Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
+        Assert.True(supervisor.Snapshot.CanCreateNewExposure);
+    }
+
+    [Fact]
     public async Task RecoveryRequiresFreshReconciliationAfterStreamFailure()
     {
         using var supervisor = new RuntimeSupervisor(timeProvider: new FixedTimeProvider(Now));

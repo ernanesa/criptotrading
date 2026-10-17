@@ -74,6 +74,7 @@ internal sealed class PeriodicReconciliationHostedService(
                             $"reconciliation-auto-recovery:{result.CorrelationId}");
                         _ = await operationalControl.ResetAsync(resetCommand, authorization, stoppingToken).ConfigureAwait(false);
                         PeriodicReconciliationLog.AutoRecovered(logger, result.CorrelationId.ToString());
+                        await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, stoppingToken).ConfigureAwait(false);
                     }
                 }
                 else
