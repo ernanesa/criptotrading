@@ -173,6 +173,15 @@ public sealed class RuntimeSupervisor : IRuntimeSupervisor, IDisposable, IAsyncD
             {
                 await TransitionToSafeModeAsync(operationalControl.Reason ?? "operational-safe-mode", cancellationToken).ConfigureAwait(false);
             }
+            else if (operationalControl.Mode == OperationalMode.Normal)
+            {
+                if (stateMachine.State == RuntimeState.SafeMode && Snapshot.ReconciliationHealthy)
+                {
+                    await TransitionAsync(RuntimeState.Reconciling, "operational-mode-normal", cancellationToken).ConfigureAwait(false);
+                }
+
+                await AdvanceReadinessAsync("operational-mode-normal", cancellationToken).ConfigureAwait(false);
+            }
         }, cancellationToken);
     }
 
