@@ -102,6 +102,27 @@ public sealed class VolatilitySqueezeStrategyTests
         Assert.Equal("1.0.0", squeezeCandidate.StrategyVersion);
     }
 
+    [Fact]
+    public void MultiStrategyDecisionOrchestratorCalibratesBollingerMultiplierInLowVolatilityRegime()
+    {
+        // 25 bars with micro-range volatility (< 0.0003m)
+        var prices = new decimal[25];
+        for (var i = 0; i < 25; i++)
+        {
+            prices[i] = 100m + (i * 0.001m);
+        }
+
+        var result = MultiStrategyDecisionOrchestrator.Orchestrate(
+            BtcUsdt,
+            Bars(prices),
+            1000m,
+            DateTimeOffset.Parse("2026-09-21T12:00:00Z", CultureInfo.InvariantCulture));
+
+        var squeezeCandidate = Assert.Single(result.Candidates, c => c.StrategyId == "volatility-squeeze-btcusdt");
+        Assert.NotNull(squeezeCandidate);
+        Assert.Equal("1.0.0", squeezeCandidate.StrategyVersion);
+    }
+
     private static List<CloseBar> Bars(params decimal[] prices)
     {
         var start = DateTimeOffset.Parse("2026-09-01T00:00:00Z", CultureInfo.InvariantCulture);

@@ -67,6 +67,7 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, decimal> positionLifetimePeakProfitBps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (decimal CostNotional, decimal Quantity)> positionCostBases = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarTriggerUtc = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
@@ -737,7 +738,10 @@ internal sealed class AutonomyCycleHostedService(
         }
         else if (!hasOpenExposure)
         {
-            positionCostBases.TryRemove(symbol, out _);
+            if (positionCostBases.TryRemove(symbol, out _))
+            {
+                lastClosedTradeAtBySymbol[symbol] = DateTimeOffset.UtcNow;
+            }
             positionLifetimePeakProfitBps.TryRemove(symbol, out _);
             positionOriginatingStrategy.TryRemove(symbol, out _);
         }
@@ -822,7 +826,8 @@ internal sealed class AutonomyCycleHostedService(
                 PositionOriginatingStrategyId: originatingStrat,
                 LifetimePeakProfitBps: lifetimePeakBps,
                 LeaderReturnBps: leaderReturnBps,
-                LeaderOrderBookImbalance: leaderOrderBookImbalance);
+                LeaderOrderBookImbalance: leaderOrderBookImbalance,
+                LastClosedTradeAtUtc: lastClosedTradeAtBySymbol.TryGetValue(symbol, out var closedAt) ? closedAt : null);
 
             if (durablePerformances is not null)
             {

@@ -51,6 +51,21 @@ internal sealed class PeriodicReconciliationHostedService(
                 if (result.IsHealthy)
                 {
                     PeriodicReconciliationLog.Healthy(logger, result.CorrelationId.ToString(), reportPath);
+
+                    if (operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
+                        string.Equals(operationalControl.Snapshot.ChangedBy, "account-reconciliation", StringComparison.Ordinal))
+                    {
+                        var resetCommand = new OperationalControlCommand(
+                            "account-reconciliation",
+                            $"Reconciliation auto-recovery: balance and orders healthy (correlation {result.CorrelationId}).",
+                            new IdempotencyKey($"reconciliation-auto-recovery:{result.CorrelationId}"),
+                            DateTimeOffset.UtcNow);
+                        var authorization = new OperationalControlResetAuthorization(
+                            "account-reconciliation",
+                            $"reconciliation-auto-recovery:{result.CorrelationId}");
+                        _ = await operationalControl.ResetAsync(resetCommand, authorization, stoppingToken).ConfigureAwait(false);
+                        PeriodicReconciliationLog.AutoRecovered(logger, result.CorrelationId.ToString());
+                    }
                 }
                 else
                 {
@@ -92,6 +107,9 @@ internal static partial class PeriodicReconciliationLog
 {
     [LoggerMessage(LogLevel.Information, "Periodic reconciliation healthy. CorrelationId={CorrelationId} ReportPath={ReportPath}")]
     public static partial void Healthy(ILogger logger, string correlationId, string reportPath);
+
+    [LoggerMessage(LogLevel.Information, "Periodic reconciliation auto-recovered SafeMode to Normal. CorrelationId={CorrelationId}")]
+    public static partial void AutoRecovered(ILogger logger, string correlationId);
 
     [LoggerMessage(LogLevel.Warning, "Periodic reconciliation blocked new entries. CorrelationId={CorrelationId} ReportPath={ReportPath}")]
     public static partial void Blocked(ILogger logger, string correlationId, string reportPath);
