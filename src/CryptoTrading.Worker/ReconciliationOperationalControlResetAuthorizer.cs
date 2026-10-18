@@ -13,6 +13,21 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
     private const string ReconciliationActor = "account-reconciliation";
     private const string AutoRecoveryApprovalPrefix = "reconciliation-auto-recovery:";
 
+    internal static bool IsAutoRecoverable(OperationalControlSnapshot current)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+
+        return current.Mode == OperationalMode.SafeMode &&
+               (string.Equals(current.ChangedBy, ReconciliationActor, StringComparison.Ordinal) ||
+                string.Equals(current.ChangedBy, "worker-bootstrap", StringComparison.Ordinal) ||
+                string.Equals(current.ChangedBy, "periodic-reconciliation", StringComparison.Ordinal) ||
+                (string.Equals(current.ChangedBy, "autonomy-cycle", StringComparison.Ordinal) &&
+                 current.Reason is not null &&
+                 (current.Reason.Contains("HTTP_TRANSIENT", StringComparison.OrdinalIgnoreCase) ||
+                  current.Reason.Contains("SOCKET_CLOSED", StringComparison.OrdinalIgnoreCase) ||
+                  current.Reason.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase))));
+    }
+
     public bool IsAuthorized(
         OperationalControlSnapshot current,
         OperationalControlCommand resetCommand,
@@ -25,13 +40,11 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
         // Fail-closed invariants:
         // 1. Never reset KillSwitch.
         // 2. Only reset if current mode is SafeMode.
-        // 3. Only reset if the current SafeMode was entered by account-reconciliation.
+        // 3. Only reset if the current SafeMode was entered by account-reconciliation, worker-bootstrap,
+        //    periodic-reconciliation, or autonomy-cycle due to transient network failures (HTTP_TRANSIENT, SOCKET_CLOSED, TIMEOUT).
         // 4. Only reset if the reset command and authorization are issued by account-reconciliation.
         // 5. Must have explicit reconciliation-auto-recovery approval identifier.
-        return current.Mode == OperationalMode.SafeMode &&
-               (string.Equals(current.ChangedBy, ReconciliationActor, StringComparison.Ordinal) ||
-                string.Equals(current.ChangedBy, "worker-bootstrap", StringComparison.Ordinal) ||
-                string.Equals(current.ChangedBy, "periodic-reconciliation", StringComparison.Ordinal)) &&
+        return IsAutoRecoverable(current) &&
                string.Equals(resetCommand.Actor, ReconciliationActor, StringComparison.Ordinal) &&
                string.Equals(authorization.Actor, ReconciliationActor, StringComparison.Ordinal) &&
                authorization.ApprovalId.StartsWith(AutoRecoveryApprovalPrefix, StringComparison.Ordinal);
