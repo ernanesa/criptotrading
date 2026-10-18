@@ -165,12 +165,15 @@ internal sealed class ExecutionSubmissionGuard(
 
         var isTestnetFaucetWallet = string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
             && snapshot.Balances.Count > 20;
-        var faucetEndowment = isTestnetFaucetWallet ? baseAsset switch
+        var faucetEndowment = isTestnetFaucetWallet ? baseAsset.ToUpperInvariant() switch
         {
             "BTC" => 1.0m,
             "ETH" => 1.0m,
             "BNB" => 1.0m,
             "SOL" => 4.0m,
+            "XRP" => 341.0m,
+            "ADA" => 1937.0m,
+            "DOGE" => 5501.0m,
             _ => 0m
         } : 0m;
         var positionQuantity = Math.Max(0m, rawPositionQuantity - faucetEndowment);
@@ -199,12 +202,15 @@ internal sealed class ExecutionSubmissionGuard(
             }
 
             var otherRaw = Parse(otherBal.Free) + Parse(otherBal.Locked);
-            var otherEndw = isTestnetFaucetWallet ? otherBase switch
+            var otherEndw = isTestnetFaucetWallet ? otherBase.ToUpperInvariant() switch
             {
                 "BTC" => 1.0m,
                 "ETH" => 1.0m,
                 "BNB" => 1.0m,
                 "SOL" => 4.0m,
+                "XRP" => 341.0m,
+                "ADA" => 1937.0m,
+                "DOGE" => 5501.0m,
                 _ => 0m
             } : 0m;
             var otherNet = Math.Max(0m, otherRaw - otherEndw);

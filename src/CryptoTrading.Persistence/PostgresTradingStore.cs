@@ -3698,6 +3698,28 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                 {
                     policy = policyWithMultiAssetBudget;
                 }
+                else
+                {
+                    var policyWithExpandedBudget = new RiskPolicy(
+                        row.PolicyVersion,
+                        row.MaxOrderNotional,
+                        row.MaxExposureNotional,
+                        row.MaxDailyLoss,
+                        row.MaxDrawdown,
+                        TimeSpan.FromTicks(row.MaxMarketDataAgeTicks),
+                        row.WithdrawalsEnabled,
+                        row.MaxSlippageBps,
+                        row.MaxVolatilityBps,
+                        row.MinLiquidityNotional,
+                        new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT"));
+                    if (string.Equals(
+                            RiskPolicyDocument.ComputeHash(policyWithExpandedBudget, row.EffectiveFromUtc, row.ExpiresAtUtc),
+                            row.DocumentHash,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        policy = policyWithExpandedBudget;
+                    }
+                }
             }
         }
 

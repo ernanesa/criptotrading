@@ -236,7 +236,7 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
 
     private static readonly HashSet<string> AllowedUniverseSymbols = new(StringComparer.OrdinalIgnoreCase)
     {
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"
     };
 
     private static void ValidateSnapshot(PortfolioNavSnapshot snapshot)

@@ -64,6 +64,46 @@ if (args.Contains("--run-f20-lifecycle-drill", StringComparer.Ordinal))
     }
 }
 
+if (args.Contains("--register-v4-expanded-risk-policy", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var policyTime = DateTimeOffset.UtcNow;
+        var riskPolicy = new RiskPolicy(
+            version: "v4-sota-expanded-universe",
+            maxOrderNotional: 20m,
+            maxExposureNotional: 20m,
+            maxDailyLoss: 2m,
+            maxDrawdown: 5m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            budgetPolicy: new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT"));
+        var draft = RiskPolicyDocument.CreateDraft(riskPolicy, policyTime.AddMinutes(-5), policyTime.AddDays(90), "policy-author");
+        await s.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
+        _ = await s.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v4-sota-expanded-universe", "Ernane", policyTime.AddMinutes(-4)).ConfigureAwait(false);
+        var activePolicy = await s.ActivateRiskPolicyAsync(riskPolicy.Version, policyTime.AddMinutes(-3)).ConfigureAwait(false);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "OK",
+            version = activePolicy.Policy.Version,
+            documentHash = activePolicy.DocumentHash,
+            allowedSymbol = activePolicy.Policy.BudgetPolicy?.AllowedSymbol
+        }));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
 if (args.Contains("--reset-operational-mode", StringComparer.Ordinal))
 {
     try

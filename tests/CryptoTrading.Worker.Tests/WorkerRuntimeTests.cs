@@ -569,6 +569,20 @@ public sealed class WorkerRuntimeTests
         fallbackLegacy.Validate();
         Assert.Equal(["ETHUSDT"], fallbackLegacy.ResolveAutonomySymbols());
 
+        var validExpanded = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT"
+        };
+        validExpanded.Validate();
+        Assert.Equal(7, validExpanded.ResolveAutonomySymbols().Count);
+
         var unauthorizedLegacy = new WorkerRuntimeOptions
         {
             AutonomyEnabled = true,
@@ -578,10 +592,10 @@ public sealed class WorkerRuntimeTests
             RiskPolicyRequired = true,
             ReconciliationEnabled = true,
             AccountStreamEnabled = true,
-            AutonomySymbol = "XRPUSDT"
+            AutonomySymbol = "PEPEUSDT"
         };
         var exLegacy = Assert.Throws<OptionsValidationException>(() => unauthorizedLegacy.Validate());
-        Assert.Contains("unauthorized symbol 'XRPUSDT'", exLegacy.Message, StringComparison.Ordinal);
+        Assert.Contains("unauthorized symbol 'PEPEUSDT'", exLegacy.Message, StringComparison.Ordinal);
 
         var unauthorized = new WorkerRuntimeOptions
         {
@@ -592,10 +606,10 @@ public sealed class WorkerRuntimeTests
             RiskPolicyRequired = true,
             ReconciliationEnabled = true,
             AccountStreamEnabled = true,
-            AutonomySymbols = "BTCUSDT, DOGEUSDT"
+            AutonomySymbols = "BTCUSDT, SHIBUSDT"
         };
         var ex = Assert.Throws<OptionsValidationException>(() => unauthorized.Validate());
-        Assert.Contains("unauthorized symbol 'DOGEUSDT'", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("unauthorized symbol 'SHIBUSDT'", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
