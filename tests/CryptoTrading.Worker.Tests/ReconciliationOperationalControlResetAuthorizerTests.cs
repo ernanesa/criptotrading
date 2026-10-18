@@ -185,4 +185,64 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         Assert.False(result);
     }
+
+    [Theory]
+    [InlineData("ACCOUNT_STREAM_EVENTSTREAMTERMINATED")]
+    [InlineData("ACCOUNT_STREAM_SERVERSHUTDOWN")]
+    [InlineData("ACCOUNT_STREAM_DISCONNECTED")]
+    [InlineData("ACCOUNT_STREAM_SOCKET_CLOSED")]
+    [InlineData("ACCOUNT_STREAM_TIMEOUT")]
+    [InlineData("ACCOUNT_STREAM_ENDED")]
+    [InlineData("ACCOUNT_STREAM_FAILURE")]
+    public void IsAuthorizedWhenSafeModeEnteredByAccountStreamTransientTerminationReturnsTrue(string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "account-stream",
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
+    [Theory]
+    [InlineData("ACCOUNTING_EXECUTION_FAILURE")]
+    [InlineData("FEE_DRIFT_EXCEEDED")]
+    [InlineData("Fee rate exceeds policy maximum")]
+    public void IsAuthorizedWhenSafeModeEnteredByAccountStreamNonRecoverableReasonReturnsFalse(string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "account-stream",
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.False(result);
+    }
 }

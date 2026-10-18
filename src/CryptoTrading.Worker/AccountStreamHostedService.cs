@@ -164,9 +164,29 @@ internal sealed class AccountStreamHostedService(
                 result.UnknownTrades?.Count ?? result.UnknownTradeIds.Count,
             result.OpenOrderCount), cancellationToken).ConfigureAwait(false);
         _ = await ReconciliationAlertPublisher.PublishAsync(result, alertDispatcher, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+        await runtimeSupervisor.MarkReconciliationAsync(
+            result.IsHealthy,
+            result.IsHealthy ? "reconnect-reconciliation-healthy" : "reconnect-reconciliation-mismatch",
+            cancellationToken).ConfigureAwait(false);
+
         if (result.IsHealthy)
         {
             ReconciliationStartupLog.Healthy(logger, result.CorrelationId.ToString(), result.Events.Count, reportPath);
+
+            if (ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot))
+            {
+                var resetCommand = new OperationalControlCommand(
+                    "account-reconciliation",
+                    $"Reconciliation auto-recovery after reconnect: balance and orders healthy (correlation {result.CorrelationId}).",
+                    new IdempotencyKey($"reconciliation-auto-recovery:{result.CorrelationId}"),
+                    DateTimeOffset.UtcNow);
+                var authorization = new OperationalControlResetAuthorization(
+                    "account-reconciliation",
+                    $"reconciliation-auto-recovery:{result.CorrelationId}");
+                _ = await operationalControl.ResetAsync(resetCommand, authorization, cancellationToken).ConfigureAwait(false);
+                AccountStreamLog.AutoRecovered(logger, result.CorrelationId.ToString());
+                await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, cancellationToken).ConfigureAwait(false);
+            }
         }
         else
         {
@@ -275,6 +295,10 @@ internal static partial class AccountStreamLog
 
     [LoggerMessage(LogLevel.Information, "Execution learning attribution. ExecutionId={ExecutionId} Recorded={Recorded} Replayed={Replayed} SkippedReason={SkippedReason}")]
     public static partial void Learning(ILogger logger, string executionId, bool recorded, bool replayed, string? skippedReason);
+
+    [LoggerMessage(LogLevel.Information, "Account stream reconciliation auto-recovered SafeMode to Normal. CorrelationId={CorrelationId}")]
+    public static partial void AutoRecovered(ILogger logger, string correlationId);
+
     [LoggerMessage(LogLevel.Warning, "Account stream entered SafeMode. Reason={Reason}")]
     public static partial void SafeMode(ILogger logger, string reason);
 
