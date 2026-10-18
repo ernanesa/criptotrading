@@ -83,6 +83,34 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
         Assert.True(result);
     }
 
+    [Theory]
+    [InlineData("A2 failure: HTTP_TRANSIENT (severity=Transient, consecutive=3)")]
+    [InlineData("A2 failure: SOCKET_CLOSED (severity=Transient, consecutive=4)")]
+    [InlineData("A2 failure: NETWORK_TIMEOUT_TRANSIENT (severity=Transient, consecutive=2)")]
+    public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsTrue(string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "autonomy-cycle",
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
     [Fact]
     public void IsAuthorizedWhenSafeModeEnteredByAutonomyA2ReturnsFalse()
     {

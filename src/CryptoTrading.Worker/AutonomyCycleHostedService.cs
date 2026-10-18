@@ -59,7 +59,7 @@ internal sealed class AutonomyCycleHostedService(
                 FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest
             });
     private int consecutiveTransientFailures;
-    private const int MaxConsecutiveTransientFailures = 3;
+    private const int MaxConsecutiveTransientFailures = 6;
     private readonly ConcurrentDictionary<string, BinanceBookTicker> streamBookTickers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, List<BinanceSpotKline>> klineCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastKlineFetchUtc = new(StringComparer.OrdinalIgnoreCase);
@@ -166,7 +166,12 @@ internal sealed class AutonomyCycleHostedService(
                         }
                         else if (classification.Severity == FailureSeverity.Transient && ++consecutiveTransientFailures < MaxConsecutiveTransientFailures)
                         {
-                            var backoff = classification.SuggestedBackoff ?? TimeSpan.FromSeconds(2);
+                            var baseDelayMs = Math.Min(1500 * Math.Pow(1.4, consecutiveTransientFailures - 1), 6000);
+                            var jitterMs = System.Security.Cryptography.RandomNumberGenerator.GetInt32(50, 250);
+                            var calculatedBackoff = TimeSpan.FromMilliseconds(baseDelayMs + jitterMs);
+                            var backoff = classification.ReasonCode == "RATE_LIMIT_EXCEEDED" && classification.SuggestedBackoff.HasValue
+                                ? classification.SuggestedBackoff.Value
+                                : calculatedBackoff;
                             await Task.Delay(backoff, stoppingToken).ConfigureAwait(false);
                             continue;
                         }

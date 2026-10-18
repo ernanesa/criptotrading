@@ -59,10 +59,7 @@ internal sealed class PeriodicReconciliationHostedService(
                 {
                     PeriodicReconciliationLog.Healthy(logger, result.CorrelationId.ToString(), reportPath);
 
-                    if (operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
-                        (string.Equals(operationalControl.Snapshot.ChangedBy, "account-reconciliation", StringComparison.Ordinal) ||
-                         string.Equals(operationalControl.Snapshot.ChangedBy, "worker-bootstrap", StringComparison.Ordinal) ||
-                         string.Equals(operationalControl.Snapshot.ChangedBy, "periodic-reconciliation", StringComparison.Ordinal)))
+                    if (ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot))
                     {
                         var resetCommand = new OperationalControlCommand(
                             "account-reconciliation",

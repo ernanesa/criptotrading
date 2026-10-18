@@ -365,7 +365,7 @@ public sealed class AdaptiveDecisionCycle
                  request.Portfolio.PositionCostNotional > 0m &&
                  bars[^1].ClosePrice.Value > 0m &&
                  currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
-                 EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, request.LifetimePeakProfitBps, out var chandelierReason))
+                 EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, request.LifetimePeakProfitBps, mlEval.MlWinProbability, out var chandelierReason))
         {
             orchestration = orchestration with
             {
@@ -998,6 +998,7 @@ public sealed class AdaptiveDecisionCycle
         decimal roundTripFeeBps,
         decimal volBps,
         decimal? lifetimePeakProfitBps,
+        decimal mlWinProbability,
         out string reason)
     {
         reason = string.Empty;
@@ -1021,14 +1022,21 @@ public sealed class AdaptiveDecisionCycle
             peakProfitBps = (peakNotional - portfolio.PositionCostNotional) / portfolio.PositionCostNotional * 10_000m;
         }
 
-        var trailingGapBps = Math.Clamp(volBps * 1.5m, 10.0m, 20.0m);
+        var isHighConviction = mlWinProbability >= 0.60m;
+        var trailingGapBps = isHighConviction && peakProfitBps < 35.0m
+            ? Math.Clamp(volBps * 2.2m, 15.0m, 35.0m)
+            : Math.Clamp(volBps * 1.5m, 10.0m, 20.0m);
         var pullbackBps = peakProfitBps - currentUnrealizedProfitBps;
+
+        var minProfitLockBps = isHighConviction && peakProfitBps >= 35.0m
+            ? roundTripFeeBps + 15.0m
+            : roundTripFeeBps + 3.0m;
 
         if (peakProfitBps >= (roundTripFeeBps + 12.0m) &&
             pullbackBps >= trailingGapBps &&
-            currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m))
+            currentUnrealizedProfitBps >= minProfitLockBps)
         {
-            reason = $"TRAILING_STOP_CHANDELIER_EXIT: Securing {currentUnrealizedProfitBps:F1} bps profit after {pullbackBps:F1} bps pullback from {peakProfitBps:F1} bps peak.";
+            reason = $"TRAILING_STOP_CHANDELIER_EXIT: Securing {currentUnrealizedProfitBps:F1} bps profit after {pullbackBps:F1} bps pullback from {peakProfitBps:F1} bps peak (conviction={(isHighConviction ? "High" : "Standard")}).";
             return true;
         }
 
