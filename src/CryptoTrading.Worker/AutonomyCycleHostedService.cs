@@ -539,6 +539,9 @@ internal sealed class AutonomyCycleHostedService(
             "ETH" => 1.0m,
             "BNB" => 1.0m,
             "SOL" => 4.0m,
+            "XRP" => 341.0m,
+            "ADA" => 1937.0m,
+            "DOGE" => 5501.0m,
             _ => 0m
         } : 0m;
         var baseQuantity = Math.Max(0m, rawBaseQuantity - faucetEndowment);
@@ -578,12 +581,15 @@ internal sealed class AutonomyCycleHostedService(
             }
 
             var otherRawQty = ParseBalance(otherBal.Free) + ParseBalance(otherBal.Locked);
-            var otherFaucet = isTestnetFaucetWallet ? otherBase switch
+            var otherFaucet = isTestnetFaucetWallet ? otherBase.ToUpperInvariant() switch
             {
                 "BTC" => 1.0m,
                 "ETH" => 1.0m,
                 "BNB" => 1.0m,
                 "SOL" => 4.0m,
+                "XRP" => 341.0m,
+                "ADA" => 1937.0m,
+                "DOGE" => 5501.0m,
                 _ => 0m
             } : 0m;
             var otherNetQty = Math.Max(0m, otherRawQty - otherFaucet);
