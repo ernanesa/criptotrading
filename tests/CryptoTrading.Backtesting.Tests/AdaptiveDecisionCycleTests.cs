@@ -66,6 +66,44 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void HighVolatilityChopForcesRiskReducingExitForOpenPosition()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            100m, 160m, 60m, 170m, 50m, 180m,
+            55m, 175m, 45m, 165m, 50m, 155m,
+            60m, 150m, 55m, 145m, 60m, 140m,
+            65m, 135m, 70m, 130m, 75m, 125m);
+        var portfolio = CreatePortfolio(95m) with { PositionCostNotional = 100m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 95m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(124m),
+                new Price(126m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 10m,
+                askQuantity: 10m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(MarketRegime.HighVolatilityChop, result.Regime.Regime);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("HIGH_VOLATILITY_CHOP_RISK_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FailsClosedWhenOperationalControlBlocksEntries()
     {
         var cycle = new AdaptiveDecisionCycle();
@@ -997,6 +1035,264 @@ public sealed class AdaptiveDecisionCycleTests
             Assert.True(result.IsNoTrade);
             Assert.Equal("RANGE_MOMENTUM_REQUIRES_ML_AND_BOOK_CONFIRMATION", result.NoTradeReason);
         }
+    }
+
+    [Fact]
+    public void ChronologicalTripleBarrierResolvesStopLossBeforeTakeProfitOnSameBarAndLaterBars()
+    {
+        var start = TestTime.AddMinutes(-5);
+        var entryBar = new CloseBar(BtcUsdt, start, 100m, openPrice: 100m, highPrice: 100m, lowPrice: 100m, volume: 10m);
+        // Bar 1 hits stop-loss (-0.20%) and Bar 2 hits take-profit (+0.30%) => must resolve as false (stop-loss hit first chronologically)
+        var bar1Stop = new CloseBar(BtcUsdt, start.AddMinutes(1), 99.85m, openPrice: 100m, highPrice: 100.05m, lowPrice: 99.75m, volume: 10m);
+        var bar2Target = new CloseBar(BtcUsdt, start.AddMinutes(2), 100.40m, openPrice: 99.85m, highPrice: 100.45m, lowPrice: 99.85m, volume: 10m);
+        var barsStopFirst = new List<CloseBar> { entryBar, bar1Stop, bar2Target };
+
+        Assert.False(MlNetSystem1DecisionEngine.EvaluateChronologicalTripleBarrier(
+            barsStopFirst, entryIndex: 0, horizon: 2, OrderSide.Buy, takeProfitBps: 25m, stopLossBps: 18m));
+
+        // Bar 1 hits take-profit (+0.30%) cleanly before any stop-loss => must resolve as true
+        var bar1CleanWin = new CloseBar(BtcUsdt, start.AddMinutes(1), 100.30m, openPrice: 100m, highPrice: 100.32m, lowPrice: 99.95m, volume: 10m);
+        var barsTargetFirst = new List<CloseBar> { entryBar, bar1CleanWin, bar1Stop };
+        Assert.True(MlNetSystem1DecisionEngine.EvaluateChronologicalTripleBarrier(
+            barsTargetFirst, entryIndex: 0, horizon: 2, OrderSide.Buy, takeProfitBps: 25m, stopLossBps: 18m));
+    }
+
+    [Fact]
+    public void TechnicalIndicatorCalculatorComputesOhlcAtrAdxRsiVwapAndRelativeVolume()
+    {
+        var start = TestTime.AddMinutes(-25);
+        var bars = new List<CloseBar>(25);
+        for (var i = 0; i < 25; i++)
+        {
+            var close = 100m + (i * 0.40m);
+            bars.Add(new CloseBar(
+                BtcUsdt,
+                start.AddMinutes(i + 1),
+                closePrice: close,
+                openPrice: close - 0.20m,
+                highPrice: close + 0.30m,
+                lowPrice: close - 0.30m,
+                volume: i == 24 ? 30m : 10m));
+        }
+
+        var snapshot = TechnicalIndicatorCalculator.Evaluate(bars);
+        Assert.True(snapshot.Atr > 0.40m);
+        Assert.True(snapshot.AtrBps > 40m);
+        Assert.True(snapshot.Adx >= 20m);
+        Assert.True(snapshot.PlusDi > snapshot.MinusDi);
+        Assert.True(snapshot.Rsi > 60m);
+        Assert.True(snapshot.Vwap > 100m && snapshot.Vwap < bars[^1].ClosePrice.Value);
+        Assert.True(snapshot.RelativeVolume > 2.0m);
+    }
+
+    [Fact]
+    public void ProtectiveStopLossExitFiresWhenPositionDropsBeyondAtrStopThreshold()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_200m, 84_200m);
+        // Position cost 10.0000 USDT, current exposure 9.9750 USDT (-25.0 bps unrealized loss <= -18.0 bps stop)
+        var portfolio = CreatePortfolio(9.9750m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 10m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-btcusdt")
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_199m),
+                new Price(84_201m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.50m,
+                askQuantity: 0.50m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("PROTECTIVE_STOP_LOSS_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NegativeExpectedNetEdgeBlocksEntryWhenSlippageAndFeesExceedPayoff()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            MarketRisk: new MarketRiskSnapshot(
+                expectedSlippageBps: 35m,
+                volatilityBps: 10,
+                availableLiquidityNotional: 10_000m,
+                TestTime));
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("NEGATIVE_EXPECTED_NET_EDGE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenToxicVpinAndNegativeCvdImbalanceAlign()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = new[]
+        {
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m,
+        };
+        var start = TestTime.AddMinutes(-prices.Length);
+        var bars = prices
+            .Select((p, idx) => new CloseBar(
+                BtcUsdt,
+                start.AddMinutes(idx + 1),
+                p,
+                openPrice: p,
+                highPrice: p + 2m,
+                lowPrice: p - 2m,
+                volume: 100m,
+                takerBuyBaseVolume: 5m, // 95% taker sell aggression -> VPIN = 0.90, CVD = -0.90
+                quoteVolume: p * 100m,
+                numberOfTrades: 250))
+            .ToArray();
+
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("TOXIC_VPIN_FLOW_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenMaxOpenPositionCorrelationExceedsHardLimit()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            MaxOpenPositionCorrelation: 0.91m);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("CORRELATED_EXPOSURE_LIMIT_EXCEEDED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void CrossSectionalPortfolioAllocatorRanksByEdgeAndAppliesVolatilityParityAndCorrelationPenalty()
+    {
+        var barsA = Bars(100m, 101m, 102m, 103m, 104m, 105m, 106m, 107m);
+        var barsB = Bars(200m, 202m, 204m, 206m, 208m, 210m, 212m, 214m);
+        var corr = CrossSectionalPortfolioAllocator.ComputePairwiseReturnCorrelation(barsA, barsB);
+        Assert.True(corr >= 0.99m);
+
+        var candidates = new[]
+        {
+            new CrossSectionalCandidate("ETHUSDT", "trend-following-ethusdt", ExpectedNetEdgeBps: 18m, AtrBps: 40m, BaseTargetNotional: 20m, MaxOpenPositionCorrelation: 0.20m),
+            new CrossSectionalCandidate("BTCUSDT", "trend-following-btcusdt", ExpectedNetEdgeBps: 28m, AtrBps: 10m, BaseTargetNotional: 20m, MaxOpenPositionCorrelation: 0.10m),
+            new CrossSectionalCandidate("SOLUSDT", "trend-following-solusdt", ExpectedNetEdgeBps: 22m, AtrBps: 20m, BaseTargetNotional: 20m, MaxOpenPositionCorrelation: 0.90m),
+            new CrossSectionalCandidate("BNBUSDT", "trend-following-bnbusdt", ExpectedNetEdgeBps: -3m, AtrBps: 20m, BaseTargetNotional: 20m, MaxOpenPositionCorrelation: 0.10m),
+        };
+
+        var allocations = CrossSectionalPortfolioAllocator.AllocateCrossSectional(
+            candidates,
+            availableCapitalNotional: 100m,
+            maxSingleOrderNotional: 35m,
+            maxOpenPositions: 3,
+            targetAtrBps: 20m);
+
+        // Ranked 1st: BTCUSDT (Edge 28 bps, ATR 10 bps vs target 20 bps => 1.50x multiplier => 30 USDT)
+        Assert.Equal("BTCUSDT", allocations[0].Symbol);
+        Assert.True(allocations[0].IsApproved);
+        Assert.Equal(1.50m, allocations[0].VolatilityParityMultiplier);
+        Assert.Equal(30m, allocations[0].AllocatedNotional);
+
+        // Ranked 2nd by edge: SOLUSDT, but blocked by correlation 0.90 >= 0.85
+        Assert.Equal("SOLUSDT", allocations[1].Symbol);
+        Assert.False(allocations[1].IsApproved);
+        Assert.Equal("CORRELATED_EXPOSURE_LIMIT_EXCEEDED", allocations[1].RejectionReason);
+
+        // Ranked 3rd: ETHUSDT (Edge 18 bps, ATR 40 bps vs target 20 bps => 0.50x multiplier => 10 USDT)
+        Assert.Equal("ETHUSDT", allocations[2].Symbol);
+        Assert.True(allocations[2].IsApproved);
+        Assert.Equal(0.50m, allocations[2].VolatilityParityMultiplier);
+        Assert.Equal(10m, allocations[2].AllocatedNotional);
+
+        // Ranked 4th: BNBUSDT (Negative edge => blocked)
+        Assert.Equal("BNBUSDT", allocations[3].Symbol);
+        Assert.False(allocations[3].IsApproved);
+        Assert.Equal("NEGATIVE_EXPECTED_NET_EDGE", allocations[3].RejectionReason);
+    }
+
+    [Fact]
+    public void WalkForwardModelPromotionEvaluatesBrierScoreAndDeflatedSharpeRatio()
+    {
+        var strongEvaluations = Enumerable.Range(0, 24)
+            .Select(i => (
+                PredictedWinProbability: i % 4 == 0 ? 0.25m : 0.78m,
+                RealizedOutcome: i % 4 != 0,
+                RealizedNetReturnBps: i % 4 == 0 ? -8m : 24m))
+            .ToArray();
+
+        var promoted = MlNetSystem1DecisionEngine.EvaluateWalkForwardModelPromotion(
+            strongEvaluations,
+            independentTrials: 6,
+            maxBrierScore: 0.25m,
+            minDeflatedSharpeRatio: 0.65m,
+            minSampleCount: 10);
+
+        Assert.True(promoted.PromotionAuthorized);
+        Assert.Null(promoted.RejectionReason);
+        Assert.True(promoted.BrierScore < 0.20m);
+        Assert.True(promoted.OutOfSampleSharpeRatio > 0.50m);
+        Assert.True(promoted.DeflatedSharpeRatio >= 0.65m);
+
+        var weakEvaluations = Enumerable.Range(0, 16)
+            .Select(i => (
+                PredictedWinProbability: 0.80m,
+                RealizedOutcome: i % 3 == 0,
+                RealizedNetReturnBps: i % 3 == 0 ? 10m : -15m))
+            .ToArray();
+
+        var rejected = MlNetSystem1DecisionEngine.EvaluateWalkForwardModelPromotion(weakEvaluations);
+        Assert.False(rejected.PromotionAuthorized);
+        Assert.NotNull(rejected.RejectionReason);
     }
 
     private static EffectiveCommissionSnapshot CreateCommission(DateTimeOffset observedAtUtc) => new(

@@ -8,7 +8,17 @@ namespace CryptoTrading.Backtesting.Strategies;
 /// <summary>One closed market bar consumed by a deterministic strategy evaluation.</summary>
 public sealed record CloseBar
 {
-    public CloseBar(Symbol symbol, DateTimeOffset closeTimeUtc, decimal closePrice)
+    public CloseBar(
+        Symbol symbol,
+        DateTimeOffset closeTimeUtc,
+        decimal closePrice,
+        decimal? openPrice = null,
+        decimal? highPrice = null,
+        decimal? lowPrice = null,
+        decimal volume = 0m,
+        decimal takerBuyBaseVolume = 0m,
+        decimal quoteVolume = 0m,
+        long numberOfTrades = 0)
     {
         if (closeTimeUtc.Offset != TimeSpan.Zero)
         {
@@ -20,9 +30,22 @@ public sealed record CloseBar
             throw new ArgumentOutOfRangeException(nameof(closePrice), "Bar close price must be greater than zero.");
         }
 
+        var effectiveOpen = openPrice is > 0m ? openPrice.Value : closePrice;
+        var rawHigh = highPrice is > 0m ? highPrice.Value : Math.Max(effectiveOpen, closePrice);
+        var rawLow = lowPrice is > 0m ? lowPrice.Value : Math.Min(effectiveOpen, closePrice);
+        var effectiveHigh = Math.Max(rawHigh, Math.Max(effectiveOpen, closePrice));
+        var effectiveLow = Math.Min(rawLow, Math.Min(effectiveOpen, closePrice));
+
         Symbol = symbol;
         CloseTimeUtc = closeTimeUtc;
         ClosePrice = new Price(closePrice);
+        OpenPrice = new Price(effectiveOpen);
+        HighPrice = new Price(effectiveHigh);
+        LowPrice = new Price(effectiveLow);
+        Volume = Math.Max(0m, volume);
+        TakerBuyBaseVolume = Math.Clamp(takerBuyBaseVolume, 0m, Volume > 0m ? Volume : Math.Max(0m, takerBuyBaseVolume));
+        QuoteVolume = Math.Max(0m, quoteVolume);
+        NumberOfTrades = Math.Max(0L, numberOfTrades);
     }
 
     public Symbol Symbol { get; }
@@ -30,6 +53,29 @@ public sealed record CloseBar
     public DateTimeOffset CloseTimeUtc { get; }
 
     public Price ClosePrice { get; }
+
+    public Price OpenPrice { get; }
+
+    public Price HighPrice { get; }
+
+    public Price LowPrice { get; }
+
+    public decimal Volume { get; }
+
+    public decimal TakerBuyBaseVolume { get; }
+
+    public decimal QuoteVolume { get; }
+
+    public long NumberOfTrades { get; }
+
+    public bool Equals(CloseBar? other) =>
+        other is not null &&
+        Symbol == other.Symbol &&
+        CloseTimeUtc == other.CloseTimeUtc &&
+        ClosePrice == other.ClosePrice;
+
+    public override int GetHashCode() =>
+        HashCode.Combine(Symbol, CloseTimeUtc, ClosePrice);
 }
 
 /// <summary>Long-only signals used by the Spot baseline. No signal is an intentional outcome.</summary>

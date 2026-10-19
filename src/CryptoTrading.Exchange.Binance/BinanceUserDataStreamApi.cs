@@ -160,6 +160,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
                     SessionGeneration = currentGeneration,
                     StreamSubscriptionId = subscriptionId
                 };
+                var terminatedByControlEvent = false;
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     bool hasMessage;
@@ -205,8 +206,24 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
                     if (parsed is BinanceUserDataStreamControlEvent control &&
                         control.EventType is "eventStreamTerminated" or "serverShutdown")
                     {
+                        terminatedByControlEvent = true;
                         break;
                     }
+                }
+
+                if (!cancellationToken.IsCancellationRequested && !terminatedByControlEvent)
+                {
+                    var lostAt = timeProvider.GetUtcNow();
+                    yield return new BinanceUserDataStreamControlEvent(
+                        lostAt,
+                        lostAt.ToUnixTimeMilliseconds(),
+                        "connectionLost",
+                        subscriptionId)
+                    {
+                        SessionId = sessionId,
+                        SessionGeneration = currentGeneration,
+                        StreamSubscriptionId = subscriptionId
+                    };
                 }
             }
 

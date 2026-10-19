@@ -167,6 +167,34 @@ public sealed class BinanceUserDataStreamTests
         await cancellation.CancelAsync();
     }
 
+    [Fact]
+    public async Task ModernApiClientEmitsConnectionLostWhenWebSocketTransportClosesWithoutServerShutdown()
+    {
+        using var transport = new AbruptDisconnectFakeTransport();
+        var client = new BinanceUserDataStreamApiClient(
+            new BinanceUserDataStreamApiOptions
+            {
+                ApiKey = "api-key",
+                ApiSecret = "secret",
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectAttempts = 1
+            },
+            () => transport);
+
+        using var cancellation = new CancellationTokenSource();
+        await using var enumerator = client.ReadAsync("ignored-by-modern-api", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+        Assert.True(await enumerator.MoveNextAsync());
+        var established = Assert.IsType<BinanceUserDataStreamControlEvent>(enumerator.Current);
+        Assert.Equal("connectionEstablished", established.EventType);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        var lost = Assert.IsType<BinanceUserDataStreamControlEvent>(enumerator.Current);
+        Assert.Equal("connectionLost", lost.EventType);
+        Assert.Equal(11, lost.SubscriptionId);
+        await cancellation.CancelAsync();
+    }
+
     private sealed class FakeTransport(params string[] payloads) : IBinanceWebSocketTransport, IDisposable
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -202,6 +230,36 @@ public sealed class BinanceUserDataStreamTests
             payloads.Add(Encoding.UTF8.GetBytes($"{{\"id\":\"{id}\",\"status\":200,\"result\":{{\"subscriptionId\":7}}}}"));
             payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":99,\"t\":8,\"c\":\"client-99\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\",\"q\":\"0.01\"}}"));
             payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"serverShutdown\",\"E\":1720000000124}}"));
+            return ValueTask.CompletedTask;
+        }
+
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var payload in payloads)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return payload;
+                await Task.Yield();
+            }
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public void Dispose() { }
+    }
+
+    private sealed class AbruptDisconnectFakeTransport : IBinanceWebSocketTransport, IDisposable
+    {
+        private readonly List<ReadOnlyMemory<byte>> payloads = [];
+
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken)
+        {
+            using var request = JsonDocument.Parse(payload.ToArray());
+            var id = request.RootElement.GetProperty("id").GetGuid();
+            payloads.Add(Encoding.UTF8.GetBytes($"{{\"id\":\"{id}\",\"status\":200,\"result\":{{\"subscriptionId\":11}}}}"));
             return ValueTask.CompletedTask;
         }
 

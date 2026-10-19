@@ -98,6 +98,46 @@ public sealed class BinanceLocalOrderBook
 
     public IReadOnlyCollection<BinanceOrderBookQuarantineEntry> Quarantined => quarantine.ToArray();
 
+    /// <summary>
+    /// Computes the volume-weighted depth imbalance across the top <paramref name="levels"/> of the local L2 book.
+    /// Returns <see langword="null"/> if the book is invalid (e.g. sequence gap / resync required) or empty.
+    /// </summary>
+    public decimal? CalculateTopDepthImbalance(int levels = 5)
+    {
+        if (Status is not BinanceOrderBookStatus.Healthy || levels <= 0 || bids.Count == 0 || asks.Count == 0)
+        {
+            return null;
+        }
+
+        var topBidQty = bids.OrderByDescending(static p => p.Key).Take(levels).Sum(static p => p.Value);
+        var topAskQty = asks.OrderBy(static p => p.Key).Take(levels).Sum(static p => p.Value);
+        var total = topBidQty + topAskQty;
+        return total > 0m ? Math.Clamp(Math.Round((topBidQty - topAskQty) / total, 4), -1m, 1m) : null;
+    }
+
+    /// <summary>
+    /// Computes Cont-Kukanov-Stoikov (2014) normalized Temporal Order Flow Imbalance (OFI)
+    /// across two consecutive best-bid/best-ask observations in [-1, 1].
+    /// </summary>
+    public static decimal ComputeTemporalOfi(
+        decimal prevBidPrice,
+        decimal prevBidQty,
+        decimal prevAskPrice,
+        decimal prevAskQty,
+        decimal currBidPrice,
+        decimal currBidQty,
+        decimal currAskPrice,
+        decimal currAskQty)
+    {
+        var deltaBid = (currBidPrice >= prevBidPrice ? currBidQty : 0m) -
+                       (currBidPrice <= prevBidPrice ? prevBidQty : 0m);
+        var deltaAsk = (currAskPrice <= prevAskPrice ? currAskQty : 0m) -
+                       (currAskPrice >= prevAskPrice ? prevAskQty : 0m);
+        var rawOfi = deltaBid - deltaAsk;
+        var denom = prevBidQty + prevAskQty + currBidQty + currAskQty;
+        return denom > 0m ? Math.Clamp(Math.Round(rawOfi / denom, 4), -1m, 1m) : 0m;
+    }
+
     public BinanceOrderBookApplyResult ApplySnapshot(BinanceOrderBookSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

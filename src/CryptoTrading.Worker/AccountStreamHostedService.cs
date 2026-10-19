@@ -111,8 +111,9 @@ internal sealed class AccountStreamHostedService(
                 }
 
                 if (userEvent is BinanceUserDataStreamControlEvent control &&
-                    control.EventType is "eventStreamTerminated" or "serverShutdown")
+                    control.EventType is "eventStreamTerminated" or "serverShutdown" or "connectionLost")
                 {
+                    await runtimeSupervisor.MarkAccountStreamAsync(false, $"account-stream-{control.EventType}", stoppingToken).ConfigureAwait(false);
                     await EnterSafeModeAsync($"ACCOUNT_STREAM_{control.EventType.ToUpperInvariant()}", stoppingToken).ConfigureAwait(false);
                 }
                 else if (userEvent is BinanceUserDataStreamControlEvent { EventType: "connectionEstablished" })

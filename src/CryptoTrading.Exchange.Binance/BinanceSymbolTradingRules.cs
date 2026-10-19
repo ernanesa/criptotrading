@@ -16,8 +16,56 @@ public sealed record BinanceSymbolTradingRules(
     decimal QuantityStepSize,
     decimal MinimumNotional,
     decimal MaximumNotional = 0m,
-    IReadOnlyList<BinanceSymbolFilter>? ExchangeFilters = null)
+    IReadOnlyList<BinanceSymbolFilter>? ExchangeFilters = null,
+    decimal MarketMinimumQuantity = 0m,
+    decimal MarketMaximumQuantity = 0m,
+    decimal MarketQuantityStepSize = 0m)
 {
+    public BinanceOrderValidationResult ValidateMarketOrder(decimal quantity, decimal? referencePrice = null)
+    {
+        var violations = new List<BinanceOrderFilterViolation>();
+
+        if (!string.Equals(Status, "TRADING", StringComparison.Ordinal))
+        {
+            violations.Add(new("SYMBOL_NOT_TRADING", $"Symbol '{Symbol}' is not in TRADING status."));
+        }
+
+        var minQty = MarketMinimumQuantity > 0m ? MarketMinimumQuantity : MinimumQuantity;
+        var maxQty = MarketMaximumQuantity > 0m ? MarketMaximumQuantity : MaximumQuantity;
+        var stepSize = MarketQuantityStepSize > 0m ? MarketQuantityStepSize : QuantityStepSize;
+
+        if (quantity <= 0m)
+        {
+            violations.Add(new("QUANTITY_NON_POSITIVE", "Quantity must be greater than zero."));
+        }
+        else
+        {
+            AddRangeViolation(violations, "QUANTITY_BELOW_MINIMUM", quantity, minQty, value => value < minQty);
+            AddRangeViolation(violations, "QUANTITY_ABOVE_MAXIMUM", quantity, maxQty, value => maxQty > 0m && value > maxQty);
+            AddStepViolation(violations, "QUANTITY_STEP_MISMATCH", quantity, stepSize);
+        }
+
+        if (referencePrice is > 0m && quantity > 0m)
+        {
+            var notional = referencePrice.Value * quantity;
+            if (notional < MinimumNotional)
+            {
+                violations.Add(new(
+                    "NOTIONAL_BELOW_MINIMUM",
+                    $"Order notional {Format(notional)} is below minimum {Format(MinimumNotional)}."));
+            }
+
+            if (MaximumNotional > 0m && notional > MaximumNotional)
+            {
+                violations.Add(new(
+                    "NOTIONAL_ABOVE_MAXIMUM",
+                    $"Order notional {Format(notional)} is above maximum {Format(MaximumNotional)}."));
+            }
+        }
+
+        return new(violations.Count is 0, violations);
+    }
+
     public BinanceOrderValidationResult ValidateLimitOrder(decimal price, decimal quantity)
     {
         var violations = new List<BinanceOrderFilterViolation>();
@@ -136,6 +184,16 @@ public static class BinanceSymbolTradingRulesParser
             .Max();
         var notional = minimumNotionalFilters.SingleOrDefault(filter => string.Equals(filter.FilterType, "NOTIONAL", StringComparison.Ordinal));
         var maximumNotional = notional is null ? 0m : ParseNonNegative(notional.MaxNotional, "maxNotional", symbol.Symbol);
+        var marketLot = filters.SingleOrDefault(filter => string.Equals(filter.FilterType, "MARKET_LOT_SIZE", StringComparison.Ordinal));
+        var marketMinQty = marketLot is not null && !string.IsNullOrWhiteSpace(marketLot.MinQty)
+            ? ParseNonNegative(marketLot.MinQty, "marketMinQty", symbol.Symbol)
+            : 0m;
+        var marketMaxQty = marketLot is not null && !string.IsNullOrWhiteSpace(marketLot.MaxQty)
+            ? ParseNonNegative(marketLot.MaxQty, "marketMaxQty", symbol.Symbol)
+            : 0m;
+        var marketStepSize = marketLot is not null && !string.IsNullOrWhiteSpace(marketLot.StepSize)
+            ? ParseNonNegative(marketLot.StepSize, "marketStepSize", symbol.Symbol)
+            : 0m;
 
         return new(
             symbol.Symbol,
@@ -148,7 +206,10 @@ public static class BinanceSymbolTradingRulesParser
             ParsePositive(lot.StepSize, "stepSize", symbol.Symbol),
             minimumNotional,
             maximumNotional,
-            filters.ToArray());
+            filters.ToArray(),
+            marketMinQty,
+            marketMaxQty,
+            marketStepSize);
     }
 
     private static BinanceSymbolFilter RequireSingle(

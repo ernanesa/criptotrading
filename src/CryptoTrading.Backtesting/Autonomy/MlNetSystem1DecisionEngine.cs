@@ -49,6 +49,19 @@ public sealed record MlProbabilityCalibrationBin(
     decimal EmpiricalWinRate,
     decimal AbsoluteError);
 
+/// <summary>
+/// Out-of-sample walk-forward promotion governance report combining Brier Score calibration,
+/// out-of-sample Sharpe Ratio, and Bailey &amp; López de Prado (2014) Deflated Sharpe Ratio (DSR).
+/// </summary>
+public sealed record MlWalkForwardPromotionReport(
+    int SampleCount,
+    decimal BrierScore,
+    decimal ExpectedCalibrationError,
+    decimal OutOfSampleSharpeRatio,
+    decimal DeflatedSharpeRatio,
+    bool PromotionAuthorized,
+    string? RejectionReason);
+
 public static class MlNetSystem1DecisionEngine
 {
     private const int MaxCachedEvaluations = 256;
@@ -294,20 +307,21 @@ public static class MlNetSystem1DecisionEngine
         OrderSide side,
         StrategyRegimePerformance? empiricalPerformance)
     {
-        var rows = new List<MetaLabelRow>(68);
+        var rows = new List<MetaLabelRow>(Math.Max(68, bars.Count));
 
         var dir = side == OrderSide.Buy ? 1f : -1f;
+        var priorScale = bars.Count >= 60 ? 0.35f : 1.0f;
 
         // Calibrated domain priors prevent degenerate single-class fits on short windows while encoding domain invariants:
         // 1. Oversold Z-Score (for Buy) or Overbought Z-Score (for Sell) with aligned order book -> profitable reversion
-        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f, ZScore = -1.65f * dir, SlopeBpsPerBar = 0.0f, Momentum3BarBps = -3.2f * dir, VolatilityBps = 3.5f, OrderBookImbalance = 0.35f * dir, SsaStability = 0.85f });
-        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f, ZScore = -1.40f * dir, SlopeBpsPerBar = 0.2f * dir, Momentum3BarBps = -2.5f * dir, VolatilityBps = 2.8f, OrderBookImbalance = 0.20f * dir, SsaStability = 0.80f });
-        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f, ZScore = 0.60f * dir, SlopeBpsPerBar = 2.1f * dir, Momentum3BarBps = 5.5f * dir, VolatilityBps = 4.0f, OrderBookImbalance = 0.45f * dir, SsaStability = 0.75f });
+        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f * priorScale, ZScore = -1.65f * dir, SlopeBpsPerBar = 0.0f, Momentum3BarBps = -3.2f * dir, VolatilityBps = 3.5f, OrderBookImbalance = 0.35f * dir, SsaStability = 0.85f });
+        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f * priorScale, ZScore = -1.40f * dir, SlopeBpsPerBar = 0.2f * dir, Momentum3BarBps = -2.5f * dir, VolatilityBps = 2.8f, OrderBookImbalance = 0.20f * dir, SsaStability = 0.80f });
+        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f * priorScale, ZScore = 0.60f * dir, SlopeBpsPerBar = 2.1f * dir, Momentum3BarBps = 5.5f * dir, VolatilityBps = 4.0f, OrderBookImbalance = 0.45f * dir, SsaStability = 0.75f });
 
         // 2. Breakdown against side / adverse order book / chasing against reversion -> unprofitable
-        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f, ZScore = -2.40f * dir, SlopeBpsPerBar = -2.8f * dir, Momentum3BarBps = -11.0f * dir, VolatilityBps = 9.5f, OrderBookImbalance = -0.80f * dir, SsaStability = 0.05f });
-        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f, ZScore = 1.50f * dir, SlopeBpsPerBar = 0.1f * dir, Momentum3BarBps = 4.2f * dir, VolatilityBps = 3.2f, OrderBookImbalance = -0.45f * dir, SsaStability = 0.40f });
-        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f, ZScore = -0.50f * dir, SlopeBpsPerBar = -1.9f * dir, Momentum3BarBps = -8.5f * dir, VolatilityBps = 7.0f, OrderBookImbalance = -0.60f * dir, SsaStability = 0.15f });
+        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f * priorScale, ZScore = -2.40f * dir, SlopeBpsPerBar = -2.8f * dir, Momentum3BarBps = -11.0f * dir, VolatilityBps = 9.5f, OrderBookImbalance = -0.80f * dir, SsaStability = 0.05f });
+        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f * priorScale, ZScore = 1.50f * dir, SlopeBpsPerBar = 0.1f * dir, Momentum3BarBps = 4.2f * dir, VolatilityBps = 3.2f, OrderBookImbalance = -0.45f * dir, SsaStability = 0.40f });
+        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f * priorScale, ZScore = -0.50f * dir, SlopeBpsPerBar = -1.9f * dir, Momentum3BarBps = -8.5f * dir, VolatilityBps = 7.0f, OrderBookImbalance = -0.60f * dir, SsaStability = 0.15f });
 
         // 3. Closed-loop empirical experience replay from real executed strategy-regime rewards in PostgreSQL
         if (empiricalPerformance is { ObservationCount: > 0 })
@@ -353,54 +367,16 @@ public static class MlNetSystem1DecisionEngine
         // Point-in-time walk-forward samples strictly prior to the current bar (endIdx = i + horizon < n - 1)
         for (var i = lookback; i + horizon < n - 1; i++)
         {
-            var sum = 0m;
-            for (var j = i - lookback; j <= i; j++)
-            {
-                sum += bars[j].ClosePrice.Value;
-            }
-
-            var mean = sum / (lookback + 1);
-            var sqDiff = 0m;
-            for (var j = i - lookback; j <= i; j++)
-            {
-                var diff = bars[j].ClosePrice.Value - mean;
-                sqDiff += diff * diff;
-            }
-
-            var std = (decimal)Math.Sqrt((double)(sqDiff / lookback));
-            var zScore = std > 0m ? (bars[i].ClosePrice.Value - mean) / std : 0m;
-            var slopeBps = bars[i - lookback].ClosePrice.Value > 0m
-                ? (bars[i].ClosePrice.Value - bars[i - lookback].ClosePrice.Value) / bars[i - lookback].ClosePrice.Value * 10_000m / lookback
-                : 0m;
-            var mom3Bps = bars[i - 3].ClosePrice.Value > 0m
-                ? (bars[i].ClosePrice.Value - bars[i - 3].ClosePrice.Value) / bars[i - 3].ClosePrice.Value * 10_000m
-                : 0m;
-            var volBps = mean > 0m ? std / mean * 10_000m : 0m;
-
-            // Triple-barrier outcome over the next 'horizon' bars
-            var entryPrice = bars[i].ClosePrice.Value;
-            var maxFavorableBps = 0m;
-            var maxAdverseBps = 0m;
-            for (var h = 1; h <= horizon; h++)
-            {
-                var fwdPrice = bars[i + h].ClosePrice.Value;
-                var retBps = entryPrice > 0m
-                    ? (side == OrderSide.Buy ? (fwdPrice - entryPrice) : (entryPrice - fwdPrice)) / entryPrice * 10_000m
-                    : 0m;
-                if (retBps > maxFavorableBps)
-                {
-                    maxFavorableBps = retBps;
-                }
-
-                if (retBps < maxAdverseBps)
-                {
-                    maxAdverseBps = retBps;
-                }
-            }
-
+            var (zScore, slopeBps, mom3Bps, volBps) = ComputePointInTimeFeatures(bars, i, lookback);
             var minProfitableMoveBps = Math.Max(35.0m, volBps * 2.5m);
             var maxAllowedStopBps = Math.Max(18.0m, volBps * 1.5m);
-            var hitTakeProfitBeforeStop = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
+            var hitTakeProfitBeforeStop = EvaluateChronologicalTripleBarrier(
+                bars,
+                i,
+                horizon,
+                side,
+                minProfitableMoveBps,
+                maxAllowedStopBps);
             var recencyRatio = (float)(i - lookback) / maxSampleSpan;
             var recencyWeight = 0.50f + (1.00f * recencyRatio);
             rows.Add(new MetaLabelRow
@@ -419,6 +395,91 @@ public static class MlNetSystem1DecisionEngine
         return rows;
     }
 
+    public static bool EvaluateChronologicalTripleBarrier(
+        IReadOnlyList<CloseBar> bars,
+        int entryIndex,
+        int horizon,
+        OrderSide side,
+        decimal takeProfitBps,
+        decimal stopLossBps)
+    {
+        ArgumentNullException.ThrowIfNull(bars);
+        var entryPrice = bars[entryIndex].ClosePrice.Value;
+        if (entryPrice <= 0m)
+        {
+            return false;
+        }
+
+        var maxStep = Math.Min(horizon, bars.Count - 1 - entryIndex);
+        for (var h = 1; h <= maxStep; h++)
+        {
+            var fwdBar = bars[entryIndex + h];
+            var high = fwdBar.HighPrice.Value;
+            var low = fwdBar.LowPrice.Value;
+
+            decimal favorableBps;
+            decimal adverseBps;
+            if (side == OrderSide.Buy)
+            {
+                favorableBps = (high - entryPrice) / entryPrice * 10_000m;
+                adverseBps = (low - entryPrice) / entryPrice * 10_000m;
+            }
+            else
+            {
+                favorableBps = (entryPrice - low) / entryPrice * 10_000m;
+                adverseBps = (entryPrice - high) / entryPrice * 10_000m;
+            }
+
+            // Conservative chronological ordering: if stop-loss is touched on this bar
+            // (including same-bar TP+SL ambiguity), resolve immediately as a stop-out.
+            if (adverseBps <= -stopLossBps)
+            {
+                return false;
+            }
+
+            if (favorableBps >= takeProfitBps)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static (decimal ZScore, decimal SlopeBps, decimal Mom3Bps, decimal VolBps) ComputePointInTimeFeatures(
+        IReadOnlyList<CloseBar> bars,
+        int index,
+        int lookback)
+    {
+        var windowCount = lookback + 1;
+        var sum = 0m;
+        for (var j = index - lookback; j <= index; j++)
+        {
+            sum += bars[j].ClosePrice.Value;
+        }
+
+        var mean = sum / windowCount;
+        var sqDiff = 0m;
+        for (var j = index - lookback; j <= index; j++)
+        {
+            var diff = bars[j].ClosePrice.Value - mean;
+            sqDiff += diff * diff;
+        }
+
+        var std = lookback > 0 ? (decimal)Math.Sqrt((double)(sqDiff / lookback)) : 0m;
+        var currentBar = bars[index];
+        var zScore = std > 0m ? (currentBar.ClosePrice.Value - mean) / std : 0m;
+        var slopeBps = bars[index - lookback].ClosePrice.Value > 0m
+            ? (currentBar.ClosePrice.Value - bars[index - lookback].ClosePrice.Value) / bars[index - lookback].ClosePrice.Value * 10_000m / lookback
+            : 0m;
+        var mom3Idx = Math.Max(0, index - 3);
+        var mom3Bps = bars[mom3Idx].ClosePrice.Value > 0m
+            ? (currentBar.ClosePrice.Value - bars[mom3Idx].ClosePrice.Value) / bars[mom3Idx].ClosePrice.Value * 10_000m
+            : 0m;
+        var volBps = mean > 0m ? std / mean * 10_000m : 0m;
+        return (zScore, slopeBps, mom3Bps, volBps);
+    }
+
     private static MetaLabelRow BuildCurrentSample(
         IReadOnlyList<CloseBar> bars,
         MarketRegimeSnapshot regime,
@@ -426,27 +487,9 @@ public static class MlNetSystem1DecisionEngine
         decimal ssaChangePointPValue)
     {
         var n = bars.Count;
-        var lookback = Math.Min(12, n - 1);
-        var sum = 0m;
-        for (var j = n - lookback; j < n; j++)
-        {
-            sum += bars[j].ClosePrice.Value;
-        }
-
-        var mean = sum / lookback;
-        var sqDiff = 0m;
-        for (var j = n - lookback; j < n; j++)
-        {
-            var diff = bars[j].ClosePrice.Value - mean;
-            sqDiff += diff * diff;
-        }
-
-        var std = lookback > 1 ? (decimal)Math.Sqrt((double)(sqDiff / (lookback - 1))) : 0m;
-        var zScore = std > 0m ? (bars[^1].ClosePrice.Value - mean) / std : 0m;
+        var lookback = Math.Min(8, n - 1);
+        var (zScore, _, mom3Bps, _) = ComputePointInTimeFeatures(bars, n - 1, lookback);
         var slopeBps = regime.TrendSlopeRate * 10_000m;
-        var mom3Bps = n >= 4 && bars[^4].ClosePrice.Value > 0m
-            ? (bars[^1].ClosePrice.Value - bars[^4].ClosePrice.Value) / bars[^4].ClosePrice.Value * 10_000m
-            : 0m;
         var volBps = regime.VolatilityRate * 10_000m;
 
         return new MetaLabelRow
@@ -630,34 +673,185 @@ public static class MlNetSystem1DecisionEngine
 
                 var eval = Evaluate(pointInTimeBars, regime, OrderSide.Buy, orderBookImbalance);
 
-                // Triple-barrier out-of-sample forward outcome over the next 'horizon' bars
-                var entryPrice = bars[t].ClosePrice.Value;
-                var maxFavorableBps = 0m;
-                var maxAdverseBps = 0m;
-                for (var h = 1; h <= horizon && t + h < bars.Count; h++)
-                {
-                    var fwdPrice = bars[t + h].ClosePrice.Value;
-                    var retBps = entryPrice > 0m ? (fwdPrice - entryPrice) / entryPrice * 10_000m : 0m;
-                    if (retBps > maxFavorableBps)
-                    {
-                        maxFavorableBps = retBps;
-                    }
-
-                    if (retBps < maxAdverseBps)
-                    {
-                        maxAdverseBps = retBps;
-                    }
-                }
-
                 var volBps = regime.VolatilityRate * 10_000m;
                 var minProfitableMoveBps = Math.Max(35.0m, volBps * 2.5m);
                 var maxAllowedStopBps = Math.Max(18.0m, volBps * 1.5m);
-                var actualOutcome = maxFavorableBps >= minProfitableMoveBps && maxAdverseBps > -maxAllowedStopBps;
+                var actualOutcome = EvaluateChronologicalTripleBarrier(
+                    bars,
+                    t,
+                    horizon,
+                    OrderSide.Buy,
+                    minProfitableMoveBps,
+                    maxAllowedStopBps);
                 samples.Add((eval.MlWinProbability, actualOutcome));
             }
         }
 
         return CalculateCalibrationReport(samples, binCount: 5, targetBrierThreshold: targetBrierThreshold);
+    }
+
+    /// <summary>
+    /// Computes the Bailey &amp; López de Prado (2014) Deflated Sharpe Ratio (DSR) probability in [0, 1],
+    /// adjusting an observed Sharpe Ratio for sample length, non-normal skewness/kurtosis, and multiple testing trials.
+    /// </summary>
+    public static decimal CalculateDeflatedSharpeRatio(
+        decimal observedSharpeRatio,
+        int sampleCount,
+        int independentTrials = 6,
+        decimal skewness = 0m,
+        decimal kurtosis = 3m,
+        decimal trialSharpeStdDev = 0.25m)
+    {
+        if (sampleCount < 2)
+        {
+            return 0m;
+        }
+
+        var k = Math.Max(1, independentTrials);
+        double sr0 = 0.0;
+        if (k > 1 && trialSharpeStdDev > 0m)
+        {
+            const double eulerMascheroni = 0.5772156649015329;
+            var z1 = InverseStandardNormalCdf(1.0 - (1.0 / k));
+            var z2 = InverseStandardNormalCdf(1.0 - (1.0 / (k * Math.E)));
+            sr0 = (double)trialSharpeStdDev * (((1.0 - eulerMascheroni) * z1) + (eulerMascheroni * z2));
+        }
+
+        var sr = (double)observedSharpeRatio;
+        var skew = (double)skewness;
+        var kurt = Math.Max(1.0, (double)kurtosis);
+        var varianceAdjustment = 1.0 - (skew * sr) + (((kurt - 1.0) / 4.0) * sr * sr);
+        var denom = Math.Sqrt(Math.Max(1e-9, varianceAdjustment));
+        var zScore = (sr - sr0) * Math.Sqrt(sampleCount - 1) / denom;
+        var dsr = StandardNormalCdf(zScore);
+        return Math.Clamp(Math.Round((decimal)dsr, 4), 0m, 1m);
+    }
+
+    /// <summary>
+    /// Evaluates whether a candidate walk-forward ML model satisfies institutional promotion governance:
+    /// Brier Score calibration threshold, positive out-of-sample Sharpe Ratio, and Deflated Sharpe Ratio (DSR) gate.
+    /// </summary>
+    public static MlWalkForwardPromotionReport EvaluateWalkForwardModelPromotion(
+        IReadOnlyList<(decimal PredictedWinProbability, bool RealizedOutcome, decimal RealizedNetReturnBps)> outOfSampleEvaluations,
+        int independentTrials = 6,
+        decimal maxBrierScore = 0.25m,
+        decimal minDeflatedSharpeRatio = 0.65m,
+        int minSampleCount = 10)
+    {
+        ArgumentNullException.ThrowIfNull(outOfSampleEvaluations);
+        if (outOfSampleEvaluations.Count == 0)
+        {
+            return new MlWalkForwardPromotionReport(
+                SampleCount: 0,
+                BrierScore: 0.25m,
+                ExpectedCalibrationError: 0m,
+                OutOfSampleSharpeRatio: 0m,
+                DeflatedSharpeRatio: 0m,
+                PromotionAuthorized: false,
+                RejectionReason: "INSUFFICIENT_OUT_OF_SAMPLE_EVALUATIONS");
+        }
+
+        var calibrationSamples = outOfSampleEvaluations
+            .Select(static x => (x.PredictedWinProbability, x.RealizedOutcome))
+            .ToArray();
+        var calibration = CalculateCalibrationReport(calibrationSamples, binCount: 5, targetBrierThreshold: maxBrierScore);
+
+        var activeReturns = outOfSampleEvaluations
+            .Where(static x => x.PredictedWinProbability >= 0.55m)
+            .Select(static x => (double)x.RealizedNetReturnBps)
+            .ToArray();
+        if (activeReturns.Length == 0)
+        {
+            activeReturns = outOfSampleEvaluations.Select(static x => (double)x.RealizedNetReturnBps).ToArray();
+        }
+
+        var n = activeReturns.Length;
+        var mean = activeReturns.Average();
+        var variance = n > 1
+            ? activeReturns.Sum(r => (r - mean) * (r - mean)) / (n - 1)
+            : 0.0;
+        var std = Math.Sqrt(Math.Max(0.0, variance));
+        var sharpe = std > 1e-6 ? (decimal)Math.Round(mean / std, 4) : (mean > 0 ? 1.0m : 0m);
+
+        decimal skewness = 0m;
+        decimal kurtosis = 3m;
+        if (n >= 4 && std > 1e-6)
+        {
+            var m3 = activeReturns.Average(r => Math.Pow((r - mean) / std, 3));
+            var m4 = activeReturns.Average(r => Math.Pow((r - mean) / std, 4));
+            skewness = (decimal)Math.Clamp(m3, -3.0, 3.0);
+            kurtosis = (decimal)Math.Clamp(m4, 1.5, 10.0);
+        }
+
+        var dsr = CalculateDeflatedSharpeRatio(
+            sharpe,
+            n,
+            independentTrials,
+            skewness,
+            kurtosis);
+
+        string? rejectionReason = null;
+        if (outOfSampleEvaluations.Count < minSampleCount)
+        {
+            rejectionReason = "INSUFFICIENT_OUT_OF_SAMPLE_EVALUATIONS";
+        }
+        else if (calibration.BrierScore > maxBrierScore)
+        {
+            rejectionReason = "BRIER_SCORE_ABOVE_THRESHOLD";
+        }
+        else if (sharpe <= 0m)
+        {
+            rejectionReason = "NON_POSITIVE_OUT_OF_SAMPLE_SHARPE";
+        }
+        else if (dsr < minDeflatedSharpeRatio)
+        {
+            rejectionReason = "DEFLATED_SHARPE_RATIO_BELOW_THRESHOLD";
+        }
+
+        return new MlWalkForwardPromotionReport(
+            SampleCount: outOfSampleEvaluations.Count,
+            BrierScore: calibration.BrierScore,
+            ExpectedCalibrationError: calibration.ExpectedCalibrationError,
+            OutOfSampleSharpeRatio: sharpe,
+            DeflatedSharpeRatio: dsr,
+            PromotionAuthorized: rejectionReason is null,
+            RejectionReason: rejectionReason);
+    }
+
+    private static double StandardNormalCdf(double x)
+    {
+        // Abramowitz & Stegun 7.1.26 approximation
+        const double a1 = 0.254829592;
+        const double a2 = -0.284496736;
+        const double a3 = 1.421413741;
+        const double a4 = -1.453152027;
+        const double a5 = 1.061405429;
+        const double p = 0.3275911;
+
+        var sign = x < 0 ? -1.0 : 1.0;
+        var absX = Math.Abs(x) / Math.Sqrt(2.0);
+        var t = 1.0 / (1.0 + (p * absX));
+        var y = 1.0 - (((((((((a5 * t) + a4) * t) + a3) * t) + a2) * t) + a1) * t * Math.Exp(-absX * absX));
+        return 0.5 * (1.0 + (sign * y));
+    }
+
+    private static double InverseStandardNormalCdf(double p)
+    {
+        var clamped = Math.Clamp(p, 1e-6, 1.0 - 1e-6);
+        // Beasley-Springer-Moro rational approximation for central/tail regions
+        var q = clamped - 0.5;
+        if (Math.Abs(q) <= 0.42)
+        {
+            var r = q * q;
+            return q * (((((-25.44106049637 * r + 41.39119773534) * r - 18.61500062529) * r + 2.50662823884) /
+                        ((((3.13082909833 * r - 21.06224101826) * r + 23.08336743743) * r - 8.47351093090) * r + 1.0)));
+        }
+
+        var tail = q > 0 ? 1.0 - clamped : clamped;
+        var s = Math.Sqrt(-2.0 * Math.Log(tail));
+        var z = s - ((2.515517 + (0.802853 * s) + (0.010328 * s * s)) /
+                     (1.0 + (1.432788 * s) + (0.189269 * s * s) + (0.001308 * s * s * s)));
+        return q < 0 ? -z : z;
     }
 
     private sealed class SsaInputRow

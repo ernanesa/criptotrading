@@ -186,7 +186,7 @@ public sealed class OperationalControlTests
         control.EnterSafeMode(Command("safe", "system", "trust gate failed"));
 
         var entry = OrderExecutionPipeline.Evaluate(NewIntent(80m, currentExposure: 0m), Policy, control);
-        var reduction = OrderExecutionPipeline.Evaluate(NewIntent(10m, currentExposure: 20m), Policy, control);
+        var reduction = OrderExecutionPipeline.Evaluate(NewIntent(10m, currentExposure: 20m, OrderSide.Sell), Policy, control);
 
         Assert.Equal(RiskDecisionStatus.Rejected, entry.Decision.Status);
         Assert.Contains(RiskReasonCodes.SafeMode, entry.Decision.ReasonCodes);
@@ -201,7 +201,7 @@ public sealed class OperationalControlTests
     private static OperationalControlCommand Command(string key, string actor, string reason) =>
         new(actor, reason, new IdempotencyKey(key), Now);
 
-    private static OrderIntent NewIntent(decimal requestedNotional, decimal currentExposure)
+    private static OrderIntent NewIntent(decimal requestedNotional, decimal currentExposure, OrderSide side = OrderSide.Buy)
     {
         var evaluation = new RiskEvaluationRequest(
             requestedNotional,
@@ -215,7 +215,7 @@ public sealed class OperationalControlTests
             OrderId.Parse("11111111111111111111111111111111"),
             new ClientOrderId($"ct-control-{requestedNotional}"),
             new Symbol("BTCUSDT"),
-            OrderSide.Buy,
+            side,
             OrderType.Market,
             new Quantity(requestedNotional / 100m),
             new Price(100m),
