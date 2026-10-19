@@ -186,4 +186,24 @@ public sealed class StrategyComparisonEvaluatorTests
 
         Assert.Contains("30 in-sample / 10 out-of-sample", sensitivity.Methodology, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void EvaluateOperationalParityIncludesVolatilitySqueezeAndMultiStrategyOrchestrator()
+    {
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var windows = WalkForwardPlan.Create(dataset.Bars.Count, trainingBars: 60, outOfSampleBars: 20, stepBars: 20);
+        var options = new StrategyBacktestOptions(
+            initialCapital: 10_000m,
+            periodsPerYear: 365,
+            feeRate: 0.001m,
+            halfSpreadRate: 0m,
+            slippageRate: 0.0005m);
+
+        var result = StrategyComparisonEvaluator.EvaluateOperationalParity(dataset.Metadata, dataset.Bars, options, windows);
+
+        Assert.False(result.PromotionAuthorized);
+        Assert.Equal(6, result.Strategies.Count);
+        Assert.Contains(result.Strategies, static item => item.StrategyId == "volatility-squeeze-btcusdt");
+        Assert.Contains(result.Strategies, static item => item.StrategyId == "multi-strategy-orchestrator-btcusdt");
+    }
 }

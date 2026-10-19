@@ -118,6 +118,11 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
 
             var openTime = DateTimeOffset.FromUnixTimeMilliseconds(row[0].GetInt64());
             var closeTime = DateTimeOffset.FromUnixTimeMilliseconds(row[6].GetInt64());
+            var rowLen = row.GetArrayLength();
+            var quoteVolume = rowLen >= 8 && row[7].ValueKind == JsonValueKind.String ? ParseDecimal(row[7]) : 0m;
+            var numberOfTrades = rowLen >= 9 && row[8].ValueKind == JsonValueKind.Number ? row[8].GetInt64() : 0L;
+            var takerBuyBaseVolume = rowLen >= 10 && row[9].ValueKind == JsonValueKind.String ? ParseDecimal(row[9]) : 0m;
+            var takerBuyQuoteVolume = rowLen >= 11 && row[10].ValueKind == JsonValueKind.String ? ParseDecimal(row[10]) : 0m;
             result.Add(new BinanceSpotKline(
                 openTime,
                 closeTime,
@@ -126,7 +131,11 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
                 ParseDecimal(row[3]),
                 ParseDecimal(row[4]),
                 ParseDecimal(row[5]),
-                normalizedInterval));
+                normalizedInterval,
+                quoteVolume,
+                numberOfTrades,
+                takerBuyBaseVolume,
+                takerBuyQuoteVolume));
         }
 
         if (options.KlineCacheDuration > TimeSpan.Zero && startTimeUtc is null && endTimeUtc is null)
@@ -293,6 +302,60 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
             0 => throw new FormatException($"Binance exchangeInfo did not contain symbol '{normalizedSymbol}'."),
             _ => throw new FormatException($"Binance exchangeInfo contained duplicate symbol '{normalizedSymbol}'.")
         };
+    }
+
+    public async Task<BinanceOrderBookSnapshot> GetOrderBookSnapshotAsync(
+        string symbol,
+        int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        if (limit is < 1 or > 5000)
+        {
+            throw new ArgumentOutOfRangeException(nameof(limit), "Order book depth limit must be between 1 and 5000.");
+        }
+
+        using var response = await httpClient.GetAsync(
+            new Uri($"v3/depth?symbol={Uri.EscapeDataString(normalizedSymbol)}&limit={limit.ToString(CultureInfo.InvariantCulture)}", UriKind.Relative),
+            cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, "depth", cancellationToken).ConfigureAwait(false);
+        using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(contentStream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var root = document.RootElement;
+        if (root.ValueKind is not JsonValueKind.Object ||
+            !root.TryGetProperty("lastUpdateId", out var lastUpdateIdProp) ||
+            !root.TryGetProperty("bids", out var bidsProp) ||
+            !root.TryGetProperty("asks", out var asksProp))
+        {
+            throw new JsonException("Binance depth snapshot response is incomplete.");
+        }
+
+        return new BinanceOrderBookSnapshot(
+            normalizedSymbol,
+            lastUpdateIdProp.GetInt64(),
+            ParseDepthLevels(bidsProp),
+            ParseDepthLevels(asksProp));
+    }
+
+    private static List<BinanceOrderBookLevel> ParseDepthLevels(JsonElement element)
+    {
+        if (element.ValueKind is not JsonValueKind.Array)
+        {
+            throw new JsonException("Binance depth levels must be an array.");
+        }
+
+        var levels = new List<BinanceOrderBookLevel>(element.GetArrayLength());
+        foreach (var entry in element.EnumerateArray())
+        {
+            if (entry.ValueKind is not JsonValueKind.Array || entry.GetArrayLength() < 2)
+            {
+                throw new JsonException("Binance depth level entry must contain price and quantity.");
+            }
+
+            levels.Add(new BinanceOrderBookLevel(ParseDecimal(entry[0]), ParseDecimal(entry[1])));
+        }
+
+        return levels;
     }
 
     private async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken)

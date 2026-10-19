@@ -13,7 +13,11 @@ public sealed record BinanceSpotKline(
     decimal Low,
     decimal Close,
     decimal Volume,
-    string Interval);
+    string Interval,
+    decimal QuoteVolume = 0m,
+    long NumberOfTrades = 0,
+    decimal TakerBuyBaseVolume = 0m,
+    decimal TakerBuyQuoteVolume = 0m);
 
 /// <summary>Public aggregate trade evidence emitted by the Binance matching engine.</summary>
 public sealed record BinanceAggregateTrade(

@@ -33,4 +33,11 @@ public interface IBinanceSpotMarketClient
     Task<BinanceSymbolTradingRules> GetTradingRulesAsync(
         string symbol,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the public L2 order book depth snapshot; it never submits an order.</summary>
+    Task<BinanceOrderBookSnapshot> GetOrderBookSnapshotAsync(
+        string symbol,
+        int limit = 20,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(new BinanceOrderBookSnapshot(symbol, 0, [], []));
 }

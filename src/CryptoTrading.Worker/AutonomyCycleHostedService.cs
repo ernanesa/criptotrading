@@ -61,6 +61,10 @@ internal sealed class AutonomyCycleHostedService(
     private int consecutiveTransientFailures;
     private const int MaxConsecutiveTransientFailures = 6;
     private readonly ConcurrentDictionary<string, BinanceBookTicker> streamBookTickers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, BinanceBookTicker> previousBookTickers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, decimal> temporalOfiBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, decimal> tradeAggressionDeltaBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, BinanceLocalOrderBook> localOrderBooks = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, List<BinanceSpotKline>> klineCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastKlineFetchUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> positionOriginatingStrategy = new(StringComparer.OrdinalIgnoreCase);
@@ -245,11 +249,13 @@ internal sealed class AutonomyCycleHostedService(
     private async Task ConsumeMarketDataStreamAsync(WorkerRuntimeOptions runtime, CancellationToken stoppingToken)
     {
         var symbols = runtime.ResolveAutonomySymbols();
-        var subscriptions = new List<BinanceMarketSubscription>(symbols.Count * 2);
+        var subscriptions = new List<BinanceMarketSubscription>(symbols.Count * 4);
         foreach (var s in symbols)
         {
             subscriptions.Add(new BinanceMarketSubscription(s, BinanceMarketStreamKind.Kline, runtime.AutonomyInterval));
             subscriptions.Add(new BinanceMarketSubscription(s, BinanceMarketStreamKind.BookTicker));
+            subscriptions.Add(new BinanceMarketSubscription(s, BinanceMarketStreamKind.Trade));
+            subscriptions.Add(new BinanceMarketSubscription(s, BinanceMarketStreamKind.Depth));
         }
 
         while (!stoppingToken.IsCancellationRequested)
@@ -274,7 +280,11 @@ internal sealed class AutonomyCycleHostedService(
                                     kline.Low,
                                     kline.Close,
                                     kline.Volume,
-                                    kline.Interval);
+                                    kline.Interval,
+                                    kline.QuoteVolume,
+                                    kline.NumberOfTrades,
+                                    kline.TakerBuyBaseVolume,
+                                    kline.TakerBuyQuoteVolume);
 
                                 if (list.Count > 0 && list[^1].OpenTimeUtc == openTimeUtc)
                                 {
@@ -298,13 +308,32 @@ internal sealed class AutonomyCycleHostedService(
                     }
                     else if (marketEvent is BinanceBookTickerStreamEvent tickerEvent)
                     {
-                        streamBookTickers[tickerEvent.Symbol] = new BinanceBookTicker(
+                        var nextTicker = new BinanceBookTicker(
                             tickerEvent.Symbol,
                             tickerEvent.BestBidPrice,
                             tickerEvent.BestBidQuantity,
                             tickerEvent.BestAskPrice,
                             tickerEvent.BestAskQuantity,
                             tickerEvent.ReceivedAt);
+                        if (streamBookTickers.TryGetValue(tickerEvent.Symbol, out var prevTicker))
+                        {
+                            previousBookTickers[tickerEvent.Symbol] = prevTicker;
+                            var stepOfi = BinanceLocalOrderBook.ComputeTemporalOfi(
+                                prevTicker.BidPrice,
+                                prevTicker.BidQuantity,
+                                prevTicker.AskPrice,
+                                prevTicker.AskQuantity,
+                                nextTicker.BidPrice,
+                                nextTicker.BidQuantity,
+                                nextTicker.AskPrice,
+                                nextTicker.AskQuantity);
+                            temporalOfiBySymbol.AddOrUpdate(
+                                tickerEvent.Symbol,
+                                stepOfi,
+                                (_, prevOfi) => Math.Round(Math.Clamp((prevOfi * 0.70m) + (stepOfi * 0.30m), -1m, 1m), 4));
+                        }
+
+                        streamBookTickers[tickerEvent.Symbol] = nextTicker;
 
                         if (positionCostBases.TryGetValue(tickerEvent.Symbol, out var basis) &&
                             basis.CostNotional > 0m && basis.Quantity > 0m &&
@@ -316,8 +345,9 @@ internal sealed class AutonomyCycleHostedService(
 
                             var isTakeProfitTrigger = curProfitBps >= 45.0m;
                             var isChandelierTrigger = peakBps >= 25.0m && (peakBps - curProfitBps) >= 12.0m && curProfitBps >= 15.0m;
+                            var isStopLossTrigger = curProfitBps <= -18.0m;
 
-                            if (isTakeProfitTrigger || isChandelierTrigger)
+                            if (isTakeProfitTrigger || isChandelierTrigger || isStopLossTrigger)
                             {
                                 var nowUtc = tickerEvent.ReceivedAt;
                                 if (!lastIntrabarTriggerUtc.TryGetValue(tickerEvent.Symbol, out var lastTrigger) ||
@@ -326,6 +356,33 @@ internal sealed class AutonomyCycleHostedService(
                                     lastIntrabarTriggerUtc[tickerEvent.Symbol] = nowUtc;
                                     barCloseSignalChannel.Writer.TryWrite(nowUtc);
                                 }
+                            }
+                        }
+                    }
+                    else if (marketEvent is BinanceTradeEvent tradeEvent)
+                    {
+                        var signedSign = tradeEvent.IsBuyerMaker ? -1m : 1m;
+                        tradeAggressionDeltaBySymbol.AddOrUpdate(
+                            tradeEvent.Symbol,
+                            signedSign * 0.25m,
+                            (_, prevDelta) => Math.Round(Math.Clamp((prevDelta * 0.85m) + (signedSign * 0.15m), -1m, 1m), 4));
+                    }
+                    else if (marketEvent is BinanceAggTradeStreamEvent aggTradeEvent)
+                    {
+                        var signedSign = aggTradeEvent.IsBuyerMaker ? -1m : 1m;
+                        tradeAggressionDeltaBySymbol.AddOrUpdate(
+                            aggTradeEvent.Symbol,
+                            signedSign * 0.25m,
+                            (_, prevDelta) => Math.Round(Math.Clamp((prevDelta * 0.85m) + (signedSign * 0.15m), -1m, 1m), 4));
+                    }
+                    else if (marketEvent is BinanceDepthUpdateEvent depthEvent)
+                    {
+                        var book = localOrderBooks.GetOrAdd(depthEvent.Symbol, s => new BinanceLocalOrderBook(s));
+                        lock (book)
+                        {
+                            if (book.Status == BinanceOrderBookStatus.Healthy)
+                            {
+                                _ = book.ApplyDelta(depthEvent);
                             }
                         }
                     }
@@ -439,9 +496,56 @@ internal sealed class AutonomyCycleHostedService(
             AutonomyCycleLog.MarketDataRejected(logger, symbol, ex.Message);
             return;
         }
-        if (closed.Count == 0 || lastProcessedCloseUtc is { } previous && closed[^1].Bar.CloseTimeUtc <= previous)
+        if (closed.Count == 0)
         {
             return;
+        }
+
+        if (lastProcessedCloseUtc is { } previous && closed[^1].Bar.CloseTimeUtc <= previous)
+        {
+            var isIntrabarProtectiveTrigger = false;
+            if (positionCostBases.TryGetValue(symbol, out var intrabarBasis) &&
+                intrabarBasis.CostNotional > 0m &&
+                intrabarBasis.Quantity > 0m &&
+                streamBookTickers.TryGetValue(symbol, out var intrabarTicker) &&
+                intrabarTicker.BidPrice > 0m &&
+                intrabarTicker.ObservedAtUtc > closed[^1].Bar.CloseTimeUtc &&
+                intrabarTicker.ObservedAtUtc <= now &&
+                now - intrabarTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+            {
+                var intrabarValueNotional = intrabarBasis.Quantity * intrabarTicker.BidPrice;
+                var intrabarProfitBps = (intrabarValueNotional - intrabarBasis.CostNotional) / intrabarBasis.CostNotional * 10_000m;
+                var intrabarPeakBps = positionLifetimePeakProfitBps.AddOrUpdate(
+                    symbol,
+                    intrabarProfitBps,
+                    (_, peak) => Math.Max(peak, intrabarProfitBps));
+                var isIntrabarTakeProfit = intrabarProfitBps >= 45.0m;
+                var isIntrabarChandelier = intrabarPeakBps >= 25.0m &&
+                                           (intrabarPeakBps - intrabarProfitBps) >= 12.0m &&
+                                           intrabarProfitBps >= 15.0m;
+                var isIntrabarStopLoss = intrabarProfitBps <= -18.0m;
+                if (isIntrabarTakeProfit || isIntrabarChandelier || isIntrabarStopLoss)
+                {
+                    var intrabarScope = $"{checkpointScope}:intrabar";
+                    var lastIntrabarCloseUtc = await decisionCommitStore
+                        .GetLastProcessedCloseAsync(intrabarScope, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (lastIntrabarCloseUtc is null || intrabarTicker.ObservedAtUtc > lastIntrabarCloseUtc.Value)
+                    {
+                        checkpointScope = intrabarScope;
+                        closed.Add(new ClosedBarEnvelope(
+                            closed.Count,
+                            new CloseBar(symbolObj, intrabarTicker.ObservedAtUtc, intrabarTicker.BidPrice),
+                            now));
+                        isIntrabarProtectiveTrigger = true;
+                    }
+                }
+            }
+
+            if (!isIntrabarProtectiveTrigger)
+            {
+                return;
+            }
         }
 
         var featureSnapshot = BaselineFeatureSnapshot.Create(
@@ -566,6 +670,9 @@ internal sealed class AutonomyCycleHostedService(
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
 
         decimal totalOtherPositionsNotional = 0m;
+        decimal totalOtherUnrealizedPnlQuote = 0m;
+        var allOtherPositionsHaveBasis = true;
+        var unvaluedOtherPosition = false;
         foreach (var otherSymbol in runtime.ResolveAutonomySymbols())
         {
             if (string.Equals(otherSymbol, symbol, StringComparison.OrdinalIgnoreCase))
@@ -595,29 +702,53 @@ internal sealed class AutonomyCycleHostedService(
             var otherNetQty = Math.Max(0m, otherRawQty - otherFaucet);
             if (otherNetQty > 0m)
             {
+                decimal? otherMid = null;
                 if (streamBookTickers.TryGetValue(otherSymbol, out var otherTicker) &&
-                    DateTimeOffset.UtcNow - otherTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+                    DateTimeOffset.UtcNow - otherTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge &&
+                    otherTicker.BidPrice > 0m &&
+                    otherTicker.AskPrice >= otherTicker.BidPrice)
                 {
-                    var otherMid = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
-                    totalOtherPositionsNotional += otherNetQty * otherMid;
+                    otherMid = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
                 }
                 else
                 {
                     try
                     {
                         var restTicker = await marketClient.GetBookTickerAsync(otherSymbol, cancellationToken).ConfigureAwait(false);
-                        var otherMid = (restTicker.BidPrice + restTicker.AskPrice) / 2m;
-                        totalOtherPositionsNotional += otherNetQty * otherMid;
+                        if (restTicker.BidPrice > 0m && restTicker.AskPrice >= restTicker.BidPrice)
+                        {
+                            otherMid = (restTicker.BidPrice + restTicker.AskPrice) / 2m;
+                        }
                     }
                     catch
                     {
-                        // Fallback: omit if ticker is unreachable
+                        // Handled below via unvaluedOtherPosition fail-closed guard
                     }
+                }
+
+                if (otherMid is { } validOtherMid)
+                {
+                    var otherMarketValue = otherNetQty * validOtherMid;
+                    totalOtherPositionsNotional += otherMarketValue;
+                    if (positionCostBases.TryGetValue(otherSymbol, out var otherBasis) &&
+                        otherBasis.CostNotional > 0m &&
+                        Math.Abs(otherBasis.Quantity - otherNetQty) <= 0.00000001m)
+                    {
+                        totalOtherUnrealizedPnlQuote += otherMarketValue - otherBasis.CostNotional;
+                    }
+                    else
+                    {
+                        allOtherPositionsHaveBasis = false;
+                    }
+                }
+                else
+                {
+                    unvaluedOtherPosition = true;
                 }
             }
         }
 
-        decimal? currentEquityNotional = unsupportedAssetBalance
+        decimal? currentEquityNotional = (unsupportedAssetBalance || unvaluedOtherPosition)
             ? null
             : totalQuoteBalance + (baseQuantity * latest.ClosePrice.Value) + totalOtherPositionsNotional;
         var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
@@ -646,19 +777,23 @@ internal sealed class AutonomyCycleHostedService(
                 symbol,
                 cancellationToken).ConfigureAwait(false);
         }
-        if (navSnapshots is not null && !unsupportedAssetBalance &&
+        if (navSnapshots is not null && !unsupportedAssetBalance && !unvaluedOtherPosition &&
             bookTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
             DateTimeOffset.UtcNow - bookTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
         {
             var valuationPrice = (bookTicker.BidPrice + bookTicker.AskPrice) / 2m;
-            decimal? unrealized = baseQuantity == 0m ? 0m :
+            var consolidatedNavQuote = totalQuoteBalance + (baseQuantity * valuationPrice) + totalOtherPositionsNotional;
+            decimal? symbolUnrealized = baseQuantity == 0m ? 0m :
                 accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - baseQuantity) <= 0.00000001m
                     ? baseQuantity * valuationPrice - accounting.PositionCostNotional : null;
+            decimal? consolidatedUnrealized = symbolUnrealized.HasValue && allOtherPositionsHaveBasis
+                ? symbolUnrealized.Value + totalOtherUnrealizedPnlQuote
+                : null;
             try
             {
                 await navSnapshots.RecordNavSnapshotAsync(new PortfolioNavSnapshot(
                     symbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
-                    totalQuoteBalance + baseQuantity * valuationPrice, unrealized,
+                    consolidatedNavQuote, consolidatedUnrealized,
                     null, "account-snapshot+observed-book-mid"), cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -667,7 +802,7 @@ internal sealed class AutonomyCycleHostedService(
                 AutonomyCycleLog.TelemetryWriteFailed(logger, "nav_snapshot", ex.GetType().Name);
             }
             AutonomyCycleLog.Valuation(logger, symbol, bookTicker.ObservedAtUtc,
-                totalQuoteBalance + baseQuantity * valuationPrice, unrealized);
+                consolidatedNavQuote, consolidatedUnrealized);
         }
         BinanceSymbolTradingRules? rules = null;
         if (rulesProvider is not null)
@@ -683,6 +818,42 @@ internal sealed class AutonomyCycleHostedService(
         }
         var mappedExecutionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker, rules);
         var hasCompleteTradingRules = HasCompleteTradingRules(rules, symbol);
+        decimal? depthImbalanceTop5 = null;
+        var localBook = localOrderBooks.GetOrAdd(symbol, s => new BinanceLocalOrderBook(s));
+        bool needsBookSnapshot;
+        lock (localBook)
+        {
+            needsBookSnapshot = localBook.Status != BinanceOrderBookStatus.Healthy;
+        }
+
+        if (needsBookSnapshot)
+        {
+            try
+            {
+                var snapshot = await marketClient.GetOrderBookSnapshotAsync(symbol, 20, cancellationToken).ConfigureAwait(false);
+                if (snapshot.Bids.Count > 0 && snapshot.Asks.Count > 0)
+                {
+                    lock (localBook)
+                    {
+                        localBook.ApplySnapshot(snapshot);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort L2 depth snapshot; L1 bookTicker remains the fail-closed authority.
+            }
+        }
+
+        lock (localBook)
+        {
+            if (localBook.Status == BinanceOrderBookStatus.Healthy)
+            {
+                depthImbalanceTop5 = localBook.CalculateTopDepthImbalance(5);
+            }
+        }
+        var temporalOfi = temporalOfiBySymbol.TryGetValue(symbol, out var tOfi) ? (decimal?)tOfi : null;
+        var tradeAggressionDelta = tradeAggressionDeltaBySymbol.TryGetValue(symbol, out var tAgg) ? (decimal?)tAgg : null;
         var executionMarket = new ExecutionMarketSnapshot(
             mappedExecutionMarket.BestBid,
             mappedExecutionMarket.BestAsk,
@@ -692,7 +863,10 @@ internal sealed class AutonomyCycleHostedService(
             quantityStepSize: mappedExecutionMarket.QuantityStepSize,
             priceTickSize: mappedExecutionMarket.PriceTickSize,
             bidQuantity: mappedExecutionMarket.BidQuantity,
-            askQuantity: mappedExecutionMarket.AskQuantity);
+            askQuantity: mappedExecutionMarket.AskQuantity,
+            temporalOrderFlowImbalance: temporalOfi,
+            tradeAggressionDelta: tradeAggressionDelta,
+            depthImbalanceTop5: depthImbalanceTop5);
         var baseAssetObj = new Asset(baseAsset);
         var positionBasisConsistent = baseQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
@@ -812,6 +986,38 @@ internal sealed class AutonomyCycleHostedService(
                 }
             }
 
+            decimal? maxOpenPositionCorrelation = null;
+            if (!hasOpenExposure)
+            {
+                foreach (var kvp in positionCostBases)
+                {
+                    if (string.Equals(kvp.Key, symbol, StringComparison.OrdinalIgnoreCase) || kvp.Value.Quantity <= 0m)
+                    {
+                        continue;
+                    }
+
+                    if (klineCache.TryGetValue(kvp.Key, out var otherKlinesList))
+                    {
+                        CloseBar[] otherBars;
+                        lock (otherKlinesList)
+                        {
+                            otherBars = otherKlinesList
+                                .Where(static k => k.Close > 0m)
+                                .Select(k => new CloseBar(new Symbol(kvp.Key), k.CloseTimeUtc, k.Close, k.Open, k.High, k.Low, k.Volume, k.TakerBuyBaseVolume, k.QuoteVolume, k.NumberOfTrades))
+                                .ToArray();
+                        }
+
+                        if (otherBars.Length >= 5 && bars.Length >= 5)
+                        {
+                            var corr = CrossSectionalPortfolioAllocator.ComputePairwiseReturnCorrelation(bars, otherBars, 20);
+                            maxOpenPositionCorrelation = maxOpenPositionCorrelation.HasValue
+                                ? Math.Max(maxOpenPositionCorrelation.Value, corr)
+                                : corr;
+                        }
+                    }
+                }
+            }
+
             var adaptiveRequest = new AdaptiveDecisionCycleRequest(
                 bars,
                 portfolio,
@@ -838,7 +1044,8 @@ internal sealed class AutonomyCycleHostedService(
                 LifetimePeakProfitBps: lifetimePeakBps,
                 LeaderReturnBps: leaderReturnBps,
                 LeaderOrderBookImbalance: leaderOrderBookImbalance,
-                LastClosedTradeAtUtc: lastClosedTradeAtBySymbol.TryGetValue(symbol, out var closedAt) ? closedAt : null);
+                LastClosedTradeAtUtc: lastClosedTradeAtBySymbol.TryGetValue(symbol, out var closedAt) ? closedAt : null,
+                MaxOpenPositionCorrelation: maxOpenPositionCorrelation);
 
             if (durablePerformances is not null)
             {
@@ -1190,7 +1397,14 @@ internal sealed class AutonomyCycleHostedService(
                 new CloseBar(
                     new Symbol(decision.Kline.Symbol),
                     decision.Kline.CloseTimeUtc,
-                    decision.Kline.Close),
+                    decision.Kline.Close,
+                    decision.Kline.Open,
+                    decision.Kline.High,
+                    decision.Kline.Low,
+                    decision.Kline.Volume,
+                    kline.TakerBuyBaseVolume,
+                    kline.QuoteVolume,
+                    kline.NumberOfTrades),
                 nowUtc));
         }
 

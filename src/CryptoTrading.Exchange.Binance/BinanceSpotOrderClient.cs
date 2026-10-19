@@ -121,6 +121,271 @@ public sealed record BinanceSpotOrderResult(
     decimal ExecutedQuantity,
     long TransactTimeMilliseconds);
 
+/// <summary>
+/// Validated request for Binance Spot <c>PUT /api/v3/order/amend/keepPriority</c> or WS <c>order.amend.keepPriority</c>.
+/// Reduces an open order's quantity in-place without losing queue priority on the matching engine.
+/// </summary>
+public sealed class BinanceSpotAmendKeepPriorityRequest
+{
+    public BinanceSpotAmendKeepPriorityRequest(
+        string symbol,
+        string origClientOrderId,
+        decimal newQuantity,
+        string? newClientOrderId = null)
+    {
+        Symbol = BinanceSpotOrderRequest.NormalizeSymbol(symbol);
+        OrigClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(origClientOrderId);
+        if (newQuantity <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(newQuantity), "Amended order quantity must be greater than zero.");
+        }
+
+        NewQuantity = newQuantity;
+        NewClientOrderId = newClientOrderId is null ? null : BinanceSpotOrderRequest.NormalizeClientOrderId(newClientOrderId);
+    }
+
+    public string Symbol { get; }
+    public string OrigClientOrderId { get; }
+    public decimal NewQuantity { get; }
+    public string? NewClientOrderId { get; }
+}
+
+public sealed record BinanceSpotAmendKeepPriorityResult(
+    long TransactTimeMilliseconds,
+    long ExecutionId,
+    BinanceSpotOrderResult AmendedOrder);
+
+/// <summary>
+/// Validated request for Binance Spot <c>POST /api/v3/order/cancelReplace</c> or WS <c>order.cancelReplace</c>.
+/// Atomically cancels an open order and places a replacement order in a single matching-engine step.
+/// </summary>
+public sealed class BinanceSpotCancelReplaceRequest
+{
+    public BinanceSpotCancelReplaceRequest(
+        string symbol,
+        BinanceSpotOrderSide side,
+        BinanceSpotOrderType type,
+        string cancelOrigClientOrderId,
+        string newClientOrderId,
+        decimal quantity,
+        decimal? price = null,
+        string timeInForce = "GTC",
+        string cancelReplaceMode = "STOP_ON_FAILURE",
+        string? cancelRestrictions = null)
+    {
+        Symbol = BinanceSpotOrderRequest.NormalizeSymbol(symbol);
+        Side = side;
+        Type = type;
+        CancelOrigClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(cancelOrigClientOrderId);
+        NewClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(newClientOrderId);
+        if (quantity <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(quantity), "Replacement quantity must be greater than zero.");
+        }
+
+        Quantity = quantity;
+        if (type == BinanceSpotOrderType.Limit)
+        {
+            if (price is not > 0m)
+            {
+                throw new ArgumentOutOfRangeException(nameof(price), "Limit replacement orders require a positive price.");
+            }
+
+            ArgumentException.ThrowIfNullOrWhiteSpace(timeInForce);
+            Price = price;
+            TimeInForce = timeInForce.Trim().ToUpperInvariant() is "GTC" or "IOC" or "FOK"
+                ? timeInForce.Trim().ToUpperInvariant()
+                : throw new ArgumentException("Limit time-in-force must be GTC, IOC or FOK.", nameof(timeInForce));
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(cancelReplaceMode);
+        CancelReplaceMode = cancelReplaceMode.Trim().ToUpperInvariant() is "STOP_ON_FAILURE" or "ALLOW_FAILURE"
+            ? cancelReplaceMode.Trim().ToUpperInvariant()
+            : throw new ArgumentException("CancelReplaceMode must be STOP_ON_FAILURE or ALLOW_FAILURE.", nameof(cancelReplaceMode));
+
+        if (cancelRestrictions is not null)
+        {
+            var normalizedRestriction = cancelRestrictions.Trim().ToUpperInvariant();
+            if (normalizedRestriction is not ("ONLY_NEW" or "ONLY_PARTIALLY_FILLED"))
+            {
+                throw new ArgumentException("CancelRestrictions must be ONLY_NEW or ONLY_PARTIALLY_FILLED.", nameof(cancelRestrictions));
+            }
+
+            CancelRestrictions = normalizedRestriction;
+        }
+    }
+
+    public string Symbol { get; }
+    public BinanceSpotOrderSide Side { get; }
+    public BinanceSpotOrderType Type { get; }
+    public string CancelOrigClientOrderId { get; }
+    public string NewClientOrderId { get; }
+    public decimal Quantity { get; }
+    public decimal? Price { get; }
+    public string? TimeInForce { get; }
+    public string CancelReplaceMode { get; }
+    public string? CancelRestrictions { get; }
+}
+
+public sealed record BinanceSpotCancelReplaceResult(
+    string CancelResult,
+    string NewOrderResult,
+    BinanceSpotOrderResult CancelResponse,
+    BinanceSpotOrderResult NewOrderResponse);
+
+/// <summary>
+/// Validated request for exchange-native protective OCO (<c>POST /api/v3/orderList/oco</c> / WS <c>orderList.place.oco</c>)
+/// pairing a <c>LIMIT_MAKER</c> take-profit leg above with a <c>STOP_LOSS_LIMIT</c> protective stop leg below.
+/// </summary>
+public sealed class BinanceSpotOcoOrderRequest
+{
+    public BinanceSpotOcoOrderRequest(
+        string symbol,
+        BinanceSpotOrderSide side,
+        decimal quantity,
+        string listClientOrderId,
+        string aboveClientOrderId,
+        decimal abovePrice,
+        string belowClientOrderId,
+        decimal belowStopPrice,
+        decimal belowLimitPrice,
+        string belowTimeInForce = "GTC")
+    {
+        Symbol = BinanceSpotOrderRequest.NormalizeSymbol(symbol);
+        Side = side;
+        if (quantity <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(quantity), "OCO quantity must be greater than zero.");
+        }
+
+        if (abovePrice <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(abovePrice), "OCO above (take-profit) price must be positive.");
+        }
+
+        if (belowStopPrice <= 0m || belowLimitPrice <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(belowStopPrice), "OCO below (stop-loss) trigger and limit prices must be positive.");
+        }
+
+        if (side == BinanceSpotOrderSide.Sell && abovePrice <= belowStopPrice)
+        {
+            throw new ArgumentException("For SELL OCO, above take-profit price must exceed below stop-loss trigger price.");
+        }
+
+        Quantity = quantity;
+        ListClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(listClientOrderId);
+        AboveClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(aboveClientOrderId);
+        AbovePrice = abovePrice;
+        BelowClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(belowClientOrderId);
+        BelowStopPrice = belowStopPrice;
+        BelowLimitPrice = belowLimitPrice;
+        ArgumentException.ThrowIfNullOrWhiteSpace(belowTimeInForce);
+        BelowTimeInForce = belowTimeInForce.Trim().ToUpperInvariant() is "GTC" or "IOC" or "FOK"
+            ? belowTimeInForce.Trim().ToUpperInvariant()
+            : throw new ArgumentException("Below time-in-force must be GTC, IOC or FOK.", nameof(belowTimeInForce));
+    }
+
+    public string Symbol { get; }
+    public BinanceSpotOrderSide Side { get; }
+    public decimal Quantity { get; }
+    public string ListClientOrderId { get; }
+    public string AboveClientOrderId { get; }
+    public decimal AbovePrice { get; }
+    public string BelowClientOrderId { get; }
+    public decimal BelowStopPrice { get; }
+    public decimal BelowLimitPrice { get; }
+    public string BelowTimeInForce { get; }
+}
+
+/// <summary>
+/// Validated request for exchange-native OTOCO (<c>POST /api/v3/orderList/otoco</c> / WS <c>orderList.place.otoco</c>)
+/// submitting a working entry order that automatically triggers a paired OCO take-profit + stop-loss on fill.
+/// </summary>
+public sealed class BinanceSpotOtocoOrderRequest
+{
+    public BinanceSpotOtocoOrderRequest(
+        string symbol,
+        string listClientOrderId,
+        BinanceSpotOrderSide workingSide,
+        decimal workingPrice,
+        decimal workingQuantity,
+        string workingClientOrderId,
+        BinanceSpotOrderSide pendingSide,
+        decimal pendingQuantity,
+        string pendingAboveClientOrderId,
+        decimal pendingAbovePrice,
+        string pendingBelowClientOrderId,
+        decimal pendingBelowStopPrice,
+        decimal pendingBelowLimitPrice,
+        string workingTimeInForce = "GTC",
+        string pendingBelowTimeInForce = "GTC")
+    {
+        Symbol = BinanceSpotOrderRequest.NormalizeSymbol(symbol);
+        ListClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(listClientOrderId);
+        WorkingSide = workingSide;
+        if (workingPrice <= 0m || workingQuantity <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(workingPrice), "Working order price and quantity must be positive.");
+        }
+
+        if (pendingQuantity <= 0m || pendingAbovePrice <= 0m || pendingBelowStopPrice <= 0m || pendingBelowLimitPrice <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pendingQuantity), "Pending OCO leg prices and quantity must be positive.");
+        }
+
+        if (pendingSide == BinanceSpotOrderSide.Sell && pendingAbovePrice <= pendingBelowStopPrice)
+        {
+            throw new ArgumentException("For SELL OTOCO pending legs, above take-profit price must exceed below stop-loss trigger price.");
+        }
+
+        WorkingPrice = workingPrice;
+        WorkingQuantity = workingQuantity;
+        WorkingClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(workingClientOrderId);
+        PendingSide = pendingSide;
+        PendingQuantity = pendingQuantity;
+        PendingAboveClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(pendingAboveClientOrderId);
+        PendingAbovePrice = pendingAbovePrice;
+        PendingBelowClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(pendingBelowClientOrderId);
+        PendingBelowStopPrice = pendingBelowStopPrice;
+        PendingBelowLimitPrice = pendingBelowLimitPrice;
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingTimeInForce);
+        ArgumentException.ThrowIfNullOrWhiteSpace(pendingBelowTimeInForce);
+        WorkingTimeInForce = workingTimeInForce.Trim().ToUpperInvariant() is "GTC" or "IOC" or "FOK"
+            ? workingTimeInForce.Trim().ToUpperInvariant()
+            : throw new ArgumentException("Working time-in-force must be GTC, IOC or FOK.", nameof(workingTimeInForce));
+        PendingBelowTimeInForce = pendingBelowTimeInForce.Trim().ToUpperInvariant() is "GTC" or "IOC" or "FOK"
+            ? pendingBelowTimeInForce.Trim().ToUpperInvariant()
+            : throw new ArgumentException("Pending below time-in-force must be GTC, IOC or FOK.", nameof(pendingBelowTimeInForce));
+    }
+
+    public string Symbol { get; }
+    public string ListClientOrderId { get; }
+    public BinanceSpotOrderSide WorkingSide { get; }
+    public decimal WorkingPrice { get; }
+    public decimal WorkingQuantity { get; }
+    public string WorkingClientOrderId { get; }
+    public BinanceSpotOrderSide PendingSide { get; }
+    public decimal PendingQuantity { get; }
+    public string PendingAboveClientOrderId { get; }
+    public decimal PendingAbovePrice { get; }
+    public string PendingBelowClientOrderId { get; }
+    public decimal PendingBelowStopPrice { get; }
+    public decimal PendingBelowLimitPrice { get; }
+    public string WorkingTimeInForce { get; }
+    public string PendingBelowTimeInForce { get; }
+}
+
+public sealed record BinanceSpotOrderListResult(
+    long OrderListId,
+    string ContingencyType,
+    string ListStatusType,
+    string ListOrderStatus,
+    string ListClientOrderId,
+    long TransactionTimeMilliseconds,
+    string Symbol,
+    IReadOnlyList<BinanceSpotOrderResult> OrderReports);
+
 /// <summary>Testnet-only credentials and safety switch for order mutation.</summary>
 public sealed class BinanceSpotOrderClientOptions
 {
@@ -190,6 +455,26 @@ public interface IBinanceSpotOrderClient
         string symbol,
         string clientOrderId,
         CancellationToken cancellationToken = default);
+
+    Task<BinanceSpotAmendKeepPriorityResult> AmendKeepPriorityAsync(
+        BinanceSpotAmendKeepPriorityRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Order amend keepPriority is not supported by this order client implementation.");
+
+    Task<BinanceSpotCancelReplaceResult> CancelReplaceAsync(
+        BinanceSpotCancelReplaceRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("Order cancelReplace is not supported by this order client implementation.");
+
+    Task<BinanceSpotOrderListResult> SubmitOcoOrderListAsync(
+        BinanceSpotOcoOrderRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("OCO order list submission is not supported by this order client implementation.");
+
+    Task<BinanceSpotOrderListResult> SubmitOtocoOrderListAsync(
+        BinanceSpotOtocoOrderRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("OTOCO order list submission is not supported by this order client implementation.");
 }
 
 public sealed class BinanceOrderSubmissionAmbiguousException : IOException
@@ -391,6 +676,176 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         }
     }
 
+    public async Task<BinanceSpotAmendKeepPriorityResult> AmendKeepPriorityAsync(
+        BinanceSpotAmendKeepPriorityRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureExecutionEnabled();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var activity = StartFinancialActivity("amend_keep_priority");
+
+        var parameters = new List<KeyValuePair<string, string>>
+        {
+            new("symbol", request.Symbol),
+            new("origClientOrderId", request.OrigClientOrderId),
+            new("newQty", FormatDecimal(request.NewQuantity))
+        };
+        if (request.NewClientOrderId is not null)
+        {
+            parameters.Add(new("newClientOrderId", request.NewClientOrderId));
+        }
+
+        try
+        {
+            await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+            var wire = await SendSignedRawAsync<BinanceAmendKeepPriorityWire>(
+                HttpMethod.Put, "v3/order/amend/keepPriority", parameters, cancellationToken).ConfigureAwait(false);
+            var expectedId = request.NewClientOrderId ?? request.OrigClientOrderId;
+            return new BinanceSpotAmendKeepPriorityResult(
+                wire.TransactTime,
+                wire.ExecutionId,
+                ToResult(wire.AmendedOrder, request.Symbol, expectedId));
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
+        }
+    }
+
+    public async Task<BinanceSpotCancelReplaceResult> CancelReplaceAsync(
+        BinanceSpotCancelReplaceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureExecutionEnabled();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var activity = StartFinancialActivity("cancel_replace");
+
+        var parameters = new List<KeyValuePair<string, string>>
+        {
+            new("symbol", request.Symbol),
+            new("side", request.Side.ToString().ToUpperInvariant()),
+            new("type", request.Type.ToString().ToUpperInvariant()),
+            new("cancelReplaceMode", request.CancelReplaceMode),
+            new("cancelOrigClientOrderId", request.CancelOrigClientOrderId),
+            new("newClientOrderId", request.NewClientOrderId),
+            new("quantity", FormatDecimal(request.Quantity))
+        };
+        if (request.Price is { } price)
+        {
+            parameters.Add(new("price", FormatDecimal(price)));
+            parameters.Add(new("timeInForce", request.TimeInForce!));
+        }
+
+        if (request.CancelRestrictions is not null)
+        {
+            parameters.Add(new("cancelRestrictions", request.CancelRestrictions));
+        }
+
+        try
+        {
+            await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+            var wire = await SendSignedRawAsync<BinanceCancelReplaceWire>(
+                HttpMethod.Post, "v3/order/cancelReplace", parameters, cancellationToken).ConfigureAwait(false);
+            return new BinanceSpotCancelReplaceResult(
+                RequireText(wire.CancelResult, nameof(wire.CancelResult)),
+                RequireText(wire.NewOrderResult, nameof(wire.NewOrderResult)),
+                ToResult(wire.CancelResponse, request.Symbol, request.CancelOrigClientOrderId),
+                ToResult(wire.NewOrderResponse, request.Symbol, request.NewClientOrderId));
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
+        }
+    }
+
+    public async Task<BinanceSpotOrderListResult> SubmitOcoOrderListAsync(
+        BinanceSpotOcoOrderRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureExecutionEnabled();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var activity = StartFinancialActivity("submit_oco");
+
+        var parameters = new List<KeyValuePair<string, string>>
+        {
+            new("symbol", request.Symbol),
+            new("listClientOrderId", request.ListClientOrderId),
+            new("side", request.Side.ToString().ToUpperInvariant()),
+            new("quantity", FormatDecimal(request.Quantity)),
+            new("aboveType", "LIMIT_MAKER"),
+            new("aboveClientOrderId", request.AboveClientOrderId),
+            new("abovePrice", FormatDecimal(request.AbovePrice)),
+            new("belowType", "STOP_LOSS_LIMIT"),
+            new("belowClientOrderId", request.BelowClientOrderId),
+            new("belowStopPrice", FormatDecimal(request.BelowStopPrice)),
+            new("belowPrice", FormatDecimal(request.BelowLimitPrice)),
+            new("belowTimeInForce", request.BelowTimeInForce)
+        };
+
+        try
+        {
+            await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+            var wire = await SendSignedRawAsync<BinanceOrderListWire>(
+                HttpMethod.Post, "v3/orderList/oco", parameters, cancellationToken).ConfigureAwait(false);
+            return ToOrderListResult(wire, request.Symbol, request.ListClientOrderId);
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
+        }
+    }
+
+    public async Task<BinanceSpotOrderListResult> SubmitOtocoOrderListAsync(
+        BinanceSpotOtocoOrderRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        EnsureExecutionEnabled();
+        cancellationToken.ThrowIfCancellationRequested();
+        using var activity = StartFinancialActivity("submit_otoco");
+
+        var parameters = new List<KeyValuePair<string, string>>
+        {
+            new("symbol", request.Symbol),
+            new("listClientOrderId", request.ListClientOrderId),
+            new("workingType", "LIMIT"),
+            new("workingSide", request.WorkingSide.ToString().ToUpperInvariant()),
+            new("workingClientOrderId", request.WorkingClientOrderId),
+            new("workingPrice", FormatDecimal(request.WorkingPrice)),
+            new("workingQuantity", FormatDecimal(request.WorkingQuantity)),
+            new("workingTimeInForce", request.WorkingTimeInForce),
+            new("pendingSide", request.PendingSide.ToString().ToUpperInvariant()),
+            new("pendingQuantity", FormatDecimal(request.PendingQuantity)),
+            new("pendingAboveType", "LIMIT_MAKER"),
+            new("pendingAboveClientOrderId", request.PendingAboveClientOrderId),
+            new("pendingAbovePrice", FormatDecimal(request.PendingAbovePrice)),
+            new("pendingBelowType", "STOP_LOSS_LIMIT"),
+            new("pendingBelowClientOrderId", request.PendingBelowClientOrderId),
+            new("pendingBelowStopPrice", FormatDecimal(request.PendingBelowStopPrice)),
+            new("pendingBelowPrice", FormatDecimal(request.PendingBelowLimitPrice)),
+            new("pendingBelowTimeInForce", request.PendingBelowTimeInForce)
+        };
+
+        try
+        {
+            await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+            var wire = await SendSignedRawAsync<BinanceOrderListWire>(
+                HttpMethod.Post, "v3/orderList/otoco", parameters, cancellationToken).ConfigureAwait(false);
+            return ToOrderListResult(wire, request.Symbol, request.ListClientOrderId);
+        }
+        catch (Exception exception)
+        {
+            MarkActivityError(activity, exception);
+            throw;
+        }
+    }
+
     private static Activity? StartFinancialActivity(string operation)
     {
         var activity = TradingTelemetry.ActivitySource.StartActivity("cryptotrading.binance.order", ActivityKind.Client);
@@ -445,6 +900,67 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         var wire = await response.Content.ReadFromJsonAsync<BinanceOrderWire>(JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
         return ToResult(wire, expectedSymbol, expectedClientOrderId);
+    }
+
+    private async Task<TWire> SendSignedRawAsync<TWire>(
+        HttpMethod method,
+        string endpoint,
+        List<KeyValuePair<string, string>> parameters,
+        CancellationToken cancellationToken)
+    {
+        var queryParameters = new List<KeyValuePair<string, string>>(parameters.Count + 2);
+        queryParameters.AddRange(parameters);
+        queryParameters.Add(new("recvWindow", options.RecvWindowMilliseconds.ToString(CultureInfo.InvariantCulture)));
+        queryParameters.Add(new("timestamp", clock.EstimateServerNow().ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)));
+        var query = BuildQuery(queryParameters);
+        var signature = BinanceSpotAccountClient.Sign(query, options.ApiSecret);
+        using var request = new HttpRequestMessage(
+            method,
+            new Uri(restBaseAddress, $"{endpoint}?{query}&signature={signature}"));
+        request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
+
+        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new BinanceApiException(response.StatusCode, endpoint);
+        }
+
+        return await response.Content.ReadFromJsonAsync<TWire>(JsonOptions, cancellationToken).ConfigureAwait(false)
+            ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
+    }
+
+    private static BinanceSpotOrderListResult ToOrderListResult(
+        BinanceOrderListWire wire,
+        string expectedSymbol,
+        string expectedListClientOrderId)
+    {
+        var symbol = BinanceSpotOrderRequest.NormalizeSymbol(wire.Symbol);
+        var listClientOrderId = BinanceSpotOrderRequest.NormalizeClientOrderId(wire.ListClientOrderId);
+        if (!string.Equals(symbol, expectedSymbol, StringComparison.Ordinal) ||
+            !string.Equals(listClientOrderId, expectedListClientOrderId, StringComparison.Ordinal))
+        {
+            throw new JsonException("Binance orderList response identity did not match the requested symbol/listClientOrderId.");
+        }
+
+        var reports = new List<BinanceSpotOrderResult>(wire.OrderReports?.Count ?? 0);
+        if (wire.OrderReports is not null)
+        {
+            foreach (var report in wire.OrderReports)
+            {
+                var reportClientId = BinanceSpotOrderRequest.NormalizeClientOrderId(report.ClientOrderId);
+                reports.Add(ToResult(report, expectedSymbol, reportClientId));
+            }
+        }
+
+        return new BinanceSpotOrderListResult(
+            wire.OrderListId,
+            RequireText(wire.ContingencyType, nameof(wire.ContingencyType)),
+            RequireText(wire.ListStatusType, nameof(wire.ListStatusType)),
+            RequireText(wire.ListOrderStatus, nameof(wire.ListOrderStatus)),
+            listClientOrderId,
+            wire.TransactionTime,
+            symbol,
+            reports);
     }
 
     private async Task SynchronizeClockAsync(CancellationToken cancellationToken)
@@ -547,4 +1063,184 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         [property: JsonPropertyName("transactTime")] long TransactTime,
         [property: JsonPropertyName("origClientOrderId")] string? OrigClientOrderId = null,
         [property: JsonPropertyName("updateTime")] long? UpdateTime = null);
+
+    private sealed record BinanceAmendKeepPriorityWire(
+        [property: JsonPropertyName("transactTime")] long TransactTime,
+        [property: JsonPropertyName("executionId")] long ExecutionId,
+        [property: JsonPropertyName("amendedOrder")] BinanceOrderWire AmendedOrder);
+
+    private sealed record BinanceCancelReplaceWire(
+        [property: JsonPropertyName("cancelResult")] string CancelResult,
+        [property: JsonPropertyName("newOrderResult")] string NewOrderResult,
+        [property: JsonPropertyName("cancelResponse")] BinanceOrderWire CancelResponse,
+        [property: JsonPropertyName("newOrderResponse")] BinanceOrderWire NewOrderResponse);
+
+    private sealed record BinanceOrderListWire(
+        [property: JsonPropertyName("orderListId")] long OrderListId,
+        [property: JsonPropertyName("contingencyType")] string ContingencyType,
+        [property: JsonPropertyName("listStatusType")] string ListStatusType,
+        [property: JsonPropertyName("listOrderStatus")] string ListOrderStatus,
+        [property: JsonPropertyName("listClientOrderId")] string ListClientOrderId,
+        [property: JsonPropertyName("transactionTime")] long TransactionTime,
+        [property: JsonPropertyName("symbol")] string Symbol,
+        [property: JsonPropertyName("orderReports")] IReadOnlyList<BinanceOrderWire>? OrderReports = null);
+}
+
+/// <summary>
+/// Deterministic, zero-side-effect builder for Binance Spot WebSocket API (<c>ws-api/v3</c>)
+/// order placement, priority-preserving quantity amendment (<c>order.amend.keepPriority</c>),
+/// atomic <c>order.cancelReplace</c>, and protective <c>orderList.place.oco</c> / <c>orderList.place.otoco</c>.
+/// Signs parameters in strict ASCII key order per Binance WebSocket API specification.
+/// </summary>
+public static class BinanceSpotWebSocketOrderPayloadBuilder
+{
+    public static string BuildOrderPlacePayload(
+        Guid requestId,
+        BinanceSpotOrderRequest request,
+        string apiKey,
+        string apiSecret,
+        long timestampMilliseconds,
+        long recvWindowMilliseconds = 5_000)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var parameters = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["apiKey"] = RequireNonBlank(apiKey, nameof(apiKey)),
+            ["newClientOrderId"] = request.ClientOrderId,
+            ["quantity"] = FormatDecimal(request.Quantity),
+            ["recvWindow"] = recvWindowMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["side"] = request.Side.ToString().ToUpperInvariant(),
+            ["symbol"] = request.Symbol,
+            ["timestamp"] = timestampMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["type"] = request.Type.ToString().ToUpperInvariant()
+        };
+        if (request.Price is { } price)
+        {
+            parameters["price"] = FormatDecimal(price);
+            parameters["timeInForce"] = request.TimeInForce!;
+        }
+
+        return SerializeSignedWebSocketRequest(requestId, "order.place", parameters, apiSecret);
+    }
+
+    public static string BuildAmendKeepPriorityPayload(
+        Guid requestId,
+        BinanceSpotAmendKeepPriorityRequest request,
+        string apiKey,
+        string apiSecret,
+        long timestampMilliseconds,
+        long recvWindowMilliseconds = 5_000)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var parameters = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["apiKey"] = RequireNonBlank(apiKey, nameof(apiKey)),
+            ["newQty"] = FormatDecimal(request.NewQuantity),
+            ["origClientOrderId"] = request.OrigClientOrderId,
+            ["recvWindow"] = recvWindowMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["symbol"] = request.Symbol,
+            ["timestamp"] = timestampMilliseconds.ToString(CultureInfo.InvariantCulture)
+        };
+        if (request.NewClientOrderId is not null)
+        {
+            parameters["newClientOrderId"] = request.NewClientOrderId;
+        }
+
+        return SerializeSignedWebSocketRequest(requestId, "order.amend.keepPriority", parameters, apiSecret);
+    }
+
+    public static string BuildCancelReplacePayload(
+        Guid requestId,
+        BinanceSpotCancelReplaceRequest request,
+        string apiKey,
+        string apiSecret,
+        long timestampMilliseconds,
+        long recvWindowMilliseconds = 5_000)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var parameters = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["apiKey"] = RequireNonBlank(apiKey, nameof(apiKey)),
+            ["cancelOrigClientOrderId"] = request.CancelOrigClientOrderId,
+            ["cancelReplaceMode"] = request.CancelReplaceMode,
+            ["newClientOrderId"] = request.NewClientOrderId,
+            ["quantity"] = FormatDecimal(request.Quantity),
+            ["recvWindow"] = recvWindowMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["side"] = request.Side.ToString().ToUpperInvariant(),
+            ["symbol"] = request.Symbol,
+            ["timestamp"] = timestampMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["type"] = request.Type.ToString().ToUpperInvariant()
+        };
+        if (request.Price is { } price)
+        {
+            parameters["price"] = FormatDecimal(price);
+            parameters["timeInForce"] = request.TimeInForce!;
+        }
+
+        if (request.CancelRestrictions is not null)
+        {
+            parameters["cancelRestrictions"] = request.CancelRestrictions;
+        }
+
+        return SerializeSignedWebSocketRequest(requestId, "order.cancelReplace", parameters, apiSecret);
+    }
+
+    public static string BuildOcoOrderListPayload(
+        Guid requestId,
+        BinanceSpotOcoOrderRequest request,
+        string apiKey,
+        string apiSecret,
+        long timestampMilliseconds,
+        long recvWindowMilliseconds = 5_000)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var parameters = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["aboveClientOrderId"] = request.AboveClientOrderId,
+            ["abovePrice"] = FormatDecimal(request.AbovePrice),
+            ["aboveType"] = "LIMIT_MAKER",
+            ["apiKey"] = RequireNonBlank(apiKey, nameof(apiKey)),
+            ["belowClientOrderId"] = request.BelowClientOrderId,
+            ["belowPrice"] = FormatDecimal(request.BelowLimitPrice),
+            ["belowStopPrice"] = FormatDecimal(request.BelowStopPrice),
+            ["belowTimeInForce"] = request.BelowTimeInForce,
+            ["belowType"] = "STOP_LOSS_LIMIT",
+            ["listClientOrderId"] = request.ListClientOrderId,
+            ["quantity"] = FormatDecimal(request.Quantity),
+            ["recvWindow"] = recvWindowMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["side"] = request.Side.ToString().ToUpperInvariant(),
+            ["symbol"] = request.Symbol,
+            ["timestamp"] = timestampMilliseconds.ToString(CultureInfo.InvariantCulture)
+        };
+
+        return SerializeSignedWebSocketRequest(requestId, "orderList.place.oco", parameters, apiSecret);
+    }
+
+    private static string SerializeSignedWebSocketRequest(
+        Guid requestId,
+        string method,
+        SortedDictionary<string, string> sortedParameters,
+        string apiSecret)
+    {
+        var secret = RequireNonBlank(apiSecret, nameof(apiSecret));
+        var canonicalQuery = string.Join('&', sortedParameters.Select(static kvp =>
+            $"{Uri.EscapeDataString(kvp.Key)}={Uri.EscapeDataString(kvp.Value)}"));
+        var signature = BinanceSpotAccountClient.Sign(canonicalQuery, secret);
+        sortedParameters["signature"] = signature;
+
+        return JsonSerializer.Serialize(new
+        {
+            id = requestId.ToString("D"),
+            method,
+            @params = sortedParameters
+        });
+    }
+
+    private static string RequireNonBlank(string value, string paramName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
+        return value.Trim();
+    }
+
+    private static string FormatDecimal(decimal value) => value.ToString("G29", CultureInfo.InvariantCulture);
 }

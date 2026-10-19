@@ -69,9 +69,9 @@ public sealed class OrderExecutionPipelineTests
     }
 
     [Fact]
-    public void ReductionDuringLossLimitRemainsDispatchableWithSameTraceability()
+    public void SellReductionDuringLossLimitRemainsDispatchableWithSameTraceability()
     {
-        var intent = NewIntent(10m, currentExposure: 20m, dailyLoss: 25m);
+        var intent = NewIntent(10m, currentExposure: 20m, dailyLoss: 25m, side: OrderSide.Sell);
 
         var result = OrderExecutionPipeline.Evaluate(intent, Policy);
 
@@ -79,6 +79,17 @@ public sealed class OrderExecutionPipelineTests
         Assert.True(result.IsDispatchable);
         Assert.Equal(intent.IdempotencyKey, result.OutboxRecord!.IdempotencyKey);
         Assert.Equal(intent.CorrelationId, result.OutboxRecord.CorrelationId);
+    }
+
+    [Fact]
+    public void BuySmallerThanExistingExposureIsStillBlockedDuringLossLimit()
+    {
+        var intent = NewIntent(10m, currentExposure: 20m, dailyLoss: 25m, side: OrderSide.Buy);
+
+        var result = OrderExecutionPipeline.Evaluate(intent, Policy);
+
+        Assert.Equal(RiskDecisionStatus.Rejected, result.Decision.Status);
+        Assert.False(result.IsDispatchable);
     }
 
     [Fact]
@@ -94,6 +105,29 @@ public sealed class OrderExecutionPipelineTests
         Assert.Throws<ArgumentNullException>(() => OrderExecutionPipeline.Evaluate(NewIntent(80m), null!));
     }
 
+    [Fact]
+    public void PlanProtectiveOcoAlignsPricesAndQuantitiesToExchangeTickAndStepSize()
+    {
+        var ocoPlan = ExecutionPlanner.PlanProtectiveOco(
+            new Symbol("BTCUSDT"),
+            new Quantity(0.0123456m),
+            new Price(84_200.00m),
+            takeProfitBps: 45m,
+            stopLossBps: 18m,
+            priceTickSize: 0.01m,
+            quantityStepSize: 0.00010m,
+            listSeed: "entry-1");
+
+        Assert.Equal(OrderSide.Sell, ocoPlan.Side);
+        Assert.Equal(0.0123m, ocoPlan.Quantity.Value);
+        Assert.True(ocoPlan.AboveTakeProfitPrice.Value > 84_200.00m);
+        Assert.True(ocoPlan.BelowStopLossTriggerPrice.Value < 84_200.00m);
+        Assert.True(ocoPlan.BelowStopLossLimitPrice.Value < ocoPlan.BelowStopLossTriggerPrice.Value);
+        Assert.StartsWith("ocol-", ocoPlan.ListClientOrderId.Value, StringComparison.Ordinal);
+        Assert.StartsWith("ocotp-", ocoPlan.AboveClientOrderId.Value, StringComparison.Ordinal);
+        Assert.StartsWith("ocosl-", ocoPlan.BelowClientOrderId.Value, StringComparison.Ordinal);
+    }
+
     private static OrderIntent NewIntent(
         decimal requestedNotional,
         decimal? quantity = null,
@@ -101,7 +135,8 @@ public sealed class OrderExecutionPipelineTests
         decimal currentExposure = 0m,
         decimal dailyLoss = 0m,
         bool emergencyStop = false,
-        bool withdrawal = false)
+        bool withdrawal = false,
+        OrderSide side = OrderSide.Buy)
     {
         var price = referencePrice ?? 100m;
         var amount = quantity ?? requestedNotional / price;
@@ -120,7 +155,7 @@ public sealed class OrderExecutionPipelineTests
             OrderId.Parse("11111111111111111111111111111111"),
             new ClientOrderId("ct-pipeline-test"),
             new Symbol("BTCUSDT"),
-            OrderSide.Buy,
+            side,
             OrderType.Market,
             new Quantity(amount),
             new Price(price),

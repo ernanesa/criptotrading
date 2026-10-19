@@ -125,6 +125,152 @@ public sealed class BinanceLocalOrderBookTests
         Assert.Equal(1.25m, Assert.Single(update.Bids).Quantity);
     }
 
+    [Fact]
+    public void CalculatesTopDepthImbalanceAndTemporalOfi()
+    {
+        var book = new BinanceLocalOrderBook("BTCUSDT");
+        book.ApplySnapshot(new BinanceOrderBookSnapshot(
+            "BTCUSDT",
+            10,
+            [new BinanceOrderBookLevel(100m, 3m), new BinanceOrderBookLevel(99m, 1m)],
+            [new BinanceOrderBookLevel(101m, 1m), new BinanceOrderBookLevel(102m, 1m)]));
+
+        // Top 5 depth: Bids = 4, Asks = 2 => (4 - 2) / 6 = 0.3333
+        Assert.Equal(0.3333m, book.CalculateTopDepthImbalance(5));
+
+        // Upward bid tick from 100 to 100.50 with ask unchanged at 101 (ask qty drops from 2 to 1)
+        var ofi = BinanceLocalOrderBook.ComputeTemporalOfi(
+            prevBidPrice: 100m, prevBidQty: 2m, prevAskPrice: 101m, prevAskQty: 2m,
+            currBidPrice: 100.5m, currBidQty: 3m, currAskPrice: 101m, currAskQty: 1m);
+        Assert.Equal(0.50m, ofi);
+    }
+
+    [Fact]
+    public void ValidatesMarketLotSizeConstraintsWhenPresent()
+    {
+        var symbolInfo = new BinanceSymbolInfo(
+            "BTCUSDT",
+            "TRADING",
+            "BTC",
+            "USDT",
+            8,
+            8,
+            [
+                new BinanceSymbolFilter("PRICE_FILTER", MinPrice: "0.01", MaxPrice: "1000000.00", TickSize: "0.01"),
+                new BinanceSymbolFilter("LOT_SIZE", MinQty: "0.00010", MaxQty: "100.00000", StepSize: "0.00010"),
+                new BinanceSymbolFilter("MARKET_LOT_SIZE", MinQty: "0.00100", MaxQty: "10.00000", StepSize: "0.00100"),
+                new BinanceSymbolFilter("MIN_NOTIONAL", MinNotional: "5.00"),
+            ]);
+
+        var rules = BinanceSymbolTradingRulesParser.Parse(symbolInfo);
+        Assert.Equal(0.00100m, rules.MarketMinimumQuantity);
+        Assert.Equal(10.00000m, rules.MarketMaximumQuantity);
+        Assert.Equal(0.00100m, rules.MarketQuantityStepSize);
+
+        var belowMarketMin = rules.ValidateMarketOrder(0.00050m, referencePrice: 80_000m);
+        Assert.False(belowMarketMin.IsValid);
+        Assert.Contains(belowMarketMin.Violations, v => v.Code == "QUANTITY_BELOW_MINIMUM");
+
+        var validMarketOrder = rules.ValidateMarketOrder(0.00200m, referencePrice: 80_000m);
+        Assert.True(validMarketOrder.IsValid);
+    }
+
+    [Fact]
+    public void BuildsWebSocketOrderPayloadsAndValidatesOcoAndAmendContracts()
+    {
+        var reqId = Guid.Parse("11111111-2222-3333-4444-555555555555");
+        var orderReq = new BinanceSpotOrderRequest(
+            "BTCUSDT",
+            BinanceSpotOrderSide.Buy,
+            BinanceSpotOrderType.Limit,
+            0.01m,
+            "ctp-entry-001",
+            price: 84_000m);
+        var wsPlaceJson = BinanceSpotWebSocketOrderPayloadBuilder.BuildOrderPlacePayload(
+            reqId, orderReq, "api-key-1", "secret-1", 1_700_000_000_000L);
+        Assert.Contains("\"method\":\"order.place\"", wsPlaceJson, StringComparison.Ordinal);
+        Assert.Contains("\"newClientOrderId\":\"ctp-entry-001\"", wsPlaceJson, StringComparison.Ordinal);
+        Assert.Contains("\"signature\":", wsPlaceJson, StringComparison.Ordinal);
+
+        var amendReq = new BinanceSpotAmendKeepPriorityRequest("BTCUSDT", "ctp-entry-001", 0.005m, "ctp-entry-001a");
+        var wsAmendJson = BinanceSpotWebSocketOrderPayloadBuilder.BuildAmendKeepPriorityPayload(
+            reqId, amendReq, "api-key-1", "secret-1", 1_700_000_000_000L);
+        Assert.Contains("\"method\":\"order.amend.keepPriority\"", wsAmendJson, StringComparison.Ordinal);
+        Assert.Contains("\"newQty\":\"0.005\"", wsAmendJson, StringComparison.Ordinal);
+
+        var cancelReplaceReq = new BinanceSpotCancelReplaceRequest(
+            "BTCUSDT",
+            BinanceSpotOrderSide.Buy,
+            BinanceSpotOrderType.Limit,
+            "ctp-entry-001",
+            "ctp-entry-002",
+            0.01m,
+            price: 84_010m);
+        var wsCancelReplaceJson = BinanceSpotWebSocketOrderPayloadBuilder.BuildCancelReplacePayload(
+            reqId, cancelReplaceReq, "api-key-1", "secret-1", 1_700_000_000_000L);
+        Assert.Contains("\"method\":\"order.cancelReplace\"", wsCancelReplaceJson, StringComparison.Ordinal);
+
+        var ocoReq = new BinanceSpotOcoOrderRequest(
+            "BTCUSDT",
+            BinanceSpotOrderSide.Sell,
+            0.01m,
+            "ocol-001",
+            "ocotp-001",
+            abovePrice: 84_500m,
+            "ocosl-001",
+            belowStopPrice: 83_850m,
+            belowLimitPrice: 83_800m);
+        var wsOcoJson = BinanceSpotWebSocketOrderPayloadBuilder.BuildOcoOrderListPayload(
+            reqId, ocoReq, "api-key-1", "secret-1", 1_700_000_000_000L);
+        Assert.Contains("\"method\":\"orderList.place.oco\"", wsOcoJson, StringComparison.Ordinal);
+        Assert.Contains("\"aboveType\":\"LIMIT_MAKER\"", wsOcoJson, StringComparison.Ordinal);
+        Assert.Contains("\"belowType\":\"STOP_LOSS_LIMIT\"", wsOcoJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The market-data client owns the injected transport for the duration of this test.")]
+    public async Task ParsesAggTradeStreamEventFromMarketStream()
+    {
+        const string payload = """
+            {
+              "stream": "btcusdt@aggTrade",
+              "data": {
+                "e": "aggTrade",
+                "E": 1700000000100,
+                "s": "BTCUSDT",
+                "a": 998877,
+                "p": "84210.50",
+                "q": "0.12500000",
+                "f": 100,
+                "l": 104,
+                "T": 1700000000095,
+                "m": false
+              }
+            }
+            """;
+        var transport = new DepthTransport(payload);
+        var client = new BinanceSpotMarketDataClient(
+            new BinanceMarketDataOptions
+            {
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1)
+            },
+            () => transport);
+
+        await using var enumerator = client
+            .ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.AggTrade)], cancellationToken: TestContext.Current.CancellationToken)
+            .GetAsyncEnumerator(TestContext.Current.CancellationToken);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        var aggTrade = Assert.IsType<BinanceAggTradeStreamEvent>(enumerator.Current);
+        Assert.Equal("BTCUSDT", aggTrade.Symbol);
+        Assert.Equal(998877L, aggTrade.AggregateTradeId);
+        Assert.Equal(84_210.50m, aggTrade.Price);
+        Assert.Equal(0.125m, aggTrade.Quantity);
+        Assert.False(aggTrade.IsBuyerMaker);
+    }
+
     private static BinanceLocalOrderBook NewBookAt(long updateId)
     {
         var book = new BinanceLocalOrderBook("BTCUSDT");

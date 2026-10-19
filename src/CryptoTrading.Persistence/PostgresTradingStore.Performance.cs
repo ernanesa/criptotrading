@@ -107,15 +107,41 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         const string sql = """
             SELECT symbol, base_asset, quote_asset, quantity, cost_quote, updated_at
             FROM trading.position_cost_basis WHERE (@symbol IS NULL OR symbol = @symbol) AND quote_asset = @quote_asset
-            ORDER BY updated_at DESC LIMIT 1;
+            ORDER BY (quantity > 0) DESC, updated_at DESC;
             """;
         await using var command = new NpgsqlCommand(sql, connection);
         command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol ?? (object)DBNull.Value));
         command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
+        var rows = new List<PositionCostBasisRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDecimal(3), reader.GetDecimal(4), Utc(reader.GetDateTime(5)))
-            : null;
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetDecimal(3), reader.GetDecimal(4), Utc(reader.GetDateTime(5))));
+        }
+
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        if (symbol is not null)
+        {
+            return rows[0];
+        }
+
+        var openRows = rows.Where(static r => r.Quantity > 0m).ToArray();
+        if (openRows.Length <= 1)
+        {
+            return rows[0];
+        }
+
+        return new PositionCostBasisRecord(
+            "PORTFOLIO",
+            "MULTI",
+            PerformanceQuoteAsset,
+            openRows.Sum(static r => r.Quantity),
+            openRows.Sum(static r => r.CostQuote),
+            openRows.Max(static r => r.UpdatedAtUtc));
     }
 
     private static async Task<FillMetrics> ReadFillMetricsAsync(NpgsqlConnection connection, DateTimeOffset? startUtc, DateTimeOffset asOfUtc, string? symbol, CancellationToken cancellationToken)

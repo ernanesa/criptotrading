@@ -19,7 +19,10 @@ public sealed record ExecutionMarketSnapshot
         decimal? quantityStepSize = null,
         decimal? priceTickSize = null,
         decimal? bidQuantity = null,
-        decimal? askQuantity = null)
+        decimal? askQuantity = null,
+        decimal? temporalOrderFlowImbalance = null,
+        decimal? tradeAggressionDelta = null,
+        decimal? depthImbalanceTop5 = null)
     {
         if (bestAsk.Value < bestBid.Value)
         {
@@ -42,6 +45,9 @@ public sealed record ExecutionMarketSnapshot
         PriceTickSize = priceTickSize;
         BidQuantity = bidQuantity;
         AskQuantity = askQuantity;
+        TemporalOrderFlowImbalance = temporalOrderFlowImbalance is { } ofi ? Math.Clamp(Math.Round(ofi, 4), -1m, 1m) : null;
+        TradeAggressionDelta = tradeAggressionDelta is { } aggr ? Math.Clamp(Math.Round(aggr, 4), -1m, 1m) : null;
+        DepthImbalanceTop5 = depthImbalanceTop5 is { } l2 ? Math.Clamp(Math.Round(l2, 4), -1m, 1m) : null;
     }
 
     public Price BestBid { get; }
@@ -53,10 +59,35 @@ public sealed record ExecutionMarketSnapshot
     public decimal? PriceTickSize { get; }
     public decimal? BidQuantity { get; }
     public decimal? AskQuantity { get; }
+    public decimal? TemporalOrderFlowImbalance { get; }
+    public decimal? TradeAggressionDelta { get; }
+    public decimal? DepthImbalanceTop5 { get; }
     public decimal OrderBookImbalance =>
         BidQuantity is { } bidQty && AskQuantity is { } askQty && (bidQty + askQty) > 0m
             ? Math.Round((bidQty - askQty) / (bidQty + askQty), 4)
             : 0m;
+
+    /// <summary>
+    /// Composite order-flow imbalance blending top-of-book L1 imbalance, Cont-Kukanov-Stoikov (2014)
+    /// temporal OFI across quote updates, L2 top-5 depth imbalance, and signed trade aggression delta.
+    /// Defaults to <see cref="OrderBookImbalance"/> when L2/OFI telemetry is not supplied.
+    /// </summary>
+    public decimal EffectiveOrderFlowImbalance
+    {
+        get
+        {
+            var l1 = OrderBookImbalance;
+            if (TemporalOrderFlowImbalance is null && DepthImbalanceTop5 is null && TradeAggressionDelta is null)
+            {
+                return l1;
+            }
+
+            var ofi = TemporalOrderFlowImbalance ?? l1;
+            var l2 = DepthImbalanceTop5 ?? l1;
+            var aggr = TradeAggressionDelta ?? ofi;
+            return Math.Clamp(Math.Round((l1 * 0.35m) + (ofi * 0.30m) + (l2 * 0.20m) + (aggr * 0.15m), 4), -1m, 1m);
+        }
+    }
 
     /// <summary>Arithmetic mid-price between best bid and best ask.</summary>
     public decimal MidPrice => (BestBid.Value + BestAsk.Value) / 2m;
@@ -182,6 +213,21 @@ public sealed record ExecutionPlanResult(ExecutionPlan? Plan, string? NoTradeRea
 {
     public bool IsNoTrade => Plan is null;
 }
+
+/// <summary>
+/// Deterministic native exchange protective OCO exit plan (above <c>LIMIT_MAKER</c> take-profit +
+/// below <c>STOP_LOSS_LIMIT</c> stop-loss) aligned to symbol tick and step rules.
+/// </summary>
+public sealed record ProtectiveOcoPlan(
+    Symbol Symbol,
+    OrderSide Side,
+    Quantity Quantity,
+    Price AboveTakeProfitPrice,
+    Price BelowStopLossTriggerPrice,
+    Price BelowStopLossLimitPrice,
+    ClientOrderId ListClientOrderId,
+    ClientOrderId AboveClientOrderId,
+    ClientOrderId BelowClientOrderId);
 
 /// <summary>
 /// Pure passive-limit planner. It never sends, cancels or retries an exchange order.
@@ -398,6 +444,85 @@ public static class ExecutionPlanner
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
         var token = Convert.ToHexString(hash[..16]);
         return new(new ClientOrderId($"ctp-{token}"), new IdempotencyKey($"execution:{token}"));
+    }
+
+    /// <summary>
+    /// Computes a deterministic native protective OCO exit plan (Spot long exit: <see cref="OrderSide.Sell"/>)
+    /// with tick-aligned <c>LIMIT_MAKER</c> take-profit and <c>STOP_LOSS_LIMIT</c> stop-loss prices.
+    /// </summary>
+    public static ProtectiveOcoPlan PlanProtectiveOco(
+        Symbol symbol,
+        Quantity quantity,
+        Price entryPrice,
+        decimal takeProfitBps = 45m,
+        decimal stopLossBps = 18m,
+        decimal? priceTickSize = null,
+        decimal? quantityStepSize = null,
+        string? listSeed = null)
+    {
+        if (entryPrice.Value <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entryPrice), "Entry price must be positive.");
+        }
+
+        if (takeProfitBps <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(takeProfitBps), "Take-profit basis points must be positive.");
+        }
+
+        if (stopLossBps <= 0m || stopLossBps >= 5_000m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(stopLossBps), "Stop-loss basis points must be between 0 and 5000.");
+        }
+
+        var rawQty = quantity.Value;
+        if (quantityStepSize is { } step && step > 0m)
+        {
+            rawQty = Math.Floor(rawQty / step) * step;
+        }
+
+        var alignedQty = new Quantity(rawQty);
+        var aboveRaw = entryPrice.Value * (1m + (takeProfitBps / 10_000m));
+        var belowTriggerRaw = entryPrice.Value * (1m - (stopLossBps / 10_000m));
+        var belowLimitRaw = belowTriggerRaw * (1m - 0.0005m);
+
+        decimal aboveAligned;
+        decimal belowTriggerAligned;
+        decimal belowLimitAligned;
+        if (priceTickSize is { } tick && tick > 0m)
+        {
+            aboveAligned = Math.Max(entryPrice.Value + tick, Math.Ceiling(aboveRaw / tick) * tick);
+            belowTriggerAligned = Math.Min(entryPrice.Value - tick, Math.Floor(belowTriggerRaw / tick) * tick);
+            belowLimitAligned = Math.Min(belowTriggerAligned - tick, Math.Floor(belowLimitRaw / tick) * tick);
+        }
+        else
+        {
+            aboveAligned = decimal.Round(aboveRaw, 8);
+            belowTriggerAligned = decimal.Round(belowTriggerRaw, 8);
+            belowLimitAligned = decimal.Round(belowLimitRaw, 8);
+        }
+
+        var canonical = string.Join(
+            '|',
+            symbol.Value,
+            alignedQty.Value.ToString("G29", CultureInfo.InvariantCulture),
+            aboveAligned.ToString("G29", CultureInfo.InvariantCulture),
+            belowTriggerAligned.ToString("G29", CultureInfo.InvariantCulture),
+            belowLimitAligned.ToString("G29", CultureInfo.InvariantCulture),
+            listSeed ?? "default");
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(canonical));
+        var token = Convert.ToHexString(hash[..12]);
+
+        return new ProtectiveOcoPlan(
+            symbol,
+            OrderSide.Sell,
+            alignedQty,
+            new Price(aboveAligned),
+            new Price(belowTriggerAligned),
+            new Price(belowLimitAligned),
+            new ClientOrderId($"ocol-{token}"),
+            new ClientOrderId($"ocotp-{token}"),
+            new ClientOrderId($"ocosl-{token}"));
     }
 
     private sealed record PlanIdentity(ClientOrderId ClientOrderId, IdempotencyKey IdempotencyKey);

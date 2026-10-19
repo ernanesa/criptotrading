@@ -11,9 +11,11 @@ public sealed record BinanceMarketSubscription(string Symbol, BinanceMarketStrea
         return Kind switch
         {
             BinanceMarketStreamKind.Trade => $"{symbol}@trade",
+            BinanceMarketStreamKind.AggTrade => $"{symbol}@aggTrade",
             BinanceMarketStreamKind.Kline when !string.IsNullOrWhiteSpace(Interval) => $"{symbol}@kline_{ToLowerAscii(Interval.Trim())}",
             BinanceMarketStreamKind.Kline => throw new ArgumentException("Kline subscriptions require an interval.", nameof(Interval)),
             BinanceMarketStreamKind.BookTicker => $"{symbol}@bookTicker",
+            BinanceMarketStreamKind.Depth => $"{symbol}@depth@100ms",
             _ => throw new ArgumentOutOfRangeException(nameof(Kind), Kind, "Unsupported market stream kind.")
         };
     }
@@ -44,8 +46,10 @@ public sealed record BinanceMarketSubscription(string Symbol, BinanceMarketStrea
 public enum BinanceMarketStreamKind
 {
     Trade,
+    AggTrade,
     Kline,
-    BookTicker
+    BookTicker,
+    Depth
 }
 
 public abstract record BinanceMarketDataEvent(
@@ -74,6 +78,18 @@ public sealed record BinanceTradeEvent(
     decimal Quantity,
     bool IsBuyerMaker) : BinanceMarketDataEvent(Stream, Symbol, EventTime, ReceivedAt);
 
+public sealed record BinanceAggTradeStreamEvent(
+    string Stream,
+    string Symbol,
+    long EventTime,
+    DateTimeOffset ReceivedAt,
+    long AggregateTradeId,
+    decimal Price,
+    decimal Quantity,
+    long FirstTradeId,
+    long LastTradeId,
+    bool IsBuyerMaker) : BinanceMarketDataEvent(Stream, Symbol, EventTime, ReceivedAt);
+
 public sealed record BinanceKlineEvent(
     string Stream,
     string Symbol,
@@ -87,7 +103,11 @@ public sealed record BinanceKlineEvent(
     decimal High,
     decimal Low,
     decimal Volume,
-    bool IsClosed) : BinanceMarketDataEvent(Stream, Symbol, EventTime, ReceivedAt);
+    bool IsClosed,
+    decimal QuoteVolume = 0m,
+    long NumberOfTrades = 0,
+    decimal TakerBuyBaseVolume = 0m,
+    decimal TakerBuyQuoteVolume = 0m) : BinanceMarketDataEvent(Stream, Symbol, EventTime, ReceivedAt);
 
 public sealed record BinanceOrderBookLevel(decimal Price, decimal Quantity);
 
@@ -156,6 +176,7 @@ internal static class BinanceMarketDataParser
         return eventType switch
         {
             "trade" => ParseTrade(stream, data, receivedAt),
+            "aggTrade" => ParseAggTrade(stream, data, receivedAt),
             "kline" => ParseKline(stream, data, receivedAt),
             "depthUpdate" => ParseDepthUpdate(stream, data, receivedAt),
             _ => throw new JsonException($"Unsupported Binance market event '{eventType}'.")
@@ -189,9 +210,35 @@ internal static class BinanceMarketDataParser
             ParseDecimal(data, "q"),
             data.GetProperty("m").GetBoolean());
 
+    private static BinanceAggTradeStreamEvent ParseAggTrade(string stream, JsonElement data, DateTimeOffset receivedAt) =>
+        new(
+            stream,
+            data.GetProperty("s").GetString() ?? throw new JsonException("Missing aggTrade symbol."),
+            data.GetProperty("E").GetInt64(),
+            receivedAt,
+            data.GetProperty("a").GetInt64(),
+            ParseDecimal(data, "p"),
+            ParseDecimal(data, "q"),
+            data.GetProperty("f").GetInt64(),
+            data.GetProperty("l").GetInt64(),
+            data.GetProperty("m").GetBoolean());
+
     private static BinanceKlineEvent ParseKline(string stream, JsonElement data, DateTimeOffset receivedAt)
     {
         var kline = data.GetProperty("k");
+        var quoteVolume = kline.TryGetProperty("q", out var qProp) && qProp.ValueKind == JsonValueKind.String
+            ? decimal.Parse(qProp.GetString()!, CultureInfo.InvariantCulture)
+            : 0m;
+        var numTrades = kline.TryGetProperty("n", out var nProp) && nProp.ValueKind == JsonValueKind.Number
+            ? nProp.GetInt64()
+            : 0L;
+        var takerBuyBase = kline.TryGetProperty("V", out var vProp) && vProp.ValueKind == JsonValueKind.String
+            ? decimal.Parse(vProp.GetString()!, CultureInfo.InvariantCulture)
+            : 0m;
+        var takerBuyQuote = kline.TryGetProperty("Q", out var tqProp) && tqProp.ValueKind == JsonValueKind.String
+            ? decimal.Parse(tqProp.GetString()!, CultureInfo.InvariantCulture)
+            : 0m;
+
         return new BinanceKlineEvent(
             stream,
             kline.GetProperty("s").GetString() ?? throw new JsonException("Missing kline symbol."),
@@ -205,7 +252,11 @@ internal static class BinanceMarketDataParser
             ParseDecimal(kline, "h"),
             ParseDecimal(kline, "l"),
             ParseDecimal(kline, "v"),
-            kline.GetProperty("x").GetBoolean());
+            kline.GetProperty("x").GetBoolean(),
+            quoteVolume,
+            numTrades,
+            takerBuyBase,
+            takerBuyQuote);
     }
 
     private static BinanceDepthUpdateEvent ParseDepthUpdate(string stream, JsonElement data, DateTimeOffset receivedAt) =>

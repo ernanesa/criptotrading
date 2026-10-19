@@ -98,6 +98,30 @@ public static class StrategyComparisonEvaluator
             results.OrderBy(static result => result.StrategyId, StringComparer.Ordinal).ToArray());
     }
 
+    public static StrategyComparisonReport EvaluateOperationalParity(
+        DatasetMetadata dataset,
+        IReadOnlyList<CloseBar> bars,
+        StrategyBacktestOptions options,
+        IReadOnlyList<WalkForwardWindow> windows)
+    {
+        var (symbol, referencePrice) = ValidateComparisonInputs(dataset, bars, options, windows);
+        var definitions = CreateOperationalParityDefinitions(symbol, options, referencePrice);
+        var results = definitions
+            .Select(definition => EvaluateDefinition(dataset.ContentHash, bars, options, windows, definition))
+            .ToArray();
+
+        return new StrategyComparisonReport(
+            dataset,
+            symbol.Value,
+            bars.Count,
+            StrategyBacktestEvaluator.DescribeExecutionAssumption(options),
+            $"Operational parity parameters matching MultiStrategyDecisionOrchestrator (trend 5/15, breakout 12/6, mean-reversion 5/-1.30, volatility-squeeze 20/2.0/1.5, plus orchestrated multi-strategy); {DescribeWindowMethodology(windows)}.",
+            "Signal strategies allocate available quote cash on entry; matches autonomous intraday decision parameters.",
+            "Each strategy and the orchestrated multi-strategy ensemble are simulated on the identical chronological dataset.",
+            PromotionAuthorized: false,
+            results.OrderBy(static result => result.StrategyId, StringComparer.Ordinal).ToArray());
+    }
+
     public static StrategySensitivityReport EvaluateSensitivity(
         DatasetMetadata dataset,
         IReadOnlyList<CloseBar> bars,
@@ -418,6 +442,53 @@ public static class StrategyComparisonEvaluator
         ];
     }
 
+    private static IReadOnlyList<StrategyDefinition> CreateOperationalParityDefinitions(
+        Symbol symbol,
+        StrategyBacktestOptions options,
+        decimal referencePrice)
+    {
+#pragma warning disable CA1308 // Lowercase is the stable strategy-id suffix format, not an equality operation.
+        var suffix = symbol.Value.ToLowerInvariant();
+#pragma warning restore CA1308
+        var trend = new TrendFollowingParameters($"trend-following-{suffix}", "1.0.0", symbol, 5, 15,
+            options.FeeRate, options.SlippageRate);
+        var breakout = new BreakoutParameters($"breakout-momentum-{suffix}", "1.0.0", symbol, 12, 6,
+            options.FeeRate, options.SlippageRate);
+        var meanReversion = new MeanReversionParameters($"mean-reversion-{suffix}", "1.0.0", symbol, 5,
+            -1.30m, 0.35m, 0.10m, options.FeeRate, options.SlippageRate);
+        const decimal gridQuoteOrderFraction = 0.10m;
+        const decimal gridQuoteInventoryFraction = 0.50m;
+        var grid = new AdaptiveGridParameters(
+            $"adaptive-grid-{suffix}",
+            "1.0.0",
+            symbol,
+            0.015m,
+            5,
+            (options.InitialCapital * gridQuoteOrderFraction) / referencePrice,
+            (options.InitialCapital * gridQuoteInventoryFraction) / referencePrice,
+            options.FeeRate,
+            options.SlippageRate);
+        var squeeze = new VolatilitySqueezeParameters($"volatility-squeeze-{suffix}", "1.0.0", symbol, 20,
+            2.0m, 1.5m, options.FeeRate, options.SlippageRate);
+        var orchestratorId = $"multi-strategy-orchestrator-{suffix}";
+
+        return
+        [
+            new(trend.StrategyId, trend.Version, trend.ConfigurationFingerprint,
+                source => StrategySignalAdapter.FromTrendFollowing(new TrendFollowingStrategy(trend).Evaluate(source))),
+            new(breakout.StrategyId, breakout.Version, breakout.ConfigurationFingerprint,
+                source => StrategySignalAdapter.FromBreakout(new BreakoutStrategy(breakout).Evaluate(source))),
+            new(meanReversion.StrategyId, meanReversion.Version, meanReversion.ConfigurationFingerprint,
+                source => StrategySignalAdapter.FromMeanReversion(new MeanReversionStrategy(meanReversion).Evaluate(source))),
+            new(grid.StrategyId, grid.Version, grid.ConfigurationFingerprint,
+                source => StrategySignalAdapter.FromAdaptiveGrid(new AdaptiveGridStrategy(grid).Evaluate(source))),
+            new(squeeze.StrategyId, squeeze.Version, squeeze.ConfigurationFingerprint,
+                source => StrategySignalAdapter.FromVolatilitySqueeze(new VolatilitySqueezeStrategy(squeeze).Evaluate(source))),
+            new(orchestratorId, "3.0.0-adaptive", squeeze.ConfigurationFingerprint,
+                source => StrategySignalAdapter.FromMultiStrategyOrchestrator(symbol, source)),
+        ];
+    }
+
     private sealed record StrategyDefinition(
         string StrategyId,
         string StrategyVersion,
@@ -474,4 +545,67 @@ public static class StrategySignalAdapter
                 decision.BarIndex, StrategyExecutionAction.SellBaseQuantity, decision.TargetQuantity, decision.Reason.ToString()),
             _ => throw new ArgumentOutOfRangeException(nameof(decisions)),
         }).ToArray();
+
+    public static StrategyExecutionSignal[] FromVolatilitySqueeze(IReadOnlyList<VolatilitySqueezeDecision> decisions) =>
+        decisions.Select(static decision => new StrategyExecutionSignal(
+            decision.BarIndex,
+            decision.Signal switch
+            {
+                VolatilitySqueezeSignal.NoTrade => StrategyExecutionAction.NoTrade,
+                VolatilitySqueezeSignal.EnterLong => StrategyExecutionAction.EnterLong,
+                VolatilitySqueezeSignal.ExitLong => StrategyExecutionAction.ExitLong,
+                _ => throw new ArgumentOutOfRangeException(nameof(decisions)),
+            },
+            reasonCode: decision.Reason.ToString())).ToArray();
+
+    public static StrategyExecutionSignal[] FromMultiStrategyOrchestrator(Symbol symbol, IReadOnlyList<CloseBar> bars)
+    {
+        ArgumentNullException.ThrowIfNull(bars);
+        var signals = new StrategyExecutionSignal[bars.Count];
+        var inPosition = false;
+        string? originatingStrategyId = null;
+
+        for (var i = 0; i < bars.Count; i++)
+        {
+            if (i < 5)
+            {
+                signals[i] = new StrategyExecutionSignal(i, StrategyExecutionAction.NoTrade, reasonCode: "InsufficientHistory");
+                continue;
+            }
+
+            var windowStart = Math.Max(0, i - 35);
+            var window = new CloseBar[i - windowStart + 1];
+            for (var k = 0; k < window.Length; k++)
+            {
+                window[k] = bars[windowStart + k];
+            }
+
+            var eval = Autonomy.MultiStrategyDecisionOrchestrator.Orchestrate(
+                symbol,
+                window,
+                baseTargetNotional: 100m,
+                evaluatedAtUtc: bars[i].CloseTimeUtc,
+                hasOpenPosition: inPosition,
+                positionOriginatingStrategyId: originatingStrategyId);
+
+            if (!eval.IsNoTrade && eval.SelectedSide == CryptoTrading.Domain.Orders.OrderSide.Buy && !inPosition)
+            {
+                inPosition = true;
+                originatingStrategyId = eval.SelectedStrategyId;
+                signals[i] = new StrategyExecutionSignal(i, StrategyExecutionAction.EnterLong, reasonCode: eval.OrchestrationReason);
+            }
+            else if (!eval.IsNoTrade && eval.SelectedSide == CryptoTrading.Domain.Orders.OrderSide.Sell && inPosition)
+            {
+                inPosition = false;
+                originatingStrategyId = null;
+                signals[i] = new StrategyExecutionSignal(i, StrategyExecutionAction.ExitLong, reasonCode: eval.OrchestrationReason);
+            }
+            else
+            {
+                signals[i] = new StrategyExecutionSignal(i, StrategyExecutionAction.NoTrade, reasonCode: eval.OrchestrationReason);
+            }
+        }
+
+        return signals;
+    }
 }

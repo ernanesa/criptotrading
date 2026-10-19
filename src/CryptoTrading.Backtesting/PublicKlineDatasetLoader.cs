@@ -66,10 +66,36 @@ public static class PublicKlineDatasetLoader
         }
 
         var close = ReadDecimal(payload, "close");
+        var open = TryReadOptionalDecimal(payload, "open");
+        var high = TryReadOptionalDecimal(payload, "high");
+        var low = TryReadOptionalDecimal(payload, "low");
+        var volume = TryReadOptionalDecimal(payload, "volume") ?? 0m;
+        var takerBuyBaseVolume = TryReadOptionalDecimal(payload, "takerBuyBaseVolume") ?? 0m;
+        var quoteVolume = TryReadOptionalDecimal(payload, "quoteVolume") ?? 0m;
         return new ClosedBarEnvelope(
             record.Sequence,
-            new CloseBar(new Symbol(expectedSymbol), closeTime, close),
+            new CloseBar(new Symbol(expectedSymbol), closeTime, close, open, high, low, volume, takerBuyBaseVolume, quoteVolume),
             record.ReceivedAtUtc);
+    }
+
+    private static decimal? TryReadOptionalDecimal(JsonElement payload, string name)
+    {
+        if (!payload.TryGetProperty(name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number))
+        {
+            return number;
+        }
+
+        if (value.ValueKind == JsonValueKind.String && decimal.TryParse(value.GetString(), NumberStyles.Number, CultureInfo.InvariantCulture, out var text))
+        {
+            return text;
+        }
+
+        return null;
     }
 
     private static DateTimeOffset ReadTimestamp(JsonElement payload, string name)

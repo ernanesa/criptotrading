@@ -202,27 +202,45 @@ public sealed class VolatilitySqueezeStrategy
             }
             var mean = sum / Parameters.Period;
 
-            // 2. Calculate Rolling Standard Deviation & Average Absolute Deviation (AAD)
+            // 2. Calculate Rolling Standard Deviation, Average Absolute Deviation (AAD), and True OHLC ATR
             decimal varianceSum = 0m;
             decimal aadSum = 0m;
             decimal trSum = 0m;
+            var hasOhlcRange = false;
             for (var k = 0; k < Parameters.Period; k++)
             {
-                var diff = bars[index - k].ClosePrice.Value - mean;
+                var bar = bars[index - k];
+                var diff = bar.ClosePrice.Value - mean;
                 varianceSum += diff * diff;
                 aadSum += Math.Abs(diff);
-                if (k < Parameters.Period - 1)
+                var highLow = bar.HighPrice.Value - bar.LowPrice.Value;
+                if (highLow > 0m)
                 {
-                    trSum += Math.Abs(bars[index - k].ClosePrice.Value - bars[index - k - 1].ClosePrice.Value);
+                    hasOhlcRange = true;
+                }
+
+                if (index - k > 0)
+                {
+                    var prevClose = bars[index - k - 1].ClosePrice.Value;
+                    var tr = Math.Max(highLow, Math.Max(Math.Abs(bar.HighPrice.Value - prevClose), Math.Abs(bar.LowPrice.Value - prevClose)));
+                    trSum += tr;
+                }
+                else
+                {
+                    trSum += highLow;
                 }
             }
 
             var variance = varianceSum / (Parameters.Period - 1);
             var stdDev = (decimal)Math.Sqrt((double)variance);
             var aad = aadSum / Parameters.Period;
+            var atr = trSum / Parameters.Period;
 
             var bbWidth = 2m * Parameters.BollingerMultiplier * stdDev;
-            var kcWidth = 2m * Parameters.KeltnerMultiplier * (aad > 0m ? aad * 1.75m : stdDev * 1.25m);
+            var keltnerRange = hasOhlcRange && atr > 0m
+                ? atr
+                : (aad > 0m ? aad * 1.75m : stdDev * 1.25m);
+            var kcWidth = 2m * Parameters.KeltnerMultiplier * keltnerRange;
             var isSqueezed = bbWidth <= kcWidth;
 
             // 3. Carter Squeeze Momentum: Close - (Mean + (Max + Min)/2) / 2

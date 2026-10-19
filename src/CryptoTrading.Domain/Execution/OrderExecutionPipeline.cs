@@ -210,6 +210,18 @@ public static class OrderExecutionPipeline
         var decision = operationalControl is null
             ? RiskEvaluator.Evaluate(policy, intent.RiskEvaluation)
             : RiskEvaluator.Evaluate(policy, intent.RiskEvaluation, operationalControl);
+        if (intent.Side == OrderSide.Buy &&
+            decision.Status == RiskDecisionStatus.Adjusted &&
+            IsReductionOnlyRiskBreaker(decision, policy, intent.RiskEvaluation))
+        {
+            decision = new RiskDecision(
+                RiskDecisionStatus.Rejected,
+                decision.RequestedTargetNotional,
+                0m,
+                decision.PolicyVersion,
+                decision.ReasonCodes);
+        }
+
         if (!decision.AllowsNewExposure)
         {
             return new(decision, null, null);
@@ -248,5 +260,37 @@ public static class OrderExecutionPipeline
             intent.CreatedAtUtc);
 
         return new(decision, command, outbox);
+    }
+
+    private static bool IsReductionOnlyRiskBreaker(
+        RiskDecision decision,
+        RiskPolicy policy,
+        RiskEvaluationRequest request)
+    {
+        foreach (var code in decision.ReasonCodes)
+        {
+            if (code is RiskReasonCodes.DailyLossLimit or
+                RiskReasonCodes.DrawdownLimit or
+                RiskReasonCodes.MarketDataStale or
+                RiskReasonCodes.MarketRiskDataUnavailable or
+                RiskReasonCodes.SlippageLimit or
+                RiskReasonCodes.VolatilityLimit or
+                RiskReasonCodes.RiskContextUnavailable or
+                RiskReasonCodes.SafeMode or
+                RiskReasonCodes.KillSwitchActive)
+            {
+                return true;
+            }
+
+            if (code == RiskReasonCodes.LiquidityLimit &&
+                policy.MinLiquidityNotional is { } minLiq &&
+                request.MarketRisk is { } mr &&
+                mr.AvailableLiquidityNotional < minLiq)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
