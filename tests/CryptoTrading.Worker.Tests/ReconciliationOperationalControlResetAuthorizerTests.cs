@@ -189,6 +189,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [Theory]
     [InlineData("ACCOUNT_STREAM_EVENTSTREAMTERMINATED")]
     [InlineData("ACCOUNT_STREAM_SERVERSHUTDOWN")]
+    [InlineData("ACCOUNT_STREAM_CONNECTIONLOST")]
     [InlineData("ACCOUNT_STREAM_DISCONNECTED")]
     [InlineData("ACCOUNT_STREAM_SOCKET_CLOSED")]
     [InlineData("ACCOUNT_STREAM_TIMEOUT")]

@@ -315,7 +315,7 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
             WebSocketApiBaseAddress = Uri.TryCreate(builder.Configuration["BINANCE_USER_STREAM_WS_API_BASE_URL"], UriKind.Absolute, out var wsBaseAddress)
                 ? wsBaseAddress
                 : null,
-            MaxReconnectAttempts = 10
+            MaxReconnectAttempts = 0
         },
         clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>()));
 }
