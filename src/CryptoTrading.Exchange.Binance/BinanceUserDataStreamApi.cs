@@ -16,6 +16,8 @@ public sealed class BinanceUserDataStreamApiOptions
     public long RecvWindowMilliseconds { get; set; } = 5_000;
     public TimeSpan InitialReconnectDelay { get; set; } = TimeSpan.FromMilliseconds(250);
     public TimeSpan MaxReconnectDelay { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>Maximum time allowed for WebSocket connect + HMAC subscription acknowledgement before reconnecting.</summary>
+    public TimeSpan ConnectAndSubscribeTimeout { get; set; } = TimeSpan.FromSeconds(15);
     /// <summary>Maximum lifetime of one WebSocket session; keep below Binance's 24-hour limit.</summary>
     public TimeSpan MaxSessionLifetime { get; set; } = TimeSpan.FromHours(23);
     public int MaxReconnectAttempts { get; set; } = 10;
@@ -54,6 +56,11 @@ public sealed class BinanceUserDataStreamApiOptions
         if (InitialReconnectDelay <= TimeSpan.Zero || MaxReconnectDelay < InitialReconnectDelay)
         {
             throw new ArgumentOutOfRangeException(nameof(InitialReconnectDelay));
+        }
+
+        if (ConnectAndSubscribeTimeout <= TimeSpan.Zero || ConnectAndSubscribeTimeout > TimeSpan.FromMinutes(5))
+        {
+            throw new ArgumentOutOfRangeException(nameof(ConnectAndSubscribeTimeout), "Connect and subscribe timeout must be between 0 and 5 minutes.");
         }
 
         if (MaxSessionLifetime <= TimeSpan.Zero || MaxSessionLifetime > TimeSpan.FromHours(24))
@@ -124,9 +131,12 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             long? subscriptionId = null;
             try
             {
-                await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), sessionToken).ConfigureAwait(false);
+                using var handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
+                handshakeCancellation.CancelAfter(options.ConnectAndSubscribeTimeout);
+                var handshakeToken = handshakeCancellation.Token;
+                await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), handshakeToken).ConfigureAwait(false);
                 enumerator = transport.ReadMessagesAsync(sessionToken).GetAsyncEnumerator(sessionToken);
-                subscriptionId = await SubscribeAsync(transport, enumerator, sessionToken).ConfigureAwait(false);
+                subscriptionId = await SubscribeAsync(transport, enumerator, handshakeToken).ConfigureAwait(false);
                 subscriptionSucceeded = true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -229,10 +239,11 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
 
             if (enumerator is not null)
             {
+                await sessionCancellation.CancelAsync().ConfigureAwait(false);
                 await enumerator.DisposeAsync().ConfigureAwait(false);
             }
 
-            attempt = receivedEvent ? 0 : attempt + 1;
+            attempt = (subscriptionSucceeded || receivedEvent) ? 0 : attempt + 1;
             if (options.MaxReconnectAttempts > 0 && attempt >= options.MaxReconnectAttempts)
             {
                 yield break;
@@ -288,7 +299,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             options.RecvWindowMilliseconds,
             requestId);
         await transport.SendAsync(Encoding.UTF8.GetBytes(request), cancellationToken).ConfigureAwait(false);
-        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+        if (!await enumerator.MoveNextAsync().AsTask().WaitAsync(cancellationToken).ConfigureAwait(false))
         {
             throw new BinanceUserDataStreamProtocolException("WebSocket API closed before subscription acknowledgement.");
         }

@@ -26,6 +26,7 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
                  current.Reason is not null &&
                  (current.Reason.Contains("EVENTSTREAMTERMINATED", StringComparison.OrdinalIgnoreCase) ||
                   current.Reason.Contains("SERVERSHUTDOWN", StringComparison.OrdinalIgnoreCase) ||
+                  current.Reason.Contains("CONNECTIONLOST", StringComparison.OrdinalIgnoreCase) ||
                   current.Reason.Contains("DISCONNECTED", StringComparison.OrdinalIgnoreCase) ||
                   current.Reason.Contains("SOCKET_CLOSED", StringComparison.OrdinalIgnoreCase) ||
                   current.Reason.Contains("TIMEOUT", StringComparison.OrdinalIgnoreCase) ||

@@ -195,6 +195,34 @@ public sealed class BinanceUserDataStreamTests
         await cancellation.CancelAsync();
     }
 
+    [Fact]
+    public async Task ModernApiClientRecoversWhenInitialSubscriptionHandshakeStalls()
+    {
+        var attemptCount = 0;
+        var client = new BinanceUserDataStreamApiClient(
+            new BinanceUserDataStreamApiOptions
+            {
+                ApiKey = "api-key",
+                ApiSecret = "secret",
+                ConnectAndSubscribeTimeout = TimeSpan.FromMilliseconds(25),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectAttempts = 3
+            },
+            () => Interlocked.Increment(ref attemptCount) == 1
+                ? new StalledSubscriptionFakeTransport()
+                : new ModernFakeTransport());
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var enumerator = client.ReadAsync("ignored-by-modern-api", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+        Assert.True(await enumerator.MoveNextAsync());
+        var established = Assert.IsType<BinanceUserDataStreamControlEvent>(enumerator.Current);
+        Assert.Equal("connectionEstablished", established.EventType);
+        Assert.Equal(2, established.SessionGeneration);
+        Assert.Equal(2, attemptCount);
+        await cancellation.CancelAsync();
+    }
+
     private sealed class FakeTransport(params string[] payloads) : IBinanceWebSocketTransport, IDisposable
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -277,6 +305,22 @@ public sealed class BinanceUserDataStreamTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
         public void Dispose() { }
+    }
+
+    private sealed class StalledSubscriptionFakeTransport : IBinanceWebSocketTransport
+    {
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class LifecycleHandler : HttpMessageHandler
