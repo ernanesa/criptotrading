@@ -538,10 +538,15 @@ internal sealed class AutonomyCycleHostedService(
                         {
                             lastIntrabarTriggerUtc[symbol] = now;
                             checkpointScope = intrabarScope;
+                            var intrabarAvailableAtUtc = now >= closed[^1].AvailableAtUtc ? now : closed[^1].AvailableAtUtc;
+                            if (intrabarCloseUtc <= closed[^1].Bar.CloseTimeUtc)
+                            {
+                                intrabarCloseUtc = closed[^1].Bar.CloseTimeUtc.AddMilliseconds(1);
+                            }
                             closed.Add(new ClosedBarEnvelope(
                                 closed.Count,
                                 new CloseBar(symbolObj, intrabarCloseUtc, intrabarTicker.BidPrice),
-                                intrabarCloseUtc));
+                                intrabarAvailableAtUtc));
                             isIntrabarProtectiveTrigger = true;
                         }
                     }

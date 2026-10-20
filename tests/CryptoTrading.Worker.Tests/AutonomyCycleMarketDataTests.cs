@@ -1,4 +1,5 @@
 using System.Globalization;
+using CryptoTrading.Backtesting;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Primitives;
@@ -113,6 +114,45 @@ public sealed class AutonomyCycleMarketDataTests
         Assert.Equal(25, mapped.Count);
         Assert.Equal(start.AddMinutes(1), mapped[0].Bar.CloseTimeUtc);
         Assert.Equal(start.AddMinutes(25), mapped[^1].Bar.CloseTimeUtc);
+    }
+
+    [Fact]
+    public void IntrabarSyntheticBarMaintainsMonotonicAvailabilityAndIncreasingCloseTime()
+    {
+        var open = DateTimeOffset.Parse("2026-09-20T12:00:00Z", CultureInfo.InvariantCulture);
+        var now = open.AddMinutes(3).AddSeconds(20);
+        var mapped = AutonomyCycleHostedService.ValidateAndMapKlines(
+            [Kline(open, 100m), Kline(open.AddMinutes(1), 101m), Kline(open.AddMinutes(2), 102m), Kline(open.AddMinutes(3), 103m)],
+            "BTCUSDT",
+            "1m",
+            TimeSpan.FromMinutes(5),
+            now,
+            previousCloseUtc: null);
+
+        // Simulate intrabar ticker observed 10 seconds before 'now', inside the 4th candle
+        var tickerObservedAtUtc = now.AddSeconds(-10);
+        var intrabarCloseUtc = DateTimeOffset.FromUnixTimeMilliseconds(tickerObservedAtUtc.ToUnixTimeMilliseconds());
+
+        var intrabarAvailableAtUtc = now >= mapped[^1].AvailableAtUtc ? now : mapped[^1].AvailableAtUtc;
+        if (intrabarCloseUtc <= mapped[^1].Bar.CloseTimeUtc)
+        {
+            intrabarCloseUtc = mapped[^1].Bar.CloseTimeUtc.AddMilliseconds(1);
+        }
+
+        var syntheticEnvelope = new ClosedBarEnvelope(
+            mapped.Count,
+            new CloseBar(new Symbol("BTCUSDT"), intrabarCloseUtc, 104.5m),
+            intrabarAvailableAtUtc);
+
+        var listWithIntrabar = new List<ClosedBarEnvelope>(mapped) { syntheticEnvelope };
+
+        // Must succeed without throwing "Closed-bar availability times must be monotonic."
+        var snapshot = BaselineFeatureSnapshot.Create(
+            listWithIntrabar,
+            new TrendFollowingParameters("worker-parity", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        Assert.Equal(intrabarAvailableAtUtc, snapshot.AvailableAtUtc);
+        Assert.Equal(intrabarCloseUtc, snapshot.Decision.CloseTimeUtc);
     }
 
     private static BinanceSpotKline Kline(DateTimeOffset open, decimal close) => new(
