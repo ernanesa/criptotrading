@@ -484,7 +484,7 @@ public static class StrategyComparisonEvaluator
                 source => StrategySignalAdapter.FromAdaptiveGrid(new AdaptiveGridStrategy(grid).Evaluate(source))),
             new(squeeze.StrategyId, squeeze.Version, squeeze.ConfigurationFingerprint,
                 source => StrategySignalAdapter.FromVolatilitySqueeze(new VolatilitySqueezeStrategy(squeeze).Evaluate(source))),
-            new(orchestratorId, "3.0.0-adaptive", squeeze.ConfigurationFingerprint,
+            new(orchestratorId, Autonomy.AdaptiveDecisionCycle.StrategyVersion, squeeze.ConfigurationFingerprint,
                 source => StrategySignalAdapter.FromMultiStrategyOrchestrator(symbol, source)),
         ];
     }

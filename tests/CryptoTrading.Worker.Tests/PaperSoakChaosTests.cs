@@ -95,6 +95,51 @@ public sealed class PaperSoakChaosTests
     }
 
     [Fact]
+    public async Task LimitPaperOrderPreservesReferencePriceAtTheDispatchBoundary()
+    {
+        var exchange = new PaperExchange();
+        var executor = new PaperOutboxMessageExecutor(
+            exchange,
+            Options.Create(new WorkerRuntimeOptions { ExecutionMode = "PAPER", NoTrade = false }),
+            NullLogger<PaperOutboxMessageExecutor>.Instance);
+        var correlationId = Guid.Parse("40000000-0000-0000-0000-000000000001");
+        var createdAtUtc = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+        var payload = $$"""
+            {
+              "orderId": "50000000-0000-0000-0000-000000000001",
+              "clientOrderId": "paper-limit-1",
+              "symbol": "BTCUSDT",
+              "side": "Buy",
+              "type": "Limit",
+              "quantity": 0.01,
+              "referencePrice": 50000,
+              "authorizedNotional": 500,
+              "correlationId": "{{correlationId}}",
+              "idempotencyKey": "paper-limit-key-1",
+              "policyVersion": "paper-test-v1",
+              "createdAtUtc": "{{createdAtUtc:O}}"
+            }
+            """;
+        var message = new LeasedOutboxMessage(
+            Guid.Parse("60000000-0000-0000-0000-000000000001"),
+            OrderExecutionPipeline.SubmitOrderMessageType,
+            new CorrelationId(correlationId),
+            new IdempotencyKey("paper-limit-key-1"),
+            payload,
+            createdAtUtc,
+            0,
+            createdAtUtc.AddMinutes(1),
+            "paper-test-worker");
+
+        await executor.ExecuteAsync(message, TestContext.Current.CancellationToken);
+
+        var order = Assert.Single(exchange.OpenOrders);
+        Assert.Equal(OrderType.Limit, order.Type);
+        Assert.Equal(50_000m, order.LimitPrice!.Value);
+        Assert.Equal(OrderStatus.Submitted, order.Status);
+    }
+
+    [Fact]
     [Trait("Category", "PaperChaos")]
     public async Task PersistentPaperFailuresAreBoundedAndDeadLetteredWithoutExposure()
     {

@@ -343,9 +343,9 @@ internal sealed class AutonomyCycleHostedService(
                             var curProfitBps = (curValueNotional - basis.CostNotional) / basis.CostNotional * 10_000m;
                             var peakBps = positionLifetimePeakProfitBps.AddOrUpdate(tickerEvent.Symbol, curProfitBps, (_, peak) => Math.Max(peak, curProfitBps));
 
-                            var isTakeProfitTrigger = curProfitBps >= 45.0m;
-                            var isChandelierTrigger = peakBps >= 25.0m && (peakBps - curProfitBps) >= 12.0m && curProfitBps >= 15.0m;
-                            var isStopLossTrigger = curProfitBps <= -18.0m;
+                            var isTakeProfitTrigger = curProfitBps >= 180.0m;
+                            var isChandelierTrigger = peakBps >= 120.0m && (peakBps - curProfitBps) >= 50.0m && curProfitBps >= 40.0m;
+                            var isStopLossTrigger = curProfitBps <= -120.0m;
 
                             if (isTakeProfitTrigger || isChandelierTrigger || isStopLossTrigger)
                             {
@@ -441,9 +441,11 @@ internal sealed class AutonomyCycleHostedService(
         }
 
         IReadOnlyList<BinanceSpotKline> klines;
+        var intervalDuration = ParseIntervalDuration(runtime.AutonomyInterval);
+        var effectiveKlineAge = intervalDuration + policyDocument.Policy.MaxMarketDataAge;
         var cacheEligible = klineCache.TryGetValue(symbol, out var cachedList) &&
             cachedList.Count >= runtime.AutonomyKlineLimit &&
-            (now - lastKlineFetchUtc.GetValueOrDefault(symbol, DateTimeOffset.MinValue)) <= TimeSpan.FromMinutes(10);
+            (now - lastKlineFetchUtc.GetValueOrDefault(symbol, DateTimeOffset.MinValue)) <= effectiveKlineAge;
 
         if (cacheEligible)
         {
@@ -451,7 +453,7 @@ internal sealed class AutonomyCycleHostedService(
             {
                 if (cachedList.Count >= runtime.AutonomyKlineLimit &&
                     cachedList[^1].CloseTimeUtc <= now &&
-                    (now - cachedList[^1].CloseTimeUtc) <= policyDocument.Policy.MaxMarketDataAge)
+                    (now - cachedList[^1].CloseTimeUtc) <= effectiveKlineAge)
                 {
                     klines = cachedList.ToArray();
                 }
@@ -519,11 +521,11 @@ internal sealed class AutonomyCycleHostedService(
                     symbol,
                     intrabarProfitBps,
                     (_, peak) => Math.Max(peak, intrabarProfitBps));
-                var isIntrabarTakeProfit = intrabarProfitBps >= 45.0m;
-                var isIntrabarChandelier = intrabarPeakBps >= 25.0m &&
-                                           (intrabarPeakBps - intrabarProfitBps) >= 12.0m &&
-                                           intrabarProfitBps >= 15.0m;
-                var isIntrabarStopLoss = intrabarProfitBps <= -18.0m;
+                var isIntrabarTakeProfit = intrabarProfitBps >= 180.0m;
+                var isIntrabarChandelier = intrabarPeakBps >= 120.0m &&
+                                           (intrabarPeakBps - intrabarProfitBps) >= 50.0m &&
+                                           intrabarProfitBps >= 40.0m;
+                var isIntrabarStopLoss = intrabarProfitBps <= -120.0m;
                 if (isIntrabarTakeProfit || isIntrabarChandelier || isIntrabarStopLoss)
                 {
                     var intrabarCloseUtc = DateTimeOffset.FromUnixTimeMilliseconds(intrabarTicker.ObservedAtUtc.ToUnixTimeMilliseconds());
@@ -1056,7 +1058,8 @@ internal sealed class AutonomyCycleHostedService(
                 LeaderReturnBps: leaderReturnBps,
                 LeaderOrderBookImbalance: leaderOrderBookImbalance,
                 LastClosedTradeAtUtc: lastClosedTradeAtBySymbol.TryGetValue(symbol, out var closedAt) ? closedAt : null,
-                MaxOpenPositionCorrelation: maxOpenPositionCorrelation);
+                MaxOpenPositionCorrelation: maxOpenPositionCorrelation,
+                MlHorizonBars: ResolveMlHorizonBars(runtime.AutonomyInterval));
 
             if (durablePerformances is not null)
             {
@@ -1380,7 +1383,9 @@ internal sealed class AutonomyCycleHostedService(
         DateTimeOffset? previousCloseUtc)
     {
         ArgumentNullException.ThrowIfNull(klines);
-        var guard = new BinanceClosedKlineGuard(symbol, interval, maximumStaleness);
+        var intervalDuration = ParseIntervalDuration(interval);
+        var effectiveStaleness = intervalDuration + maximumStaleness;
+        var guard = new BinanceClosedKlineGuard(symbol, interval, effectiveStaleness);
         var accepted = new List<ClosedBarEnvelope>(klines.Count);
         var eligibleKlines = klines
             .OrderBy(static item => item.OpenTimeUtc)
@@ -1434,6 +1439,35 @@ internal sealed class AutonomyCycleHostedService(
 
         return accepted;
     }
+
+    internal static TimeSpan ParseIntervalDuration(string interval) => interval switch
+    {
+        "1s" => TimeSpan.FromSeconds(1),
+        "1m" => TimeSpan.FromMinutes(1),
+        "3m" => TimeSpan.FromMinutes(3),
+        "5m" => TimeSpan.FromMinutes(5),
+        "15m" => TimeSpan.FromMinutes(15),
+        "30m" => TimeSpan.FromMinutes(30),
+        "1h" => TimeSpan.FromHours(1),
+        "2h" => TimeSpan.FromHours(2),
+        "4h" => TimeSpan.FromHours(4),
+        "6h" => TimeSpan.FromHours(6),
+        "8h" => TimeSpan.FromHours(8),
+        "12h" => TimeSpan.FromHours(12),
+        "1d" => TimeSpan.FromDays(1),
+        "3d" => TimeSpan.FromDays(3),
+        "1w" => TimeSpan.FromDays(7),
+        _ => TimeSpan.FromMinutes(1)
+    };
+
+    internal static int ResolveMlHorizonBars(string interval) => interval switch
+    {
+        "1m" => 4,
+        "5m" => 8,
+        "15m" => 16,
+        "1h" => 24,
+        _ => 4
+    };
 
     private static DateTimeOffset AddInterval(DateTimeOffset value, string interval) => interval switch
     {

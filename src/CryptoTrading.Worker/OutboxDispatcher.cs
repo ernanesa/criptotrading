@@ -83,7 +83,8 @@ public sealed class PaperOutboxMessageExecutor(
             command.Symbol,
             command.Side,
             command.Type,
-            command.Quantity);
+            command.Quantity,
+            command.Type == OrderType.Limit ? command.ReferencePrice : null);
         PaperSubmitResult result;
         try
         {

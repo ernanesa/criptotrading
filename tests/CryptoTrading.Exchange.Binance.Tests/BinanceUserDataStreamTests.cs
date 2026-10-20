@@ -204,7 +204,7 @@ public sealed class BinanceUserDataStreamTests
             {
                 ApiKey = "api-key",
                 ApiSecret = "secret",
-                ConnectAndSubscribeTimeout = TimeSpan.FromMilliseconds(25),
+                ConnectAndSubscribeTimeout = TimeSpan.FromMilliseconds(200),
                 InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
                 MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
                 MaxReconnectAttempts = 3

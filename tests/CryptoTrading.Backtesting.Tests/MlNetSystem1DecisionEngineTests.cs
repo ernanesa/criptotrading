@@ -9,6 +9,15 @@ namespace CryptoTrading.Backtesting.Tests;
 public sealed class MlNetSystem1DecisionEngineTests
 {
     [Fact]
+    public void HorizonScalesWithVolatilityInsteadOfStayingAtFourBars()
+    {
+        Assert.Equal(18, MlNetSystem1DecisionEngine.ComputeHorizonBars(180m, 10m));
+        Assert.Equal(6, MlNetSystem1DecisionEngine.ComputeHorizonBars(180m, 30m));
+        Assert.Equal(4, MlNetSystem1DecisionEngine.ComputeHorizonBars(180m, 60m));
+        Assert.Equal(32, MlNetSystem1DecisionEngine.ComputeHorizonBars(180m, 1m));
+    }
+
+    [Fact]
     public void BrierScorePerfectForecastsReturnsZero()
     {
         var predictions = new (decimal, bool)[]
