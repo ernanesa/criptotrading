@@ -77,15 +77,21 @@ public static class MlNetSystem1DecisionEngine
         decimal RegimeConfidence,
         decimal OrderBookImbalanceRounded,
         int EmpiricalObservationCount,
-        decimal EmpiricalAverageRewardRounded);
+        decimal EmpiricalAverageRewardRounded,
+        int HorizonBars);
 
     public static MlNetSystem1Evaluation Evaluate(
         IReadOnlyList<CloseBar> bars,
         MarketRegimeSnapshot regime,
         OrderSide? candidateSide,
         decimal orderBookImbalance,
-        StrategyRegimePerformance? empiricalPerformance = null)
+        StrategyRegimePerformance? empiricalPerformance = null,
+        int horizonBars = 4)
     {
+        if (horizonBars is < 1 or > 32)
+        {
+            throw new ArgumentOutOfRangeException(nameof(horizonBars));
+        }
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(regime);
 
@@ -112,7 +118,8 @@ public static class MlNetSystem1DecisionEngine
             Math.Round(regime.Confidence, 4),
             Math.Round(orderBookImbalance, 4),
             empiricalPerformance?.ObservationCount ?? 0,
-            Math.Round(empiricalPerformance?.AverageReward ?? 0m, 4));
+            Math.Round(empiricalPerformance?.AverageReward ?? 0m, 4),
+            horizonBars);
 
         if (EvaluationCache.TryGetValue(cacheKey, out var cached))
         {
@@ -132,7 +139,8 @@ public static class MlNetSystem1DecisionEngine
             effectiveSide,
             orderBookImbalance,
             changePointPValue,
-            empiricalPerformance);
+            empiricalPerformance,
+            horizonBars);
 
         var result = new MlNetSystem1Evaluation(
             MlWinProbability: winProbability,
@@ -227,9 +235,10 @@ public static class MlNetSystem1DecisionEngine
         OrderSide side,
         decimal orderBookImbalance,
         decimal ssaChangePointPValue,
-        StrategyRegimePerformance? empiricalPerformance)
+        StrategyRegimePerformance? empiricalPerformance,
+        int horizonBars)
     {
-        var trainingRows = BuildPointInTimeTrainingSet(bars, regime, side, empiricalPerformance);
+        var trainingRows = BuildPointInTimeTrainingSet(bars, regime, side, empiricalPerformance, horizonBars);
         var trainData = mlContext.Data.LoadFromEnumerable(trainingRows);
 
         var sdcaOptions = new SdcaLogisticRegressionBinaryTrainer.Options
@@ -305,7 +314,8 @@ public static class MlNetSystem1DecisionEngine
         IReadOnlyList<CloseBar> bars,
         MarketRegimeSnapshot regime,
         OrderSide side,
-        StrategyRegimePerformance? empiricalPerformance)
+        StrategyRegimePerformance? empiricalPerformance,
+        int horizonBars)
     {
         var rows = new List<MetaLabelRow>(Math.Max(68, bars.Count));
 
@@ -361,15 +371,17 @@ public static class MlNetSystem1DecisionEngine
 
         var n = bars.Count;
         const int lookback = 8;
-        const int horizon = 4;
+        var horizon = Math.Clamp(horizonBars, 1, 32);
         var maxSampleSpan = Math.Max(1, n - horizon - 1 - lookback);
 
-        // Point-in-time walk-forward samples strictly prior to the current bar (endIdx = i + horizon < n - 1)
+        // Point-in-time walk-forward samples strictly prior to the current bar.
+        // Callers pass a horizon matched to the timeframe; the default remains
+        // 4 for existing 1m research/tests.
         for (var i = lookback; i + horizon < n - 1; i++)
         {
             var (zScore, slopeBps, mom3Bps, volBps) = ComputePointInTimeFeatures(bars, i, lookback);
-            var minProfitableMoveBps = Math.Max(35.0m, volBps * 2.5m);
-            var maxAllowedStopBps = Math.Max(18.0m, volBps * 1.5m);
+            var minProfitableMoveBps = Math.Max(180.0m, volBps * 3.0m);
+            var maxAllowedStopBps = Math.Max(100.0m, volBps * 1.8m);
             var hitTakeProfitBeforeStop = EvaluateChronologicalTripleBarrier(
                 bars,
                 i,
@@ -393,6 +405,26 @@ public static class MlNetSystem1DecisionEngine
         }
 
         return rows;
+    }
+
+    public static int ComputeHorizonBars(
+        decimal targetMoveBps,
+        decimal volatilityBpsPerBar,
+        int minHorizon = 4,
+        int maxHorizon = 32)
+    {
+        if (minHorizon < 1 || maxHorizon < minHorizon)
+        {
+            throw new ArgumentOutOfRangeException(nameof(minHorizon));
+        }
+
+        if (targetMoveBps <= 0m || volatilityBpsPerBar <= 0m)
+        {
+            return maxHorizon;
+        }
+
+        var bars = (int)Math.Ceiling(targetMoveBps / volatilityBpsPerBar);
+        return Math.Clamp(bars, minHorizon, maxHorizon);
     }
 
     public static bool EvaluateChronologicalTripleBarrier(
@@ -674,8 +706,8 @@ public static class MlNetSystem1DecisionEngine
                 var eval = Evaluate(pointInTimeBars, regime, OrderSide.Buy, orderBookImbalance);
 
                 var volBps = regime.VolatilityRate * 10_000m;
-                var minProfitableMoveBps = Math.Max(35.0m, volBps * 2.5m);
-                var maxAllowedStopBps = Math.Max(18.0m, volBps * 1.5m);
+                var minProfitableMoveBps = Math.Max(180.0m, volBps * 3.0m);
+                var maxAllowedStopBps = Math.Max(100.0m, volBps * 1.8m);
                 var actualOutcome = EvaluateChronologicalTripleBarrier(
                     bars,
                     t,

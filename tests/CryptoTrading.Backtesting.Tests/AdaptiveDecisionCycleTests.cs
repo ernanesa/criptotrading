@@ -100,6 +100,8 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.False(result.IsNoTrade);
         Assert.Equal(MarketRegime.HighVolatilityChop, result.Regime.Regime);
         Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.NotNull(result.Intent);
+        Assert.Equal(OrderType.Limit, result.Intent!.Type);
         Assert.Contains("HIGH_VOLATILITY_CHOP_RISK_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
@@ -152,7 +154,8 @@ public sealed class AdaptiveDecisionCycleTests
             CreateRiskPolicy(),
             safeModeControl,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_199m),
@@ -193,7 +196,8 @@ public sealed class AdaptiveDecisionCycleTests
             CreateRiskPolicy(),
             killSwitchControl,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_199m),
@@ -512,7 +516,8 @@ public sealed class AdaptiveDecisionCycleTests
             CreateRiskPolicy(),
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_199m),
@@ -545,7 +550,8 @@ public sealed class AdaptiveDecisionCycleTests
             CreateRiskPolicy(),
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_169m),
@@ -581,7 +587,8 @@ public sealed class AdaptiveDecisionCycleTests
             CreateRiskPolicy(),
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_199m),
@@ -604,27 +611,27 @@ public sealed class AdaptiveDecisionCycleTests
     public void LocksProfitOnTrailingStopChandelierExitWhenPricePullbacksFromPeak()
     {
         var cycle = new AdaptiveDecisionCycle();
-        // 24 bars: position entered earlier, swings up to 84_350 (+41.6 bps gain from cost basis 84_000),
-        // then pulls back to 84_210 (+25.0 bps gain, a 16.6 bps pullback >= 15.0 bps trailing gap)
+        // 24 bars: position entered earlier, swings up to 85_200 (+142.8 bps gain from cost basis 84_000),
+        // then pulls back to 84_500 (+59.5 bps gain, a 83.3 bps pullback >= trailing gap)
         var bars = Bars(
-            84_000m, 84_020m, 84_050m, 84_080m, 84_120m, 84_150m,
-            84_180m, 84_220m, 84_260m, 84_300m, 84_330m, 84_350m,
-            84_340m, 84_320m, 84_300m, 84_280m, 84_260m, 84_240m,
-            84_230m, 84_220m, 84_215m, 84_210m, 84_210m, 84_210m);
-        // Cost basis 10.0000 USDT at 84_000 -> held qty = 10 / 84000 = 0.0001190476 BTC
-        // Current price 84_210 -> gross exposure = 0.0001190476 * 84210 = 10.0250 USDT (+25.0 bps gain)
-        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+            84_000m, 84_050m, 84_150m, 84_300m, 84_500m, 84_700m,
+            84_900m, 85_050m, 85_150m, 85_200m, 85_100m, 85_000m,
+            84_900m, 84_800m, 84_700m, 84_650m, 84_600m, 84_500m,
+            84_500m, 84_500m, 84_500m, 84_500m, 84_500m, 84_500m);
+        // Current price 84_500 -> gross exposure = 10.0595 USDT (+59.5 bps gain)
+        var portfolio = CreatePortfolio(10.0595m) with { PositionCostNotional = 10.0000m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
             CreateRiskPolicy(),
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
-                new Price(84_209m),
-                new Price(84_211m),
+                new Price(84_499m),
+                new Price(84_501m),
                 10_000m,
                 TestTime,
                 quantityStepSize: 0.00001m,
@@ -649,15 +656,17 @@ public sealed class AdaptiveDecisionCycleTests
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
             84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
             84_201m, 84_200m, 84_201m, 84_200m, 84_200m, 84_200m);
-        // Position entered at 11.6000 and current notional is 11.6220 (+18.96 bps gain, above roundTripFeeBps + 3)
-        var portfolio = CreatePortfolio(11.6220m) with { PositionCostNotional = 11.6000m };
+        // Position entered at 11.6000 and current notional is 11.6400 (+34.5 bps gain).
+        // The break-even floor must cover fees plus slippage, not merely fee + 2 bps.
+        var portfolio = CreatePortfolio(11.6400m) with { PositionCostNotional = 11.6000m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
             CreateRiskPolicy(),
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
-            EvaluatedAtUtc: TestTime)
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_199m),
@@ -767,16 +776,15 @@ public sealed class AdaptiveDecisionCycleTests
         // followed by 24 bars of top consolidation and slight pullback to 84_210 (+25.0 bps gain)
         var prices = new List<decimal>
         {
-            84_000m, 84_020m, 84_050m, 84_080m, 84_120m, 84_150m,
-            84_180m, 84_220m, 84_260m, 84_300m, 84_350m // peak at index 10
+            84_000m, 84_100m, 84_300m, 84_500m, 84_700m, 85_000m // peak at index 5
         };
         for (var i = 0; i < 24; i++)
         {
-            prices.Add(84_210m);
+            prices.Add(84_350m);
         }
 
         var bars = Bars(prices.ToArray());
-        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+        var portfolio = CreatePortfolio(10.0416m) with { PositionCostNotional = 10.0000m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
@@ -784,11 +792,11 @@ public sealed class AdaptiveDecisionCycleTests
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
             EvaluatedAtUtc: TestTime,
-            LifetimePeakProfitBps: 41.6m) // 41.6 bps peak preserved across lifetime
+            LifetimePeakProfitBps: 119.0m) // 119.0 bps peak preserved across lifetime
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
-                new Price(84_209m),
-                new Price(84_211m),
+                new Price(84_349m),
+                new Price(84_351m),
                 10_000m,
                 TestTime,
                 quantityStepSize: 0.00001m,
@@ -812,7 +820,7 @@ public sealed class AdaptiveDecisionCycleTests
             84_180m, 84_220m, 84_260m, 84_300m, 84_330m, 84_350m,
             84_340m, 84_320m, 84_300m, 84_280m, 84_260m, 84_240m,
             84_230m, 84_220m, 84_215m, 84_210m, 84_210m, 84_210m);
-        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+        var portfolio = CreatePortfolio(10.0400m) with { PositionCostNotional = 10.0000m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
@@ -823,8 +831,8 @@ public sealed class AdaptiveDecisionCycleTests
             PositionOriginatingStrategyId: "trend-following-btcusdt")
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
-                new Price(84_209m),
-                new Price(84_211m),
+                new Price(84_349m),
+                new Price(84_351m),
                 10_000m,
                 TestTime,
                 quantityStepSize: 0.00001m,
@@ -995,7 +1003,7 @@ public sealed class AdaptiveDecisionCycleTests
                 new Price(84_480m), new Price(84_481m), 10_000m, TestTime,
                 isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
                 bidQuantity: 18.0m, askQuantity: 2.0m),
-            LastClosedTradeAtUtc = TestTime.AddMinutes(-5) // 5 minutes ago >= 4 minutes cooldown
+            LastClosedTradeAtUtc = TestTime.AddMinutes(-35) // 35 minutes ago >= 30 minutes cooldown
         };
 
         var result = cycle.Evaluate(request);
@@ -1094,8 +1102,8 @@ public sealed class AdaptiveDecisionCycleTests
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
             84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
             84_201m, 84_200m, 84_201m, 84_200m, 84_200m, 84_200m);
-        // Position cost 10.0000 USDT, current exposure 9.9750 USDT (-25.0 bps unrealized loss <= -18.0 bps stop)
-        var portfolio = CreatePortfolio(9.9750m) with { PositionCostNotional = 10.0000m };
+        // Position cost 10.0000 USDT, current exposure 9.8800 USDT (-120.0 bps unrealized loss <= -100.0 bps stop)
+        var portfolio = CreatePortfolio(9.8800m) with { PositionCostNotional = 10.0000m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
@@ -1139,7 +1147,7 @@ public sealed class AdaptiveDecisionCycleTests
             EntryTargetNotional: 500m,
             EvaluatedAtUtc: TestTime,
             MarketRisk: new MarketRiskSnapshot(
-                expectedSlippageBps: 35m,
+                expectedSlippageBps: 200m,
                 volatilityBps: 10,
                 availableLiquidityNotional: 10_000m,
                 TestTime));

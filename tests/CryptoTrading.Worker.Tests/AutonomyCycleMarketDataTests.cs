@@ -66,6 +66,43 @@ public sealed class AutonomyCycleMarketDataTests
     }
 
     [Fact]
+    public void MlHorizonScalesWithAutonomyTimeframe()
+    {
+        Assert.Equal(4, AutonomyCycleHostedService.ResolveMlHorizonBars("1m"));
+        Assert.Equal(8, AutonomyCycleHostedService.ResolveMlHorizonBars("5m"));
+        Assert.Equal(16, AutonomyCycleHostedService.ResolveMlHorizonBars("15m"));
+        Assert.Equal(24, AutonomyCycleHostedService.ResolveMlHorizonBars("1h"));
+    }
+
+    [Fact]
+    public void FifteenMinuteLatestBarAllowsIntervalPlusGraceButRejectsBeyondIt()
+    {
+        var open = DateTimeOffset.Parse("2026-09-20T10:00:00Z", CultureInfo.InvariantCulture);
+        var close = open.AddMinutes(15).AddMilliseconds(-1);
+        var kline = new BinanceSpotKline(open, close, 100m, 100m, 100m, 100m, 1m, "15m");
+
+        var withinGrace = AutonomyCycleHostedService.ValidateAndMapKlines(
+            [kline],
+            "BTCUSDT",
+            "15m",
+            TimeSpan.FromMinutes(5),
+            close.AddMinutes(5),
+            previousCloseUtc: null);
+        Assert.Single(withinGrace);
+
+        var beyondGrace = close.AddMinutes(21);
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            AutonomyCycleHostedService.ValidateAndMapKlines(
+                [kline],
+                "BTCUSDT",
+                "15m",
+                TimeSpan.FromMinutes(5),
+                beyondGrace,
+                previousCloseUtc: null));
+        Assert.Contains("Stale", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RestKlinesSnapshotRejectsWhenLatestBarIsStale()
     {
         var start = DateTimeOffset.Parse("2026-09-20T10:00:00Z", CultureInfo.InvariantCulture);

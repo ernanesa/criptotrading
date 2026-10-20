@@ -41,7 +41,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     decimal? LeaderOrderBookImbalance = null,
     DateTimeOffset? LastClosedTradeAtUtc = null,
     decimal? MaxOpenPositionCorrelation = null,
-    decimal? TargetVolatilityBps = null)
+    decimal? TargetVolatilityBps = null,
+    int MlHorizonBars = 4)
 {
     public void Validate()
     {
@@ -67,6 +68,11 @@ public sealed record AdaptiveDecisionCycleRequest(
         if (LastClosedTradeAtUtc is { Offset: not { Ticks: 0 } })
         {
             throw new ArgumentException("Last closed trade time must be UTC.", nameof(LastClosedTradeAtUtc));
+        }
+
+        if (MlHorizonBars is < 1 or > 32)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MlHorizonBars));
         }
     }
 }
@@ -96,7 +102,7 @@ public sealed record AdaptiveDecisionCycleResult(
 /// </summary>
 public sealed class AdaptiveDecisionCycle
 {
-    public const string DefaultStrategyVersion = "3.0.0-adaptive";
+    public const string DefaultStrategyVersion = "3.1.1-adaptive";
     public const string DefaultStrategyId = "adaptive-multi-strategy-orchestrator";
     public const decimal ProductionRealisticFeeFloorBps = 15.0m;
 
@@ -172,7 +178,12 @@ public sealed class AdaptiveDecisionCycle
         var indicators = bars.Count >= 20
             ? TechnicalIndicatorCalculator.Evaluate(bars)
             : TechnicalIndicatorSnapshot.Empty(latestBar.ClosePrice.Value);
-        var mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, orderBookImbalance);
+        var mlEval = MlNetSystem1DecisionEngine.Evaluate(
+            bars,
+            regime,
+            OrderSide.Buy,
+            orderBookImbalance,
+            horizonBars: request.MlHorizonBars);
 
         // 3. Operational Mode & Risk Pre-checks
         // SafeMode blocks new exposure but must keep the risk-reducing exit path alive for an open position.
@@ -305,13 +316,28 @@ public sealed class AdaptiveDecisionCycle
         var roundTripFeeBps = request.EffectiveCommission is { } comm
             ? Math.Max((comm.Standard.Maker + comm.Standard.Taker) * 10_000m, ProductionRealisticFeeFloorBps)
             : ProductionRealisticFeeFloorBps;
-        var minProfitBps = Math.Max(28.0m, roundTripFeeBps + 8.0m);
+        var minProfitBps = Math.Max(50.0m, roundTripFeeBps * 2.0m);
         var volBps = bars.Count >= 20 ? regime.VolatilityRate * 10_000m : 10m;
+        var effectiveVolBps = Math.Max(volBps, indicators.AtrBps);
+
+        // Law 2: Stop loss placed outside the multi-bar noise band (1.8x Wilder's ATR clamped to [100 bps, 250 bps])
+        var baseStopBps = Math.Max(100.0m, effectiveVolBps * 1.8m);
+        var protectiveStopLossBps = Math.Clamp(baseStopBps, 100.0m, 250.0m);
+
+        // Law 1: Fee amortization: Gross target profit scaled to 180 to 450 bps (1.8% to 4.5%)
+        var totalRealisticCostBps = roundTripFeeBps + 3.0m;
+        // A "break-even" exit must cover the full round trip plus a small
+        // execution buffer, not merely fee + 2 bps.
+        var breakEvenFloorBps = Math.Max(roundTripFeeBps + 15.0m, totalRealisticCostBps + 5.0m);
+        var minTargetProfitBps = Math.Max(180.0m, totalRealisticCostBps * 4.0m);
+        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(250.0m, effectiveVolBps * 4.5m));
+        var targetProfitBps = Math.Clamp(effectiveVolBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
+
         var dynamicNoiseLossBps = bars.Count >= 20
-            ? Math.Clamp(volBps * 1.5m, 8.0m, 18.0m)
-            : 12.0m;
+            ? Math.Clamp(effectiveVolBps * 1.0m, 50.0m, 120.0m)
+            : 60.0m;
         var maxNoiseLossBps = (regime.Regime == MarketRegime.BearTrend || regime.TrendSlopeRate <= -0.000025m)
-            ? Math.Min(dynamicNoiseLossBps, 10.0m)
+            ? Math.Min(dynamicNoiseLossBps, 60.0m)
             : dynamicNoiseLossBps;
         var isWithinCostBasisNoiseBand = request.Portfolio.PositionCostNotional > 0m &&
             (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps &&
@@ -320,16 +346,9 @@ public sealed class AdaptiveDecisionCycle
         var currentUnrealizedProfitBps = request.Portfolio.PositionCostNotional > 0m
             ? (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m
             : 0m;
-        var totalRealisticCostBps = roundTripFeeBps + 3.0m;
-        var minTargetProfitBps = Math.Max(45.0m, totalRealisticCostBps * 2.25m);
-        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(80.0m, volBps * 4.5m));
-        var targetProfitBps = Math.Clamp(volBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
         var exitStrategyId = !string.IsNullOrWhiteSpace(request.PositionOriginatingStrategyId)
             ? request.PositionOriginatingStrategyId
             : meanReversionId;
-
-        var effectiveVolBps = Math.Max(volBps, indicators.AtrBps);
-        var protectiveStopLossBps = Math.Clamp(effectiveVolBps * 1.8m, 18.0m, 35.0m);
 
         // High-volatility chop is a risk event, not merely the absence of an entry
         // signal.  Do not depend on alpha ownership or a profitable exit signal to
@@ -432,7 +451,7 @@ public sealed class AdaptiveDecisionCycle
         else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
                  bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
-                 currentUnrealizedProfitBps >= (roundTripFeeBps + 2.0m) &&
+                 currentUnrealizedProfitBps >= breakEvenFloorBps &&
                  (orderBookImbalance <= -0.15m || mlEval.MlWinProbability < 0.46m))
         {
             orchestration = orchestration with
@@ -595,11 +614,23 @@ public sealed class AdaptiveDecisionCycle
                 : null);
         if (!isEntry)
         {
-            mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Sell, orderBookImbalance, selectedPerf);
+            mlEval = MlNetSystem1DecisionEngine.Evaluate(
+                bars,
+                regime,
+                OrderSide.Sell,
+                orderBookImbalance,
+                selectedPerf,
+                request.MlHorizonBars);
         }
         else if (selectedPerf is { ObservationCount: > 0 })
         {
-            mlEval = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, orderBookImbalance, selectedPerf);
+            mlEval = MlNetSystem1DecisionEngine.Evaluate(
+                bars,
+                regime,
+                OrderSide.Buy,
+                orderBookImbalance,
+                selectedPerf,
+                request.MlHorizonBars);
         }
 
         var perfBonus = selectedPerf is { ObservationCount: > 0 }
@@ -622,7 +653,7 @@ public sealed class AdaptiveDecisionCycle
         var expectedSlippageCostBps = request.MarketRisk?.ExpectedSlippageBps ?? Math.Round(topOfBookSpreadEstBps * 0.5m, 2);
         var roundTripCostBps = roundTripFeeBps + expectedSlippageCostBps;
         var expectedGainBps = Math.Max(targetProfitBps, effectiveVolBps * 3.5m);
-        var expectedLossBps = Math.Clamp(effectiveVolBps * 1.8m, 12.0m, 35.0m);
+        var expectedLossBps = protectiveStopLossBps;
         var pWin = Math.Clamp((decisionConfidence * 0.50m) + (mlEval.MlWinProbability * 0.50m), 0.05m, 0.95m);
         var expectedNetEdgeBps = Math.Round((pWin * expectedGainBps) - ((1m - pWin) * expectedLossBps) - roundTripCostBps, 2);
 
@@ -630,7 +661,7 @@ public sealed class AdaptiveDecisionCycle
         {
             if (isEntry && request.LastClosedTradeAtUtc is { } lastClose &&
                 lastClose > DateTimeOffset.MinValue &&
-                (request.EvaluatedAtUtc - lastClose) < TimeSpan.FromMinutes(4))
+                (request.EvaluatedAtUtc - lastClose) < TimeSpan.FromMinutes(30))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -750,7 +781,10 @@ public sealed class AdaptiveDecisionCycle
             {
                 var unrealizedProfitBps = (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional)
                     / request.Portfolio.PositionCostNotional * 10_000m;
-                var maxHoldProfitBps = regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate >= 0.00018m ? 45m : 32m;
+                // Keep the branch reachable after the fee-aware minimum-profit
+                // increase.  A fixed 32/45 bps ceiling was below minProfitBps
+                // (>=50 bps), making HOLD_WINNER unreachable.
+                var maxHoldProfitBps = Math.Max(minProfitBps + 20m, targetProfitBps * 0.8m);
                 if (unrealizedProfitBps >= minProfitBps && unrealizedProfitBps < maxHoldProfitBps)
                 {
                     return CreateNoTradeResult(
@@ -898,7 +932,12 @@ public sealed class AdaptiveDecisionCycle
             identity.ClientOrderId,
             symbol,
             orchestration.SelectedSide.Value,
-            tacticRecommendation.RequiresImmediateFill ? OrderType.Market : OrderType.Limit,
+            // The venue pre-trade boundary rejects every MARKET order because
+            // notional cannot be proven without a trusted reference price.
+            // ExecutionPlanner converts urgent intents into aggressive limit
+            // plans when market data is available; without it, fail closed
+            // instead of emitting an order that is guaranteed to be rejected.
+            OrderType.Limit,
             new Quantity(nettingProposal.NettedQuantity),
             new Price(referencePrice),
             identity.CorrelationId,
@@ -1135,16 +1174,16 @@ public sealed class AdaptiveDecisionCycle
         }
 
         var isHighConviction = mlWinProbability >= 0.60m;
-        var trailingGapBps = isHighConviction && peakProfitBps < 35.0m
-            ? Math.Clamp(volBps * 2.2m, 15.0m, 35.0m)
-            : Math.Clamp(volBps * 1.5m, 10.0m, 20.0m);
+        var trailingGapBps = isHighConviction && peakProfitBps < 150.0m
+            ? Math.Clamp(volBps * 2.2m, 40.0m, 100.0m)
+            : Math.Clamp(volBps * 1.5m, 30.0m, 70.0m);
         var pullbackBps = peakProfitBps - currentUnrealizedProfitBps;
 
-        var minProfitLockBps = isHighConviction && peakProfitBps >= 35.0m
-            ? roundTripFeeBps + 15.0m
-            : roundTripFeeBps + 3.0m;
+        var minProfitLockBps = Math.Max(
+            40.0m,
+            roundTripFeeBps + (isHighConviction && peakProfitBps >= 150.0m ? 40.0m : 15.0m));
 
-        if (peakProfitBps >= (roundTripFeeBps + 12.0m) &&
+        if (peakProfitBps >= (roundTripFeeBps + 60.0m) &&
             pullbackBps >= trailingGapBps &&
             currentUnrealizedProfitBps >= minProfitLockBps)
         {
