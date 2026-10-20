@@ -526,18 +526,24 @@ internal sealed class AutonomyCycleHostedService(
                 var isIntrabarStopLoss = intrabarProfitBps <= -18.0m;
                 if (isIntrabarTakeProfit || isIntrabarChandelier || isIntrabarStopLoss)
                 {
-                    var intrabarScope = $"{checkpointScope}:intrabar";
-                    var lastIntrabarCloseUtc = await decisionCommitStore
-                        .GetLastProcessedCloseAsync(intrabarScope, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (lastIntrabarCloseUtc is null || intrabarTicker.ObservedAtUtc > lastIntrabarCloseUtc.Value)
+                    var intrabarCloseUtc = DateTimeOffset.FromUnixTimeMilliseconds(intrabarTicker.ObservedAtUtc.ToUnixTimeMilliseconds());
+                    var lastTrigger = lastIntrabarTriggerUtc.GetValueOrDefault(symbol, DateTimeOffset.MinValue);
+                    if ((now - lastTrigger) >= TimeSpan.FromSeconds(15))
                     {
-                        checkpointScope = intrabarScope;
-                        closed.Add(new ClosedBarEnvelope(
-                            closed.Count,
-                            new CloseBar(symbolObj, intrabarTicker.ObservedAtUtc, intrabarTicker.BidPrice),
-                            now));
-                        isIntrabarProtectiveTrigger = true;
+                        var intrabarScope = $"{checkpointScope}:intrabar";
+                        var lastIntrabarCloseUtc = await decisionCommitStore
+                            .GetLastProcessedCloseAsync(intrabarScope, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (lastIntrabarCloseUtc is null || intrabarCloseUtc > lastIntrabarCloseUtc.Value.AddMilliseconds(1))
+                        {
+                            lastIntrabarTriggerUtc[symbol] = now;
+                            checkpointScope = intrabarScope;
+                            closed.Add(new ClosedBarEnvelope(
+                                closed.Count,
+                                new CloseBar(symbolObj, intrabarCloseUtc, intrabarTicker.BidPrice),
+                                intrabarCloseUtc));
+                            isIntrabarProtectiveTrigger = true;
+                        }
                     }
                 }
             }
