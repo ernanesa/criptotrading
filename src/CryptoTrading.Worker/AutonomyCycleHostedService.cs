@@ -73,10 +73,12 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, (decimal CostNotional, decimal Quantity)> positionCostBases = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarTriggerUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
     internal ConcurrentDictionary<string, List<BinanceSpotKline>> KlineCache => klineCache;
+    internal ConcurrentDictionary<string, DynamicExitThresholds> DynamicExitThresholdsBySymbol => dynamicExitThresholdsBySymbol;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -349,9 +351,12 @@ internal sealed class AutonomyCycleHostedService(
                             var curProfitBps = (curValueNotional - basis.CostNotional) / basis.CostNotional * 10_000m;
                             var peakBps = positionLifetimePeakProfitBps.AddOrUpdate(tickerEvent.Symbol, curProfitBps, (_, peak) => Math.Max(peak, curProfitBps));
 
-                            var isTakeProfitTrigger = curProfitBps >= 180.0m;
-                            var isChandelierTrigger = peakBps >= 120.0m && (peakBps - curProfitBps) >= 50.0m && curProfitBps >= 40.0m;
-                            var isStopLossTrigger = curProfitBps <= -120.0m;
+                            var thresholds = dynamicExitThresholdsBySymbol.GetValueOrDefault(tickerEvent.Symbol, DynamicExitThresholds.Default);
+                            var isTakeProfitTrigger = curProfitBps >= thresholds.TargetProfitBps;
+                            var isChandelierTrigger = peakBps >= thresholds.ChandelierActivationBps &&
+                                                      (peakBps - curProfitBps) >= thresholds.ChandelierPullbackBps &&
+                                                      curProfitBps >= thresholds.MinProfitLockBps;
+                            var isStopLossTrigger = curProfitBps <= -thresholds.StopLossBps;
 
                             if (isTakeProfitTrigger || isChandelierTrigger || isStopLossTrigger)
                             {
@@ -509,6 +514,16 @@ internal sealed class AutonomyCycleHostedService(
             return;
         }
 
+        if (closed.Count >= 2)
+        {
+            var rawBars = closed.Select(static envelope => envelope.Bar).ToArray();
+            var preliminaryIndicators = TechnicalIndicatorCalculator.Evaluate(rawBars);
+            if (preliminaryIndicators.AtrBps > 0m)
+            {
+                dynamicExitThresholdsBySymbol[symbol] = DynamicExitThresholds.Calculate(preliminaryIndicators.AtrBps);
+            }
+        }
+
         if (lastProcessedCloseUtc is { } previous && closed[^1].Bar.CloseTimeUtc <= previous)
         {
             var isIntrabarProtectiveTrigger = false;
@@ -527,11 +542,12 @@ internal sealed class AutonomyCycleHostedService(
                     symbol,
                     intrabarProfitBps,
                     (_, peak) => Math.Max(peak, intrabarProfitBps));
-                var isIntrabarTakeProfit = intrabarProfitBps >= 180.0m;
-                var isIntrabarChandelier = intrabarPeakBps >= 120.0m &&
-                                           (intrabarPeakBps - intrabarProfitBps) >= 50.0m &&
-                                           intrabarProfitBps >= 40.0m;
-                var isIntrabarStopLoss = intrabarProfitBps <= -120.0m;
+                var thresholds = dynamicExitThresholdsBySymbol.GetValueOrDefault(symbol, DynamicExitThresholds.Default);
+                var isIntrabarTakeProfit = intrabarProfitBps >= thresholds.TargetProfitBps;
+                var isIntrabarChandelier = intrabarPeakBps >= thresholds.ChandelierActivationBps &&
+                                           (intrabarPeakBps - intrabarProfitBps) >= thresholds.ChandelierPullbackBps &&
+                                           intrabarProfitBps >= thresholds.MinProfitLockBps;
+                var isIntrabarStopLoss = intrabarProfitBps <= -thresholds.StopLossBps;
                 if (isIntrabarTakeProfit || isIntrabarChandelier || isIntrabarStopLoss)
                 {
                     var intrabarCloseUtc = DateTimeOffset.FromUnixTimeMilliseconds(intrabarTicker.ObservedAtUtc.ToUnixTimeMilliseconds());
@@ -1112,6 +1128,14 @@ internal sealed class AutonomyCycleHostedService(
             }
             var adaptiveResult = adaptiveCycle.Evaluate(adaptiveRequest);
 
+            var volBps = bars.Length >= 20 ? adaptiveResult.Regime.VolatilityRate * 10_000m : 10m;
+            var fullIndicators = TechnicalIndicatorCalculator.Evaluate(bars);
+            var effectiveVol = Math.Max(volBps, fullIndicators.AtrBps);
+            var commRateBps = commissionSnapshot is not null
+                ? (commissionSnapshot.Standard.Maker + commissionSnapshot.Standard.Taker) * 10_000m
+                : 15.0m;
+            dynamicExitThresholdsBySymbol[symbol] = DynamicExitThresholds.Calculate(effectiveVol, commRateBps);
+
             if (regimeStore is not null)
             {
                 try
@@ -1608,4 +1632,47 @@ internal static partial class AutonomyCycleLog
 
     [LoggerMessage(LogLevel.Error, "Autonomy cycle could not enter SafeMode. ErrorType={ErrorType}")]
     public static partial void ControlFailure(ILogger logger, string errorType);
+}
+
+/// <summary>
+/// Dynamic take-profit, chandelier pullback, and protective stop-loss thresholds calibrated
+/// per-coin from point-in-time ATR volatility and market regime noise bands.
+/// </summary>
+internal readonly record struct DynamicExitThresholds(
+    decimal TargetProfitBps,
+    decimal ChandelierActivationBps,
+    decimal ChandelierPullbackBps,
+    decimal MinProfitLockBps,
+    decimal StopLossBps)
+{
+    public static readonly DynamicExitThresholds Default = new(
+        TargetProfitBps: 180.0m,
+        ChandelierActivationBps: 120.0m,
+        ChandelierPullbackBps: 50.0m,
+        MinProfitLockBps: 40.0m,
+        StopLossBps: 120.0m);
+
+    public static DynamicExitThresholds Calculate(decimal effectiveVolBps, decimal roundTripFeeBps = 15.0m)
+    {
+        var safeFeeBps = Math.Max(roundTripFeeBps, 15.0m);
+        var safeVolBps = Math.Max(effectiveVolBps, 10.0m);
+
+        var totalRealisticCostBps = safeFeeBps + 3.0m;
+        var minTargetProfitBps = Math.Max(180.0m, totalRealisticCostBps * 4.0m);
+        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(250.0m, safeVolBps * 4.5m));
+        var targetProfitBps = Math.Clamp(safeVolBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
+
+        var stopLossBps = Math.Clamp(safeVolBps * 1.8m, 100.0m, 250.0m);
+
+        var chandelierActivationBps = Math.Max(safeFeeBps + 60.0m, safeVolBps * 2.0m);
+        var chandelierPullbackBps = Math.Clamp(safeVolBps * 1.5m, 35.0m, 100.0m);
+        var minProfitLockBps = Math.Max(40.0m, safeFeeBps + 15.0m);
+
+        return new DynamicExitThresholds(
+            TargetProfitBps: Math.Round(targetProfitBps, 2),
+            ChandelierActivationBps: Math.Round(chandelierActivationBps, 2),
+            ChandelierPullbackBps: Math.Round(chandelierPullbackBps, 2),
+            MinProfitLockBps: Math.Round(minProfitLockBps, 2),
+            StopLossBps: Math.Round(stopLossBps, 2));
+    }
 }
