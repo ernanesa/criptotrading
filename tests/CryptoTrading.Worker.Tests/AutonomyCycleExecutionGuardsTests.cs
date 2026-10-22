@@ -835,6 +835,76 @@ public sealed class AutonomyCycleExecutionGuardsTests
         Assert.Equal(OperationalMode.SafeMode, operationalControl.Snapshot.Mode);
     }
 
+    [Fact]
+    public async Task RunOnceCatchesKlineQualityGateRejectionWithoutSafeMode()
+    {
+        var marketClient = new InvalidKlinesMarketClient();
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbol = "BTCUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 100,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        var exception = await Record.ExceptionAsync(() => hostedService.RunOnceAsync(options.Value, "BTCUSDT", TestContext.Current.CancellationToken));
+
+        Assert.Null(exception);
+        Assert.Equal(OperationalMode.Normal, operationalControl.Snapshot.Mode);
+        Assert.Equal(RuntimeState.Ready, supervisor.Snapshot.State);
+        Assert.Empty(decisionCommitStore.Commits);
+    }
+
+    private sealed class InvalidKlinesMarketClient : FakeMarketClient
+    {
+        public override Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
+            string symbol,
+            string interval,
+            DateTimeOffset? startTimeUtc = null,
+            DateTimeOffset? endTimeUtc = null,
+            int limit = 500,
+            CancellationToken cancellationToken = default)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var list = new List<BinanceSpotKline>
+            {
+                Kline(now.AddMinutes(-5), 100m),
+                Kline(now.AddMinutes(-5), 101m)
+            };
+            return Task.FromResult<IReadOnlyList<BinanceSpotKline>>(list);
+        }
+    }
+
     private sealed class ThrowingMarketClient(Exception exception) : FakeMarketClient
     {
         public override Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc = null, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) =>
