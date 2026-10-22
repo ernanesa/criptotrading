@@ -514,13 +514,13 @@ internal sealed class AutonomyCycleHostedService(
             return;
         }
 
-        if (closed.Count >= 2)
+        if (closed.Count >= 2 && !dynamicExitThresholdsBySymbol.ContainsKey(symbol))
         {
             var rawBars = closed.Select(static envelope => envelope.Bar).ToArray();
             var preliminaryIndicators = TechnicalIndicatorCalculator.Evaluate(rawBars);
             if (preliminaryIndicators.AtrBps > 0m)
             {
-                dynamicExitThresholdsBySymbol[symbol] = DynamicExitThresholds.Calculate(preliminaryIndicators.AtrBps);
+                dynamicExitThresholdsBySymbol.TryAdd(symbol, DynamicExitThresholds.Calculate(preliminaryIndicators.AtrBps));
             }
         }
 
@@ -1658,13 +1658,13 @@ internal readonly record struct DynamicExitThresholds(
         var safeVolBps = Math.Max(effectiveVolBps, 10.0m);
 
         var totalRealisticCostBps = safeFeeBps + 3.0m;
-        var minTargetProfitBps = Math.Max(180.0m, totalRealisticCostBps * 4.0m);
-        var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(250.0m, safeVolBps * 4.5m));
-        var targetProfitBps = Math.Clamp(safeVolBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
+        var minTargetProfitBps = Math.Clamp(Math.Max(180.0m, totalRealisticCostBps * 4.0m), 180.0m, 450.0m);
+        var targetProfitBps = Math.Clamp(safeVolBps * 3.5m, minTargetProfitBps, 450.0m);
 
         var stopLossBps = Math.Clamp(safeVolBps * 1.8m, 100.0m, 250.0m);
 
-        var chandelierActivationBps = Math.Max(safeFeeBps + 60.0m, safeVolBps * 2.0m);
+        var rawChandelierActivationBps = Math.Max(safeFeeBps + 60.0m, safeVolBps * 2.0m);
+        var chandelierActivationBps = Math.Min(rawChandelierActivationBps, Math.Max(safeFeeBps + 30.0m, targetProfitBps - 20.0m));
         var chandelierPullbackBps = Math.Clamp(safeVolBps * 1.5m, 35.0m, 100.0m);
         var minProfitLockBps = Math.Max(40.0m, safeFeeBps + 15.0m);
 

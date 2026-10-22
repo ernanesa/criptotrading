@@ -885,6 +885,55 @@ public sealed class AutonomyCycleExecutionGuardsTests
         Assert.Empty(decisionCommitStore.Commits);
     }
 
+    [Fact]
+    public async Task AutonomyCycleHostedServicePopulatesDynamicThresholdsFromClosedBars()
+    {
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbol = "BTCUSDT",
+            AutonomySymbols = "BTCUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 100,
+            ExecutionMode = "TESTNET",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = false,
+            RiskPolicyRequired = false,
+            ReconciliationEnabled = false,
+            AccountStreamEnabled = false
+        });
+
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        await hostedService.RunOnceAsync(options.Value, "BTCUSDT", TestContext.Current.CancellationToken);
+
+        Assert.True(hostedService.DynamicExitThresholdsBySymbol.TryGetValue("BTCUSDT", out var thresholds));
+        Assert.True(thresholds.TargetProfitBps >= 180.0m);
+        Assert.True(thresholds.StopLossBps >= 100.0m);
+        Assert.True(thresholds.ChandelierActivationBps >= 75.0m);
+    }
+
     private sealed class InvalidKlinesMarketClient : FakeMarketClient
     {
         public override Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
