@@ -87,6 +87,13 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [InlineData("A2 failure: HTTP_TRANSIENT (severity=Transient, consecutive=3)")]
     [InlineData("A2 failure: SOCKET_CLOSED (severity=Transient, consecutive=4)")]
     [InlineData("A2 failure: NETWORK_TIMEOUT_TRANSIENT (severity=Transient, consecutive=2)")]
+    [InlineData("A2 failure: UNKNOWN_SYSTEM_FAILURE (severity=Unknown, consecutive=0)")]
+    [InlineData("A2 failure: RATE_LIMIT_EXCEEDED (severity=Transient, consecutive=1)")]
+    [InlineData("A2 failure: OPERATION_CANCELED (severity=Transient, consecutive=1)")]
+    [InlineData("A2 failure: DB_TRANSIENT_SQLSTATE_40001 (severity=Transient, consecutive=1)")]
+    [InlineData("Binance kline quality gate rejected the REST snapshot: OutOfOrder.")]
+    [InlineData("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.")]
+    [InlineData("A2 failure: Stale market data snapshot (severity=Transient, consecutive=1)")]
     public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsTrue(string reason)
     {
         var current = new OperationalControlSnapshot(
@@ -109,6 +116,60 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
         Assert.True(result);
+    }
+
+    [Fact]
+    public void IsAuthorizedWhenSafeModeEnteredByOperatorReturnsFalse()
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "operator",
+            Reason: "Operator manual maintenance");
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.False(result);
+    }
+
+    [Theory]
+    [InlineData("DAILY_LOSS_LIMIT_EXCEEDED")]
+    [InlineData("MAX_DRAWDOWN_LIMIT_EXCEEDED")]
+    [InlineData("POSITION_BASIS_DRIFT")]
+    [InlineData("DISK_SPACE_EXHAUSTED")]
+    public void IsAuthorizedWhenSafeModeEnteredByCriticalRiskOrDriftReturnsFalse(string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "autonomy-cycle",
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.False(result);
     }
 
     [Fact]

@@ -73,6 +73,10 @@ internal sealed class PeriodicReconciliationHostedService(
                         PeriodicReconciliationLog.AutoRecovered(logger, result.CorrelationId.ToString());
                         await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, stoppingToken).ConfigureAwait(false);
                     }
+                    else if (operationalControl.Snapshot.Mode == OperationalMode.SafeMode)
+                    {
+                        PeriodicReconciliationLog.AutoRecoveryHeld(logger, operationalControl.Snapshot.ChangedBy ?? "Unknown", operationalControl.Snapshot.Reason ?? "Unknown");
+                    }
                 }
                 else
                 {
@@ -118,6 +122,9 @@ internal static partial class PeriodicReconciliationLog
 
     [LoggerMessage(LogLevel.Information, "Periodic reconciliation auto-recovered SafeMode to Normal. CorrelationId={CorrelationId}")]
     public static partial void AutoRecovered(ILogger logger, string correlationId);
+
+    [LoggerMessage(LogLevel.Information, "Periodic reconciliation evaluated SafeMode; auto-recovery held for operator intervention. ChangedBy={ChangedBy} Reason={Reason}")]
+    public static partial void AutoRecoveryHeld(ILogger logger, string changedBy, string reason);
 
     [LoggerMessage(LogLevel.Warning, "Periodic reconciliation blocked new entries. CorrelationId={CorrelationId} ReportPath={ReportPath}")]
     public static partial void Blocked(ILogger logger, string correlationId, string reportPath);
