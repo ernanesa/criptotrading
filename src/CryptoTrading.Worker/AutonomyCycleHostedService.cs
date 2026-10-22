@@ -499,9 +499,7 @@ internal sealed class AutonomyCycleHostedService(
                 now,
                 lastProcessedCloseUtc);
         }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("Stale", StringComparison.OrdinalIgnoreCase) ||
-                                                    ex.Message.Contains("GapDetected", StringComparison.OrdinalIgnoreCase) ||
-                                                    ex.Message.Contains("gap", StringComparison.OrdinalIgnoreCase))
+        catch (InvalidOperationException ex)
         {
             AutonomyCycleLog.MarketDataRejected(logger, symbol, ex.Message);
             return;

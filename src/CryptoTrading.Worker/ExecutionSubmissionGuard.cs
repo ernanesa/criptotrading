@@ -137,8 +137,16 @@ internal sealed class ExecutionSubmissionGuard(
         await Task.WhenAll(tickerTask, klinesTask, snapshotTask).ConfigureAwait(false);
         var ticker = await tickerTask.ConfigureAwait(false);
         var klines = await klinesTask.ConfigureAwait(false);
-        var closed = AutonomyCycleHostedService.ValidateAndMapKlines(klines, command.Symbol.Value,
-            options.Value.AutonomyInterval, policy.Policy.MaxMarketDataAge, UtcNow, null);
+        IReadOnlyList<CryptoTrading.Backtesting.ClosedBarEnvelope> closed;
+        try
+        {
+            closed = AutonomyCycleHostedService.ValidateAndMapKlines(klines, command.Symbol.Value,
+                options.Value.AutonomyInterval, policy.Policy.MaxMarketDataAge, UtcNow, null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ExecutionDispatchBlockedException($"MARKET_DATA_INVALID:{ex.Message}", ex);
+        }
         var measuredRisk = MarketRiskCalculator.Calculate(
             closed.Select(item => new MarketCandle(item.Bar.CloseTimeUtc, item.Bar.ClosePrice.Value)).ToArray(),
             [new MarketBookLevel(ticker.BidPrice, ticker.BidQuantity)],

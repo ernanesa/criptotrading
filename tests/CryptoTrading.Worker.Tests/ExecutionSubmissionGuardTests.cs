@@ -158,6 +158,17 @@ public sealed class ExecutionSubmissionGuardTests
         await ReadyGuard(supervisor, market, account).ValidateFinalAsync(command, message, TestContext.Current.CancellationToken);
     }
     [Fact]
+    public async Task FinalGuardBlocksWhenKlinesFailQualityGate()
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (command, message) = FreshCommand();
+        var market = new GuardMarketClient { ReturnInvalidKlines = true };
+        var guard = ReadyGuard(supervisor, market, new GuardAccountClient());
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => guard.ValidateFinalAsync(command, message, TestContext.Current.CancellationToken));
+        Assert.StartsWith("MARKET_DATA_INVALID:", exception.Message, StringComparison.Ordinal);
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+    }
+    [Fact]
     public async Task FinalGuardBlocksWhenFreshPolicyIsRevoked()
     {
         await using var supervisor = await ReadySupervisorAsync(); var (command, message) = FreshCommand();
@@ -236,11 +247,16 @@ public sealed class ExecutionSubmissionGuardTests
         public int BookTickerCalls { get; private set; }
         public decimal AskPrice { get; init; } = 101m;
         public TimeSpan TickerAge { get; init; }
+        public bool ReturnInvalidKlines { get; init; }
         public Task PingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default) => Task.FromResult(new BinanceServerTime(timeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
         public Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc = null, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default)
         {
             var now = timeProvider.GetUtcNow(); var minute = new DateTimeOffset(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, TimeSpan.Zero);
+            if (ReturnInvalidKlines)
+            {
+                return Task.FromResult<IReadOnlyList<BinanceSpotKline>>([Kline(minute.AddMinutes(-4), 100m), Kline(minute.AddMinutes(-4), 101m)]);
+            }
             return Task.FromResult<IReadOnlyList<BinanceSpotKline>>([Kline(minute.AddMinutes(-4), 100m), Kline(minute.AddMinutes(-3), 101m), Kline(minute.AddMinutes(-2), 102m), Kline(minute.AddMinutes(-1), 103m), Kline(minute, 104m)]);
         }
         public Task<IReadOnlyList<BinanceAggregateTrade>> GetAggregateTradesAsync(string symbol, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<BinanceAggregateTrade>>([]);
