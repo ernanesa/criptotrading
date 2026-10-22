@@ -76,6 +76,10 @@ try
 
     Console.WriteLine("Binance Spot Testnet authenticated read-only probe: OK");
     Console.WriteLine($"Balances={account.Balances.Count}; OpenOrders={openOrders.Count}; Trades={trades.Count}; Symbol={symbol}; CanWithdrawCapability={account.CanWithdraw}");
+    foreach (var b in account.Balances.Where(b => decimal.TryParse(b.Locked, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var locked) && locked > 0))
+    {
+        Console.WriteLine($"LOCKED: {b.Asset} Free={b.Free} Locked={b.Locked}");
+    }
     Console.WriteLine("No order, cancel, transfer, withdrawal, margin, or futures endpoint was called.");
     return 0;
 }

@@ -38,6 +38,16 @@ builder.Logging.AddJsonConsole(options =>
     options.TimestampFormat = "yyyy-MM-dd'T'HH:mm:ss.fff'Z'";
     options.JsonWriterOptions = new JsonWriterOptions { Indented = false };
 });
+var diagnosticLogPath = builder.Configuration["WORKER_LOG_FILE_PATH"];
+if (!string.IsNullOrWhiteSpace(diagnosticLogPath))
+{
+#pragma warning disable CA2000 // Ownership is transferred to the logging factory.
+    builder.Logging.AddProvider(new BoundedJsonLineFileLoggerProvider(
+        diagnosticLogPath,
+        builder.Configuration.GetValue("WORKER_LOG_FILE_MAX_BYTES", 50_000_000L),
+        builder.Configuration.GetValue("WORKER_LOG_FILE_RETAINED", 3)));
+#pragma warning restore CA2000
+}
 builder.Configuration.AddLocalDotEnv();
 LocalOpenTelemetryOptions.AddLocalOpenTelemetry(
     builder.Services,
@@ -78,7 +88,20 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AutonomySymbols = builder.Configuration["WORKER_AUTONOMY_SYMBOLS"] ?? string.Empty;
         options.AutonomyInterval = builder.Configuration["WORKER_AUTONOMY_INTERVAL"] ?? "1m";
         options.AutonomyKlineLimit = builder.Configuration.GetValue("WORKER_AUTONOMY_KLINE_LIMIT", 100);
-        options.AutonomyEntryTargetNotional = builder.Configuration.GetValue("WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL", 100m);
+        var entryTargetRaw = builder.Configuration["WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL"]
+            ?? builder.Configuration["WORKER_ENTRY_TARGET_NOTIONAL"];
+        if (decimal.TryParse(entryTargetRaw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var targetNotional))
+        {
+            options.AutonomyEntryTargetNotional = targetNotional;
+        }
+        else
+        {
+            options.AutonomyEntryTargetNotional = builder.Configuration.GetValue("WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL", 100m);
+        }
+        if (builder.Configuration["WORKER_QUARANTINED_STRATEGIES"] is { } quarantined)
+        {
+            options.QuarantinedStrategies = quarantined;
+        }
         options.AutonomyFeeReserveBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_RESERVE_BPS", FeeReservePolicy.DefaultReserveBps);
         options.AutonomyFeeDriftToleranceBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_DRIFT_TOLERANCE_BPS", ExecutionFeeDriftEvaluator.DefaultToleranceBps);
         options.AutonomyEngineMode = builder.Configuration["WORKER_AUTONOMY_ENGINE_MODE"] ?? "RegimeAdaptive";

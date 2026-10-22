@@ -137,9 +137,12 @@ public sealed class BaselineDecisionCycle
             : request.Portfolio.GrossExposureNotional;
         var quantity = new Quantity(targetNotional / decision.SymbolPrice().Value);
         var identity = BuildIdentity(decision, isEntry ? "BUY" : "SELL");
+        var requestRiskExposure = !isEntry
+            ? Math.Max(request.Portfolio.GrossExposureNotional, targetNotional)
+            : request.Portfolio.GrossExposureNotional;
         var requestRisk = new RiskEvaluationRequest(
             targetNotional,
-            request.Portfolio.GrossExposureNotional,
+            requestRiskExposure,
             request.Portfolio.DailyLossNotional,
             request.Portfolio.Drawdown,
             decision.CloseTimeUtc,
@@ -191,9 +194,12 @@ public sealed class BaselineDecisionCycle
                     plan.NoTradeReason);
             }
 
+            var passiveRiskExposure = !isEntry
+                ? Math.Max(request.Portfolio.GrossExposureNotional, plan.Plan.AuthorizedNotional)
+                : request.Portfolio.GrossExposureNotional;
             var passiveRisk = new RiskEvaluationRequest(
                 plan.Plan.AuthorizedNotional,
-                request.Portfolio.GrossExposureNotional,
+                passiveRiskExposure,
                 request.Portfolio.DailyLossNotional,
                 request.Portfolio.Drawdown,
                 decision.CloseTimeUtc,

@@ -77,6 +77,10 @@ public static class TradingTelemetry
         "cryptotrading.market_data.invalid_payloads",
         unit: "{payload}",
         description: "Market-data payloads rejected before entering strategy processing.");
+    public static readonly Counter<long> AutonomyDecisions = Meter.CreateCounter<long>(
+        "cryptotrading.autonomy.decisions",
+        unit: "{decision}",
+        description: "Autonomy decisions by outcome and normalized reason code.");
 
     public static void RecordApiRequest(int statusCode, double durationMilliseconds)
     {
@@ -160,6 +164,43 @@ public static class TradingTelemetry
     {
         InvalidMarketDataPayloads.Add(1);
         Interlocked.Increment(ref invalidMarketDataPayloads);
+    }
+
+    /// <summary>
+    /// Records a decision outcome without putting unbounded free-text reasons
+    /// into a metric label. The reason is reduced to a stable code-like prefix.
+    /// </summary>
+    public static void RecordAutonomyDecision(string outcome, string? reason)
+    {
+        var tags = new TagList
+        {
+            { "outcome", outcome },
+            { "reason", NormalizeReasonCode(reason) }
+        };
+        AutonomyDecisions.Add(1, tags);
+    }
+
+    private static string NormalizeReasonCode(string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return "NONE";
+        }
+
+        var value = reason.Trim();
+        if (value.StartsWith("NO_TRADE:", StringComparison.OrdinalIgnoreCase))
+        {
+            return "NO_CANDIDATE";
+        }
+
+        var separator = value.IndexOf(':', StringComparison.Ordinal);
+        if (separator > 0)
+        {
+            value = value[..separator];
+        }
+
+        value = value.Replace(' ', '_').ToUpperInvariant();
+        return value.Length <= 64 ? value : value[..64];
     }
 
     public static TradingMetricsSnapshot Snapshot() => new(

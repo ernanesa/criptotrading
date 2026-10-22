@@ -473,6 +473,7 @@ public sealed class AdaptiveDecisionCycle
         var hasCrossAssetLeaderMomentum = isAltcoin &&
                                           request.LeaderReturnBps is >= 6.0m &&
                                           request.LeaderOrderBookImbalance is >= 0.20m;
+        var hasAggressiveTakerDemand = indicators.CvdImbalance >= 0.08m && indicators.RelativeVolume >= 1.05m;
 
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             !hasOpenPosition &&
@@ -482,7 +483,8 @@ public sealed class AdaptiveDecisionCycle
             mlEval.MlWinProbability >= 0.51m &&
             (orderBookImbalance >= 0.25m ||
              (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m) ||
-             (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.10m && microPriceDivergenceBps >= 0.15m)) &&
+             (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.10m && microPriceDivergenceBps >= 0.15m) ||
+             (hasAggressiveTakerDemand && orderBookImbalance >= -0.25m && microPriceDivergenceBps >= 0.0m)) &&
             regime.Regime == MarketRegime.BullTrend &&
             regime.TrendSlopeRate > 0m)
         {
@@ -715,9 +717,9 @@ public sealed class AdaptiveDecisionCycle
 
             if (isEntry &&
                 (orderBookImbalance <= -0.75m ||
-                 (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.45m) ||
+                 (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.45m && !hasAggressiveTakerDemand) ||
                  (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase) &&
-                  (mlEval.MlWinProbability < 0.45m || (orderBookImbalance <= -0.20m && mlEval.MlWinProbability < 0.50m)))))
+                  (mlEval.MlWinProbability < 0.45m || (orderBookImbalance <= -0.20m && mlEval.MlWinProbability < 0.50m && !hasAggressiveTakerDemand)))))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -917,9 +919,13 @@ public sealed class AdaptiveDecisionCycle
             availableLiquidityNotional: request.AvailableAccountLiquidityNotional ?? 10_000m,
             latestBar.CloseTimeUtc);
 
+        var requestRiskExposure = orchestration.SelectedSide == OrderSide.Sell
+            ? Math.Max(request.Portfolio.GrossExposureNotional, nettedNotional)
+            : request.Portfolio.GrossExposureNotional;
+
         var requestRisk = new RiskEvaluationRequest(
             nettedNotional,
-            request.Portfolio.GrossExposureNotional,
+            requestRiskExposure,
             request.Portfolio.DailyLossNotional,
             request.Portfolio.Drawdown,
             latestBar.CloseTimeUtc,
@@ -980,9 +986,14 @@ public sealed class AdaptiveDecisionCycle
 
             if (plan.Plan is not null)
             {
+                var passiveNotional = plan.Plan.Quantity.Value * plan.Plan.LimitPrice.Value;
+                var passiveExposure = plan.Plan.Side == OrderSide.Sell
+                    ? Math.Max(request.Portfolio.GrossExposureNotional, passiveNotional)
+                    : request.Portfolio.GrossExposureNotional;
+
                 var passiveRisk = new RiskEvaluationRequest(
-                    plan.Plan.Quantity.Value * plan.Plan.LimitPrice.Value,
-                    request.Portfolio.GrossExposureNotional,
+                    passiveNotional,
+                    passiveExposure,
                     request.Portfolio.DailyLossNotional,
                     request.Portfolio.Drawdown,
                     latestBar.CloseTimeUtc,
