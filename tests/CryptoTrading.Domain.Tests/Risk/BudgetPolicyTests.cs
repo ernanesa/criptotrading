@@ -186,4 +186,32 @@ public sealed class BudgetPolicyTests
         Assert.True(mixedWildcard.IsSymbolAllowed("ETHUSDT"));
         Assert.True(mixedWildcard.IsSymbolAllowed("SOLUSDT"));
     }
+
+    [Fact]
+    public void BudgetPolicyJsonRoundTripPreservesAllFields()
+    {
+        var symbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,NEARUSDT,SUIUSDT,DOTUSDT,UNIUSDT,AAVEUSDT,INJUSDT,ARBUSDT,OPUSDT,TIAUSDT,APTUSDT,SHIBUSDT";
+        var original = new BudgetPolicy(
+            owner: "Ernane",
+            nominalBudgetBrl: 5000.00m,
+            hardCapUsdt: 1000.00m,
+            fxSafetyHaircutRate: 0.02m,
+            maxOpenPositions: 15,
+            maxDailyLossBrl: 250.00m,
+            maxCumulativeDrawdownBrl: 500.00m,
+            maxRiskPerTradeBrl: 50.00m,
+            takerFeeBps: 10.0m,
+            feeReserveBufferBps: 25.0m,
+            minOrderNotionalUsdt: 5.00m,
+            allowedSymbol: symbols);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(original);
+        var deserialized = System.Text.Json.JsonSerializer.Deserialize<BudgetPolicy>(json);
+        Assert.NotNull(deserialized);
+        Assert.Equal(original.Owner, deserialized.Owner);
+        Assert.Equal(original.NominalBudgetBrl, deserialized.NominalBudgetBrl);
+        Assert.Equal(original.HardCapUsdt, deserialized.HardCapUsdt);
+        Assert.Equal(original.MaxOpenPositions, deserialized.MaxOpenPositions);
+        Assert.Equal(original.AllowedSymbol, deserialized.AllowedSymbol);
+    }
 }

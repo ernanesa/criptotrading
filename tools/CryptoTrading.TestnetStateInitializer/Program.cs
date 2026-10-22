@@ -104,6 +104,229 @@ if (args.Contains("--register-v4-expanded-risk-policy", StringComparer.Ordinal))
     }
 }
 
+if (args.Contains("--register-v5-high-capacity-risk-policy", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var policyTime = DateTimeOffset.UtcNow;
+        var symbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,NEARUSDT,SUIUSDT,DOTUSDT,UNIUSDT,AAVEUSDT,INJUSDT,ARBUSDT,OPUSDT,TIAUSDT,APTUSDT,SHIBUSDT";
+        var budgetPolicy = new BudgetPolicy(
+            owner: "Ernane",
+            nominalBudgetBrl: 5000.00m,
+            hardCapUsdt: 1000.00m,
+            fxSafetyHaircutRate: 0.02m,
+            maxOpenPositions: 15,
+            maxDailyLossBrl: 250.00m,
+            maxCumulativeDrawdownBrl: 500.00m,
+            maxRiskPerTradeBrl: 50.00m,
+            takerFeeBps: 10.0m,
+            feeReserveBufferBps: 25.0m,
+            minOrderNotionalUsdt: 5.00m,
+            allowedSymbol: symbols);
+        var riskPolicy = new RiskPolicy(
+            version: "v5-sota-high-capacity",
+            maxOrderNotional: 50m,
+            maxExposureNotional: 1000m,
+            maxDailyLoss: 50m,
+            maxDrawdown: 100m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            budgetPolicy: budgetPolicy);
+        try
+        {
+            var draft = RiskPolicyDocument.CreateDraft(riskPolicy, policyTime.AddMinutes(-5), policyTime.AddDays(90), "policy-author");
+            await s.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // Draft already registered in database
+        }
+        _ = await s.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v5-sota-high-capacity", "Ernane", DateTimeOffset.UtcNow).ConfigureAwait(false);
+        var activePolicy = await s.ActivateRiskPolicyAsync(riskPolicy.Version, DateTimeOffset.UtcNow).ConfigureAwait(false);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "OK",
+            version = activePolicy.Policy.Version,
+            documentHash = activePolicy.DocumentHash,
+            maxOpenPositions = activePolicy.Policy.BudgetPolicy?.MaxOpenPositions,
+            hardCapUsdt = activePolicy.Policy.BudgetPolicy?.HardCapUsdt,
+            allowedSymbol = activePolicy.Policy.BudgetPolicy?.AllowedSymbol
+        }));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
+if (args.Contains("--register-v6-high-utilization-risk-policy", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var policyTime = DateTimeOffset.UtcNow;
+        var symbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,NEARUSDT,SUIUSDT,DOTUSDT,UNIUSDT,AAVEUSDT,INJUSDT,ARBUSDT,OPUSDT,TIAUSDT,APTUSDT,SHIBUSDT";
+        var budgetPolicy = new BudgetPolicy(
+            owner: "Ernane",
+            nominalBudgetBrl: 45000.00m,
+            hardCapUsdt: 7500.00m,
+            fxSafetyHaircutRate: 0.02m,
+            maxOpenPositions: 18,
+            maxDailyLossBrl: 1500.00m,
+            maxCumulativeDrawdownBrl: 3000.00m,
+            maxRiskPerTradeBrl: 300.00m,
+            takerFeeBps: 10.0m,
+            feeReserveBufferBps: 25.0m,
+            minOrderNotionalUsdt: 5.00m,
+            allowedSymbol: symbols);
+        var riskPolicy = new RiskPolicy(
+            version: "v6-sota-high-utilization-75pct",
+            maxOrderNotional: 500m,
+            maxExposureNotional: 7500m,
+            maxDailyLoss: 250m,
+            maxDrawdown: 500m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            budgetPolicy: budgetPolicy);
+        try
+        {
+            var draft = RiskPolicyDocument.CreateDraft(riskPolicy, policyTime.AddMinutes(-5), policyTime.AddDays(90), "policy-author");
+            await s.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // Draft already registered in database
+        }
+        _ = await s.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v6-sota-high-utilization", "Ernane", DateTimeOffset.UtcNow).ConfigureAwait(false);
+        var activePolicy = await s.ActivateRiskPolicyAsync(riskPolicy.Version, DateTimeOffset.UtcNow).ConfigureAwait(false);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "OK",
+            version = activePolicy.Policy.Version,
+            documentHash = activePolicy.DocumentHash,
+            maxOpenPositions = activePolicy.Policy.BudgetPolicy?.MaxOpenPositions,
+            hardCapUsdt = activePolicy.Policy.BudgetPolicy?.HardCapUsdt,
+            maxExposureNotional = activePolicy.Policy.MaxExposureNotional,
+            maxOrderNotional = activePolicy.Policy.MaxOrderNotional,
+            allowedSymbol = activePolicy.Policy.BudgetPolicy?.AllowedSymbol
+        }));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
+if (args.Contains("--register-v7-high-utilization-risk-policy", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var policyTime = DateTimeOffset.UtcNow;
+        var symbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,NEARUSDT,SUIUSDT,DOTUSDT,UNIUSDT,AAVEUSDT,INJUSDT,ARBUSDT,OPUSDT,TIAUSDT,APTUSDT,SHIBUSDT";
+        var budgetPolicy = new BudgetPolicy(
+            owner: "Ernane",
+            nominalBudgetBrl: 56000.00m,
+            hardCapUsdt: 9000.00m,
+            fxSafetyHaircutRate: 0.02m,
+            maxOpenPositions: 18,
+            maxDailyLossBrl: 1800.00m,
+            maxCumulativeDrawdownBrl: 3600.00m,
+            maxRiskPerTradeBrl: 350.00m,
+            takerFeeBps: 10.0m,
+            feeReserveBufferBps: 25.0m,
+            minOrderNotionalUsdt: 5.00m,
+            allowedSymbol: symbols);
+        var riskPolicy = new RiskPolicy(
+            version: "v7-sota-high-utilization-90pct",
+            maxOrderNotional: 500m,
+            maxExposureNotional: 9000m,
+            maxDailyLoss: 300m,
+            maxDrawdown: 600m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            budgetPolicy: budgetPolicy);
+        try
+        {
+            var draft = RiskPolicyDocument.CreateDraft(riskPolicy, policyTime.AddMinutes(-5), policyTime.AddDays(90), "policy-author");
+            await s.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // Draft already registered in database
+        }
+        _ = await s.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v7-sota-high-utilization", "Ernane", DateTimeOffset.UtcNow).ConfigureAwait(false);
+        var activePolicy = await s.ActivateRiskPolicyAsync(riskPolicy.Version, DateTimeOffset.UtcNow).ConfigureAwait(false);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "OK",
+            version = activePolicy.Policy.Version,
+            documentHash = activePolicy.DocumentHash,
+            maxOpenPositions = activePolicy.Policy.BudgetPolicy?.MaxOpenPositions,
+            hardCapUsdt = activePolicy.Policy.BudgetPolicy?.HardCapUsdt,
+            maxExposureNotional = activePolicy.Policy.MaxExposureNotional,
+            maxOrderNotional = activePolicy.Policy.MaxOrderNotional,
+            allowedSymbol = activePolicy.Policy.BudgetPolicy?.AllowedSymbol
+        }));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
+if (args.Contains("--reset-equity-high-water-marks", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await using var conn = new Npgsql.NpgsqlConnection(connectionString);
+        await conn.OpenAsync();
+        await using var cmd = new Npgsql.NpgsqlCommand(
+            "UPDATE trading.autonomy_equity_high_water_marks SET high_water_mark_notional = equity_notional, drawdown_notional = 0, updated_at = transaction_timestamp();", conn);
+        var affected = await cmd.ExecuteNonQueryAsync();
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "OK",
+            affectedRows = affected,
+            message = "Equity high water marks successfully reset to current equity."
+        }));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
 if (args.Contains("--reset-operational-mode", StringComparer.Ordinal))
 {
     try

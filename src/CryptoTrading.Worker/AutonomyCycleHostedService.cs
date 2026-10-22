@@ -17,6 +17,7 @@ using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
+using CryptoTrading.Observability;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.Options;
 
@@ -140,7 +141,12 @@ internal sealed class AutonomyCycleHostedService(
                 {
                     using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
                     var classification = FailureClassifier.Classify(exception);
-                    AutonomyCycleLog.Failed(logger, exception.GetType().Name, classification.ReasonCode);
+                    AutonomyCycleLog.Failed(
+                        logger,
+                        exception.GetType().Name,
+                        classification.ReasonCode,
+                        ComputeExceptionFingerprint(exception),
+                        "autonomy-cycle");
                     try
                     {
                         if (classification.TargetState == CryptoTrading.Domain.Runtime.RuntimeState.KillSwitch)
@@ -430,10 +436,12 @@ internal sealed class AutonomyCycleHostedService(
         var isAdaptive = adaptiveCycle is not null && !string.Equals(runtime.AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase);
         var activeStrategyVersion = isAdaptive ? AdaptiveDecisionCycle.StrategyVersion : activeCycle.StrategyVersion;
         var checkpointScope = $"{symbol}:{runtime.AutonomyInterval}:{activeStrategyVersion}";
-        var lastProcessedCloseUtc = await decisionCommitStore
-            .GetLastProcessedCloseAsync(checkpointScope, cancellationToken)
-            .ConfigureAwait(false);
-        var policyDocument = await riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken).ConfigureAwait(false)
+        var checkpointTask = decisionCommitStore.GetLastProcessedCloseAsync(checkpointScope, cancellationToken);
+        var policyTask = riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken);
+        await Task.WhenAll(checkpointTask, policyTask).ConfigureAwait(false);
+
+        var lastProcessedCloseUtc = await checkpointTask.ConfigureAwait(false);
+        var policyDocument = await policyTask.ConfigureAwait(false)
             ?? throw new InvalidOperationException("No active RiskPolicy is available for the autonomy cycle.");
         if (policyDocument.Policy.WithdrawalsEnabled)
         {
@@ -575,7 +583,8 @@ internal sealed class AutonomyCycleHostedService(
             if (unknownOrder is not null)
             {
                 var blockReason = $"UNKNOWN_ORDER_EXISTS:{unknownOrder.ClientOrderId}";
-                AutonomyCycleLog.Blocked(logger, closed[^1].Bar.CloseTimeUtc, blockReason);
+                TradingTelemetry.RecordAutonomyDecision("BLOCKED", blockReason);
+                AutonomyCycleLog.Blocked(logger, "n/a", symbol, closed[^1].Bar.CloseTimeUtc, blockReason);
                 var blockedTrace = JsonSerializer.Serialize(new
                 {
                     Reason = blockReason,
@@ -614,21 +623,25 @@ internal sealed class AutonomyCycleHostedService(
             }
         }
 
-        ExecutionReplanCandidate? replanCandidate = null;
-        if (cancellationStore is not null)
-        {
-            var candidates = await cancellationStore.ReadReplanCandidatesAsync(100, cancellationToken).ConfigureAwait(false);
-            replanCandidate = candidates.LastOrDefault(c =>
-                string.Equals(c.Symbol.Value, symbol, StringComparison.OrdinalIgnoreCase));
-        }
+        var replanTask = cancellationStore is not null
+            ? cancellationStore.ReadReplanCandidatesAsync(100, cancellationToken)
+            : Task.FromResult<IReadOnlyList<ExecutionReplanCandidate>>([]);
+        var accountTask = accountClient.GetAccountAsync(cancellationToken);
+        var commissionTask = accountClient.GetCommissionAsync(symbol, cancellationToken);
 
-        var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
+        await Task.WhenAll(replanTask, accountTask, commissionTask).ConfigureAwait(false);
+
+        var candidates = await replanTask.ConfigureAwait(false);
+        ExecutionReplanCandidate? replanCandidate = candidates.LastOrDefault(c =>
+            string.Equals(c.Symbol.Value, symbol, StringComparison.OrdinalIgnoreCase));
+
+        var account = await accountTask.ConfigureAwait(false);
         if (!account.CanTrade)
         {
             throw new InvalidOperationException("Binance account does not currently allow trading.");
         }
 
-        var commission = await accountClient.GetCommissionAsync(symbol, cancellationToken).ConfigureAwait(false);
+        var commission = await commissionTask.ConfigureAwait(false);
         var discountValuation = await ResolveDiscountValuationAsync(
             commission,
             symbol,
@@ -659,6 +672,19 @@ internal sealed class AutonomyCycleHostedService(
             "XRP" => 341.0m,
             "ADA" => 1937.0m,
             "DOGE" => 5501.0m,
+            "AVAX" => 44.0m,
+            "LINK" => 36.0m,
+            "NEAR" => 96.0m,
+            "SUI" => 438.0m,
+            "DOT" => 442.0m,
+            "UNI" => 61.0m,
+            "AAVE" => 2.0m,
+            "INJ" => 66.0m,
+            "ARB" => 2660.0m,
+            "OP" => 4138.0m,
+            "TIA" => 1088.0m,
+            "APT" => 645.0m,
+            "SHIB" => 18446.0m,
             _ => 0m
         } : 0m;
         var baseQuantity = Math.Max(0m, rawBaseQuantity - faucetEndowment);
@@ -710,6 +736,19 @@ internal sealed class AutonomyCycleHostedService(
                 "XRP" => 341.0m,
                 "ADA" => 1937.0m,
                 "DOGE" => 5501.0m,
+                "AVAX" => 44.0m,
+                "LINK" => 36.0m,
+                "NEAR" => 96.0m,
+                "SUI" => 438.0m,
+                "DOT" => 442.0m,
+                "UNI" => 61.0m,
+                "AAVE" => 2.0m,
+                "INJ" => 66.0m,
+                "ARB" => 2660.0m,
+                "OP" => 4138.0m,
+                "TIA" => 1088.0m,
+                "APT" => 645.0m,
+                "SHIB" => 18446.0m,
                 _ => 0m
             } : 0m;
             var otherNetQty = Math.Max(0m, otherRawQty - otherFaucet);
@@ -786,9 +825,17 @@ internal sealed class AutonomyCycleHostedService(
         }
         else
         {
-            bookTicker = await marketClient.GetBookTickerAsync(
-                symbol,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                bookTicker = await marketClient.GetBookTickerAsync(
+                    symbol,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (JsonException ex)
+            {
+                AutonomyCycleLog.MarketDataRejected(logger, symbol, ex.Message);
+                return;
+            }
         }
         if (navSnapshots is not null && !unsupportedAssetBalance && !unvaluedOtherPosition &&
             bookTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
@@ -1111,21 +1158,42 @@ internal sealed class AutonomyCycleHostedService(
                     ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
                     : adaptiveResult.NoTradeReason ?? string.Join(',', adaptiveResult.Execution?.Decision.ReasonCodes ?? []);
 
-            await decisionCommitStore.CommitAsync(
-                CreateAdaptiveDecisionCommit(runtime, new Symbol(symbol), adaptiveCheckpointScope, featureSnapshot, adaptiveResult, adaptiveOutcome, adaptiveReason, adaptiveOutbox, replanCandidate),
-                cancellationToken).ConfigureAwait(false);
+            var adaptiveCommit = CreateAdaptiveDecisionCommit(
+                runtime,
+                new Symbol(symbol),
+                adaptiveCheckpointScope,
+                featureSnapshot,
+                adaptiveResult,
+                adaptiveOutcome,
+                adaptiveReason,
+                adaptiveOutbox,
+                replanCandidate);
+            try
+            {
+                await decisionCommitStore.CommitAsync(adaptiveCommit, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex) when (ex.Message.Contains("already associated with different evidence", StringComparison.OrdinalIgnoreCase))
+            {
+                AutonomyCycleLog.MarketDataRejected(logger, symbol, $"Commit skipped: {ex.Message}");
+                lastProcessedCloseUtc = latest.CloseTimeUtc;
+                return;
+            }
 
             lastProcessedCloseUtc = latest.CloseTimeUtc;
             if (!hasCompleteTradingRules || adaptiveResult.IsNoTrade)
             {
-                AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, adaptiveReason);
+                TradingTelemetry.RecordAutonomyDecision("NO_TRADE", adaptiveReason);
+                AutonomyCycleLog.NoTrade(logger, adaptiveCommit.DecisionId, symbol, latest.CloseTimeUtc, adaptiveReason);
                 return;
             }
 
             if (adaptiveOutbox is null)
             {
+                TradingTelemetry.RecordAutonomyDecision("BLOCKED", adaptiveReason);
                 AutonomyCycleLog.Blocked(
                     logger,
+                    adaptiveCommit.DecisionId,
+                    symbol,
                     latest.CloseTimeUtc,
                     adaptiveReason);
                 return;
@@ -1139,7 +1207,8 @@ internal sealed class AutonomyCycleHostedService(
                 positionLifetimePeakProfitBps[symbol] = 0m;
             }
 
-            AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, adaptiveOutbox.Command.ClientOrderId.Value, adaptiveOutbox.Command.Side.ToString());
+            TradingTelemetry.RecordAutonomyDecision("DISPATCHABLE", "ORDER_ENQUEUED");
+            AutonomyCycleLog.Enqueued(logger, adaptiveCommit.DecisionId, symbol, latest.CloseTimeUtc, adaptiveOutbox.Command.ClientOrderId.Value, adaptiveOutbox.Command.Side.ToString());
             outboxWakeupSignal?.Notify();
             return;
         }
@@ -1171,26 +1240,47 @@ internal sealed class AutonomyCycleHostedService(
             : !hasCompleteTradingRules
                 ? "BINANCE_TRADING_RULES_UNAVAILABLE_OR_INCOMPLETE"
                 : result.NoTradeReason ?? string.Join(',', result.Execution?.Decision.ReasonCodes ?? []);
-        await decisionCommitStore.CommitAsync(
-            CreateDecisionCommit(runtime, checkpointScope, featureSnapshot, result, outcome, reason, outbox, replanCandidate),
-            cancellationToken).ConfigureAwait(false);
+        var baselineCommit = CreateDecisionCommit(
+            runtime,
+            checkpointScope,
+            featureSnapshot,
+            result,
+            outcome,
+            reason,
+            outbox,
+            replanCandidate);
+        try
+        {
+            await decisionCommitStore.CommitAsync(baselineCommit, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("already associated with different evidence", StringComparison.OrdinalIgnoreCase))
+        {
+            AutonomyCycleLog.MarketDataRejected(logger, symbol, $"Commit skipped: {ex.Message}");
+            lastProcessedCloseUtc = latest.CloseTimeUtc;
+            return;
+        }
         lastProcessedCloseUtc = latest.CloseTimeUtc;
         if (!hasCompleteTradingRules || isUnauthorizedEntrySymbol || result.IsNoTrade)
         {
-            AutonomyCycleLog.NoTrade(logger, latest.CloseTimeUtc, reason);
+            TradingTelemetry.RecordAutonomyDecision("NO_TRADE", reason);
+            AutonomyCycleLog.NoTrade(logger, baselineCommit.DecisionId, symbol, latest.CloseTimeUtc, reason);
             return;
         }
 
         if (outbox is null)
         {
+            TradingTelemetry.RecordAutonomyDecision("BLOCKED", reason);
             AutonomyCycleLog.Blocked(
                 logger,
+                baselineCommit.DecisionId,
+                symbol,
                 latest.CloseTimeUtc,
                 reason);
             return;
         }
 
-        AutonomyCycleLog.Enqueued(logger, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
+        TradingTelemetry.RecordAutonomyDecision("DISPATCHABLE", "ORDER_ENQUEUED");
+        AutonomyCycleLog.Enqueued(logger, baselineCommit.DecisionId, symbol, latest.CloseTimeUtc, outbox.Command.ClientOrderId.Value, outbox.Command.Side.ToString());
         outboxWakeupSignal?.Notify();
     }
 
@@ -1469,6 +1559,15 @@ internal sealed class AutonomyCycleHostedService(
         _ => 4
     };
 
+    private static string ComputeExceptionFingerprint(Exception exception)
+    {
+        var payload = string.Join('|',
+            exception.GetType().FullName,
+            exception.StackTrace,
+            exception.InnerException?.GetType().FullName);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..16];
+    }
+
     private static DateTimeOffset AddInterval(DateTimeOffset value, string interval) => interval switch
     {
         "1m" => value.AddMinutes(1),
@@ -1483,17 +1582,22 @@ internal static partial class AutonomyCycleLog
 {
     [LoggerMessage(LogLevel.Information, "Portfolio valuation recorded. Symbol={Symbol} ObservedAt={ObservedAt} NavQuote={NavQuote} UnrealizedPnlQuote={UnrealizedPnlQuote} ExternalCashFlowKnown=false")]
     public static partial void Valuation(ILogger logger, string symbol, DateTimeOffset observedAt, decimal navQuote, decimal? unrealizedPnlQuote);
-    [LoggerMessage(LogLevel.Information, "Autonomy cycle selected NO_TRADE. CloseTime={CloseTime} Reason={Reason}")]
-    public static partial void NoTrade(ILogger logger, DateTimeOffset closeTime, string reason);
+    [LoggerMessage(LogLevel.Information, "Autonomy cycle selected NO_TRADE. DecisionId={DecisionId} Symbol={Symbol} CloseTime={CloseTime} Reason={Reason}")]
+    public static partial void NoTrade(ILogger logger, string decisionId, string symbol, DateTimeOffset closeTime, string reason);
 
-    [LoggerMessage(LogLevel.Information, "Autonomy cycle blocked by risk/control. CloseTime={CloseTime} Reasons={Reasons}")]
-    public static partial void Blocked(ILogger logger, DateTimeOffset closeTime, string reasons);
+    [LoggerMessage(LogLevel.Information, "Autonomy cycle blocked by risk/control. DecisionId={DecisionId} Symbol={Symbol} CloseTime={CloseTime} Reasons={Reasons}")]
+    public static partial void Blocked(ILogger logger, string decisionId, string symbol, DateTimeOffset closeTime, string reasons);
 
-    [LoggerMessage(LogLevel.Information, "Autonomy cycle enqueued order. CloseTime={CloseTime} ClientOrderId={ClientOrderId} Side={Side}")]
-    public static partial void Enqueued(ILogger logger, DateTimeOffset closeTime, string clientOrderId, string side);
+    [LoggerMessage(LogLevel.Information, "Autonomy cycle enqueued order. DecisionId={DecisionId} Symbol={Symbol} CloseTime={CloseTime} ClientOrderId={ClientOrderId} Side={Side}")]
+    public static partial void Enqueued(ILogger logger, string decisionId, string symbol, DateTimeOffset closeTime, string clientOrderId, string side);
 
-    [LoggerMessage(LogLevel.Error, "Autonomy cycle failed. ErrorType={ErrorType} Error={Error}")]
-    public static partial void Failed(ILogger logger, string errorType, string error);
+    [LoggerMessage(LogLevel.Error, "Autonomy cycle failed. ErrorType={ErrorType} ReasonCode={ReasonCode} ExceptionFingerprint={ExceptionFingerprint} Operation={Operation}")]
+    public static partial void Failed(
+        ILogger logger,
+        string errorType,
+        string reasonCode,
+        string exceptionFingerprint,
+        string operation);
 
     [LoggerMessage(LogLevel.Warning, "Binance market data WebSocket stream disconnected. Reconnecting in 2 seconds...")]
     public static partial void StreamDisconnected(ILogger logger, Exception exception);

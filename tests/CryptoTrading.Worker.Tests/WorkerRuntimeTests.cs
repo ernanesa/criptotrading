@@ -606,10 +606,10 @@ public sealed class WorkerRuntimeTests
             RiskPolicyRequired = true,
             ReconciliationEnabled = true,
             AccountStreamEnabled = true,
-            AutonomySymbols = "BTCUSDT, SHIBUSDT"
+            AutonomySymbols = "BTCUSDT, FLOKIUSDT"
         };
         var ex = Assert.Throws<OptionsValidationException>(() => unauthorized.Validate());
-        Assert.Contains("unauthorized symbol 'SHIBUSDT'", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("unauthorized symbol 'FLOKIUSDT'", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

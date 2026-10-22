@@ -298,7 +298,9 @@ public sealed class WorkerRuntimeOptions
 
             var allowedUniverse = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
-                "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"
+                "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
+                "AVAXUSDT", "LINKUSDT", "NEARUSDT", "SUIUSDT", "DOTUSDT", "UNIUSDT", "AAVEUSDT",
+                "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "APTUSDT", "SHIBUSDT"
             };
 
             foreach (var symbol in symbols)
@@ -306,7 +308,7 @@ public sealed class WorkerRuntimeOptions
                 if (!allowedUniverse.Contains(symbol))
                 {
                     throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
-                        [$"WORKER_AUTONOMY_SYMBOLS contains unauthorized symbol '{symbol}'. Allowed universe: BTCUSDT, ETHUSDT, SOLUSDT, BNBUSDT, XRPUSDT, ADAUSDT, DOGEUSDT."]);
+                        [$"WORKER_AUTONOMY_SYMBOLS contains unauthorized symbol '{symbol}'."]);
                 }
             }
 

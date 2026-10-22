@@ -174,6 +174,19 @@ internal sealed class ExecutionSubmissionGuard(
             "XRP" => 341.0m,
             "ADA" => 1937.0m,
             "DOGE" => 5501.0m,
+            "AVAX" => 44.0m,
+            "LINK" => 36.0m,
+            "NEAR" => 96.0m,
+            "SUI" => 438.0m,
+            "DOT" => 442.0m,
+            "UNI" => 61.0m,
+            "AAVE" => 2.0m,
+            "INJ" => 66.0m,
+            "ARB" => 2660.0m,
+            "OP" => 4138.0m,
+            "TIA" => 1088.0m,
+            "APT" => 645.0m,
+            "SHIB" => 18446.0m,
             _ => 0m
         } : 0m;
         var positionQuantity = Math.Max(0m, rawPositionQuantity - faucetEndowment);
@@ -211,6 +224,19 @@ internal sealed class ExecutionSubmissionGuard(
                 "XRP" => 341.0m,
                 "ADA" => 1937.0m,
                 "DOGE" => 5501.0m,
+                "AVAX" => 44.0m,
+                "LINK" => 36.0m,
+                "NEAR" => 96.0m,
+                "SUI" => 438.0m,
+                "DOT" => 442.0m,
+                "UNI" => 61.0m,
+                "AAVE" => 2.0m,
+                "INJ" => 66.0m,
+                "ARB" => 2660.0m,
+                "OP" => 4138.0m,
+                "TIA" => 1088.0m,
+                "APT" => 645.0m,
+                "SHIB" => 18446.0m,
                 _ => 0m
             } : 0m;
             var otherNet = Math.Max(0m, otherRaw - otherEndw);
@@ -281,8 +307,11 @@ internal sealed class ExecutionSubmissionGuard(
         {
             throw new ExecutionDispatchBlockedException("PRE_SUBMIT_MARKET_OR_NOTIONAL_CHANGED");
         }
+        var effectiveCurrentExposure = command.Side == OrderSide.Sell
+            ? Math.Max(positionQuantity * mid, currentNotional)
+            : positionQuantity * mid;
         var risk = RiskEvaluator.Evaluate(policy.Policy, new RiskEvaluationRequest(
-            currentNotional, positionQuantity * mid, accounting.RealizedDailyLossNotional,
+            currentNotional, effectiveCurrentExposure, accounting.RealizedDailyLossNotional,
             accounting.DrawdownNotional ?? 0m, closed[^1].Bar.CloseTimeUtc, evaluatedAt,
             marketRisk: measuredRisk, riskContextComplete: accounting.RiskContextComplete), control.Snapshot);
         if (!risk.AllowsNewExposure || risk.AuthorizedTargetNotional < currentNotional ||

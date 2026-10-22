@@ -2970,9 +2970,36 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             connection);
         command.Parameters.Add(Parameter("scope", NpgsqlDbType.Varchar, scope.Trim()));
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return value is DateTime timestamp
-            ? new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc))
-            : null;
+        if (value is DateTime timestamp)
+        {
+            return new DateTimeOffset(DateTime.SpecifyKind(timestamp, DateTimeKind.Utc));
+        }
+
+        var parts = scope.Split(':');
+        if (parts.Length >= 2 && !string.IsNullOrWhiteSpace(parts[0]))
+        {
+            var symbol = parts[0].Trim();
+            var symbolPrefix = symbol + ":%";
+            await using var fallbackCommand = new NpgsqlCommand(
+                """
+                SELECT MAX(last_processed_close)
+                FROM (
+                    SELECT last_processed_close FROM trading.autonomy_checkpoints WHERE scope LIKE @prefix
+                    UNION ALL
+                    SELECT MAX(close_time) AS last_processed_close FROM trading.autonomy_decisions WHERE symbol = @symbol
+                ) sub;
+                """,
+                connection);
+            fallbackCommand.Parameters.Add(Parameter("prefix", NpgsqlDbType.Varchar, symbolPrefix));
+            fallbackCommand.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol));
+            var fallbackValue = await fallbackCommand.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (fallbackValue is DateTime fallbackTimestamp)
+            {
+                return new DateTimeOffset(DateTime.SpecifyKind(fallbackTimestamp, DateTimeKind.Utc));
+            }
+        }
+
+        return null;
     }
 
     public async Task<AutonomyDecisionCommit?> ReadDecisionCommitAsync(

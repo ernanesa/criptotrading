@@ -584,7 +584,9 @@ localDiagnostics.MapGet("/portfolio/performance", async (
     if (!string.IsNullOrWhiteSpace(symbol))
     {
         var normalized = symbol.Trim().ToUpperInvariant();
-        if (normalized is not ("BTCUSDT" or "ETHUSDT" or "SOLUSDT" or "BNBUSDT" or "XRPUSDT" or "ADAUSDT" or "DOGEUSDT"))
+        if (normalized is not ("BTCUSDT" or "ETHUSDT" or "SOLUSDT" or "BNBUSDT" or "XRPUSDT" or "ADAUSDT" or "DOGEUSDT"
+            or "AVAXUSDT" or "LINKUSDT" or "NEARUSDT" or "SUIUSDT" or "DOTUSDT" or "UNIUSDT" or "AAVEUSDT"
+            or "INJUSDT" or "ARBUSDT" or "OPUSDT" or "TIAUSDT" or "APTUSDT" or "SHIBUSDT"))
         {
             return ApiProblem.BadRequest("INVALID_SYMBOL", $"Symbol '{symbol}' is not part of the allowed performance universe.");
         }

@@ -108,6 +108,19 @@ public static class MultiStrategyDecisionOrchestrator
             ? TechnicalIndicatorCalculator.Evaluate(bars)
             : TechnicalIndicatorSnapshot.Empty(bars[^1].ClosePrice.Value);
 
+        var fastMaExtensionClamp = bars.Count >= 20
+            ? Math.Min(0.0060m, Math.Max(0.0018m, 0.40m * indicators.AtrBps / 10_000m))
+            : 0.0018m;
+        var slowMaExtensionClamp = bars.Count >= 20
+            ? Math.Min(0.0100m, Math.Max(0.0035m, 0.60m * indicators.AtrBps / 10_000m))
+            : 0.0035m;
+        var breakoutExtensionClamp = bars.Count >= 20
+            ? Math.Min(0.0080m, Math.Max(0.0025m, 0.40m * indicators.AtrBps / 10_000m))
+            : 0.0025m;
+        var maxBreakoutVolatility = bars.Count >= 20
+            ? Math.Min(0.0080m, Math.Max(0.0020m, 1.20m * indicators.AtrBps / 10_000m))
+            : 0.0020m;
+
         // 1. Evaluate Trend Following
         var slowPeriod = bars.Count >= 20 ? 15 : bars.Count;
         var fastPeriod = Math.Min(5, bars.Count - 1);
@@ -137,8 +150,8 @@ public static class MultiStrategyDecisionOrchestrator
                  bullFastMa > bullSlowMa &&
                  lastTrend.ClosePrice.Value >= bullFastMa &&
                  (bullFastMa - bullSlowMa) / bullSlowMa >= 0.00025m &&
-                 (lastTrend.ClosePrice.Value - bullFastMa) / bullFastMa <= 0.0018m &&
-                 (lastTrend.ClosePrice.Value - bullSlowMa) / bullSlowMa <= 0.0035m)
+                 (lastTrend.ClosePrice.Value - bullFastMa) / bullFastMa <= fastMaExtensionClamp &&
+                 (lastTrend.ClosePrice.Value - bullSlowMa) / bullSlowMa <= slowMaExtensionClamp)
         {
             trendSignal = TrendFollowingSignal.EnterLong;
             trendReason = TrendFollowingReason.FastCrossedAboveSlow;
@@ -200,8 +213,8 @@ public static class MultiStrategyDecisionOrchestrator
         }
         else if (bars.Count >= 20 && !hasOpenPosition && breakoutSignal == BreakoutSignal.NoTrade &&
                  isConfirmedBullTrend &&
-                 regime.VolatilityRate <= 0.0020m &&
-                 slowMaExtension <= 0.0020m &&
+                 regime.VolatilityRate <= maxBreakoutVolatility &&
+                 slowMaExtension <= slowMaExtensionClamp &&
                  lastBreakout.EntryChannelHigh is { } confirmedHigh &&
                  (lastBreakout.ClosePrice.Value > confirmedHigh * 1.0005m ||
                   (lastBreakout.ClosePrice.Value >= confirmedHigh &&
@@ -209,7 +222,7 @@ public static class MultiStrategyDecisionOrchestrator
                    indicators.PlusDi > indicators.MinusDi &&
                    indicators.RelativeVolume >= 1.15m &&
                    indicators.VwapDeviationBps > 0m)) &&
-                 (lastBreakout.ClosePrice.Value - confirmedHigh) / confirmedHigh <= 0.0025m)
+                 (lastBreakout.ClosePrice.Value - confirmedHigh) / confirmedHigh <= breakoutExtensionClamp)
         {
             breakoutSignal = BreakoutSignal.EnterLong;
             breakoutReason = BreakoutReason.ChannelBreakoutAbove;

@@ -171,7 +171,7 @@ public sealed record BudgetPolicy
         decimal nominalBudgetBrl = DefaultNominalBudgetBrl,
         decimal hardCapUsdt = DefaultHardCapUsdt,
         decimal fxSafetyHaircutRate = DefaultFxSafetyHaircutRate,
-        TimeSpan? maxFxQuoteAge = null,
+        TimeSpan maxFxQuoteAge = default,
         int maxOpenPositions = DefaultMaxOpenPositions,
         decimal maxDailyLossBrl = DefaultMaxDailyLossBrl,
         decimal maxCumulativeDrawdownBrl = DefaultMaxCumulativeDrawdownBrl,
@@ -190,7 +190,7 @@ public sealed record BudgetPolicy
             throw new ArgumentOutOfRangeException(nameof(fxSafetyHaircutRate), "FX safety haircut rate must be in [0, 0.50).");
         }
 
-        var resolvedFxAge = maxFxQuoteAge ?? TimeSpan.FromSeconds(DefaultMaxFxQuoteAgeSeconds);
+        var resolvedFxAge = maxFxQuoteAge == default ? TimeSpan.FromSeconds(DefaultMaxFxQuoteAgeSeconds) : maxFxQuoteAge;
         if (resolvedFxAge <= TimeSpan.Zero || resolvedFxAge > TimeSpan.FromMinutes(10))
         {
             throw new ArgumentOutOfRangeException(nameof(maxFxQuoteAge), "Max FX quote age must be positive and at most 10 minutes.");

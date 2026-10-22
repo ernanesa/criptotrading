@@ -60,7 +60,7 @@ public sealed class DiskSpaceSafetyGuard
             if (availableBytes < minFreeDiskBytes)
             {
                 var reason = $"Available disk space {availableBytes} bytes is below threshold {minFreeDiskBytes} bytes.";
-                TriggerSafeMode(reason);
+                TriggerSafeMode(reason, availableBytes, totalBytes, ratio);
                 return new DiskSpaceCheckResult(false, availableBytes, totalBytes, ratio, reason);
             }
 
@@ -70,7 +70,7 @@ public sealed class DiskSpaceSafetyGuard
             if (ratio < minFreeDiskRatio && availableBytes < ratioCapBytes)
             {
                 var reason = $"Available disk space ratio {ratio:P2} is below threshold {minFreeDiskRatio:P2}.";
-                TriggerSafeMode(reason);
+                TriggerSafeMode(reason, availableBytes, totalBytes, ratio);
                 return new DiskSpaceCheckResult(false, availableBytes, totalBytes, ratio, reason);
             }
 
@@ -80,16 +80,23 @@ public sealed class DiskSpaceSafetyGuard
         {
             var reason = $"Disk space check failed with error: {ex.Message}";
             DiskSpaceGuardLog.CheckFailed(logger, targetPath, ex);
-            TriggerSafeMode(reason);
+            TriggerSafeMode(reason, 0, 0, 0m);
             return new DiskSpaceCheckResult(false, 0, 0, 0m, reason);
         }
     }
 
-    private void TriggerSafeMode(string reason)
+    private void TriggerSafeMode(string reason, long availableBytes, long totalBytes, decimal ratio)
     {
         if (operationalControl.Snapshot.Mode == OperationalMode.Normal)
         {
-            DiskSpaceGuardLog.LowDiskTriggered(logger, reason);
+            DiskSpaceGuardLog.LowDiskTriggered(
+                logger,
+                reason,
+                availableBytes,
+                totalBytes,
+                ratio,
+                minFreeDiskBytes,
+                minFreeDiskRatio);
             operationalControl.EnterSafeMode(new OperationalControlCommand(
                 "DiskSpaceSafetyGuard",
                 $"LOW_DISK_SPACE_FAIL_CLOSED: {reason}",
@@ -104,6 +111,13 @@ internal static partial class DiskSpaceGuardLog
     [LoggerMessage(LogLevel.Error, "Disk space safety guard encountered an exception checking {TargetPath}")]
     public static partial void CheckFailed(ILogger logger, string targetPath, Exception exception);
 
-    [LoggerMessage(LogLevel.Critical, "LOW DISK SPACE DETECTED: {Reason}. Latching operational control to SafeMode (LOW_DISK_SPACE_FAIL_CLOSED).")]
-    public static partial void LowDiskTriggered(ILogger logger, string reason);
+    [LoggerMessage(LogLevel.Critical, "LOW DISK SPACE DETECTED: {Reason}. Latching operational control to SafeMode (LOW_DISK_SPACE_FAIL_CLOSED). AvailableBytes={AvailableBytes} TotalBytes={TotalBytes} FreeRatio={FreeRatio} MinFreeBytes={MinFreeBytes} MinFreeRatio={MinFreeRatio}")]
+    public static partial void LowDiskTriggered(
+        ILogger logger,
+        string reason,
+        long availableBytes,
+        long totalBytes,
+        decimal freeRatio,
+        long minFreeBytes,
+        decimal minFreeRatio);
 }
