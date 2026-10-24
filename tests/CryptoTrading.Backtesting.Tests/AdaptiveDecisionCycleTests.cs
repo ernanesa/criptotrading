@@ -1386,6 +1386,7 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.True(result.IsNoTrade);
         Assert.Equal("MACRO_LEADER_RETREATING_BLOCKED", result.NoTradeReason);
         Assert.Contains("MACRO_LEADER_RETREATING_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Contains("\"LeaderReturnBps\":-5.0", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1408,6 +1409,7 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.True(result.IsNoTrade);
         Assert.Equal("MACRO_LEADER_CORRECTION_REGIME_BLOCKED", result.NoTradeReason);
         Assert.Contains("MACRO_LEADER_CORRECTION_REGIME_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Contains("\"LeaderRegime\":\"BearTrend\"", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1449,6 +1451,68 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.True(result.IsNoTrade);
         Assert.Equal("WEAK_MARKET_BREADTH_BLOCKED", result.NoTradeReason);
         Assert.Contains("WEAK_MARKET_BREADTH_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Contains("\"MarketBreadthRatio\":0.25", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenOverboughtVwapStretchedWithNegativeCvd()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 25 rising bars (RSI 100, VWAP dev > 80 bps) that trigger ML_ORDERBOOK_CONFLUENCE_ENTRY,
+        // but with volume showing subtle distribution selling (takerBuy = 49, volume = 100 => cvd = -0.02 < 0)
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var start = TestTime.AddMinutes(-prices.Length);
+        var bars = prices
+            .Select((p, idx) => new CloseBar(
+                BtcUsdt,
+                start.AddMinutes(idx + 1),
+                p,
+                openPrice: p,
+                highPrice: p + 1m,
+                lowPrice: p - 1m,
+                volume: 100m,
+                takerBuyBaseVolume: 49m,
+                quoteVolume: p * 100m,
+                numberOfTrades: 50))
+            .ToArray();
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(106.0m),
+                new Price(106.1m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("OVERBOUGHT_VWAP_STRETCH_BLOCKED", result.NoTradeReason);
+        Assert.Contains("OVERBOUGHT_VWAP_STRETCH_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(-0.01)]
+    [InlineData(1.01)]
+    public void ValidatesMarketBreadthRatioRange(decimal invalidRatio)
+    {
+        var request = new AdaptiveDecisionCycleRequest(
+            Bars(100m),
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            MarketBreadthRatio: invalidRatio);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => request.Validate());
     }
 
     [Fact]

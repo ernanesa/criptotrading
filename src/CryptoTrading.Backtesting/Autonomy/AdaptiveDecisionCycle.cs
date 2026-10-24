@@ -77,6 +77,11 @@ public sealed record AdaptiveDecisionCycleRequest(
         {
             throw new ArgumentOutOfRangeException(nameof(MlHorizonBars));
         }
+
+        if (MarketBreadthRatio is < 0m or > 1.0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(MarketBreadthRatio), "MarketBreadthRatio must be between 0.0 and 1.0.");
+        }
     }
 }
 
@@ -686,7 +691,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && mlEval.IsSsaStructuralBreakdown)
@@ -699,7 +705,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && indicators.Vpin >= 0.78m && indicators.CvdImbalance <= -0.35m)
@@ -712,7 +719,22 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry && indicators.Rsi >= 78m && indicators.VwapDeviationBps >= 80m && indicators.CvdImbalance < 0m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "OVERBOUGHT_VWAP_STRETCH_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && indicators.CvdImbalance < -0.05m)
@@ -760,20 +782,6 @@ public sealed class AdaptiveDecisionCycle
                     request: request);
             }
 
-            if (isEntry && indicators.Rsi >= 78m && indicators.VwapDeviationBps >= 80m && indicators.CvdImbalance < 0m)
-            {
-                return CreateNoTradeResult(
-                    regime,
-                    orchestration.Candidates,
-                    null,
-                    "OVERBOUGHT_VWAP_STRETCH_BLOCKED",
-                    decisionConfidence: decisionConfidence,
-                    orderBookImbalance: orderBookImbalance,
-                    mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
-            }
-
             if (isEntry && request.MaxOpenPositionCorrelation is { } maxCorr && maxCorr >= 0.85m)
             {
                 return CreateNoTradeResult(
@@ -784,7 +792,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry &&
@@ -801,7 +810,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && regime.Regime == MarketRegime.MeanRevertingRange &&

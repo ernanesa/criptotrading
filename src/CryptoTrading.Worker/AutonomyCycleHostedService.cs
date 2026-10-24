@@ -1053,14 +1053,22 @@ internal sealed class AutonomyCycleHostedService(
 
                         if (btcKlines.Count >= 20)
                         {
-                            var btcCloseList = btcKlines.Select(static k => k.Close).ToList();
-                            var btcSnapshot = MarketRegimeClassifier.Classify(
-                                new Symbol("BTCUSDT"),
-                                btcCloseList,
-                                now,
-                                trendSlopeThreshold: 0.00008m);
-                            leaderRegime = btcSnapshot.Regime;
-                            leaderTrendSlope = btcSnapshot.TrendSlopeRate;
+                            var btcCloseList = btcKlines
+                                .Skip(btcKlines.Count - 20)
+                                .Take(20)
+                                .Where(static k => k.Close > 0m)
+                                .Select(static k => k.Close)
+                                .ToList();
+                            if (btcCloseList.Count >= 20)
+                            {
+                                var btcSnapshot = MarketRegimeClassifier.Classify(
+                                    new Symbol("BTCUSDT"),
+                                    btcCloseList,
+                                    now,
+                                    trendSlopeThreshold: 0.00008m);
+                                leaderRegime = btcSnapshot.Regime;
+                                leaderTrendSlope = btcSnapshot.TrendSlopeRate;
+                            }
                         }
                     }
                 }
