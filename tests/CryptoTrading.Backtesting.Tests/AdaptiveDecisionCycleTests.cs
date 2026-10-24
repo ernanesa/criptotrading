@@ -14,6 +14,7 @@ namespace CryptoTrading.Backtesting.Tests;
 public sealed class AdaptiveDecisionCycleTests
 {
     private static readonly Symbol BtcUsdt = new("BTCUSDT");
+    private static readonly Symbol EthUsdt = new("ETHUSDT");
     private static readonly DateTimeOffset TestTime = DateTimeOffset.Parse("2026-09-21T12:00:00Z", CultureInfo.InvariantCulture);
 
     private static RiskPolicy CreateRiskPolicy() =>
@@ -1324,15 +1325,151 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Contains(expectedReason, result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
-    private static List<CloseBar> Bars(params decimal[] prices)
+    private static List<CloseBar> Bars(params decimal[] prices) => BarsForSymbol(BtcUsdt, prices);
+
+    private static List<CloseBar> BarsForSymbol(Symbol symbol, params decimal[] prices)
     {
         var start = TestTime.AddMinutes(-prices.Length);
         var list = new List<CloseBar>(prices.Length);
         for (var i = 0; i < prices.Length; i++)
         {
-            list.Add(new CloseBar(BtcUsdt, start.AddMinutes(i + 1), prices[i]));
+            list.Add(new CloseBar(symbol, start.AddMinutes(i + 1), prices[i]));
         }
 
         return list;
+    }
+
+    private static CloseBar[] CreateMeanReversionEntryBars(
+        Symbol symbol,
+        decimal volume = 0m,
+        decimal takerBuyBaseVolume = 0m)
+    {
+        var prices = new[]
+        {
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m,
+        };
+        var start = TestTime.AddMinutes(-prices.Length);
+        return prices
+            .Select((p, idx) => new CloseBar(
+                symbol,
+                start.AddMinutes(idx + 1),
+                p,
+                openPrice: p,
+                highPrice: p + 2m,
+                lowPrice: p - 2m,
+                volume: volume,
+                takerBuyBaseVolume: takerBuyBaseVolume,
+                quoteVolume: p * volume,
+                numberOfTrades: volume > 0 ? 50 : 0))
+            .ToArray();
+    }
+
+    [Fact]
+    public void BlocksAltcoinEntryWhenLeaderIsRetreating()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(EthUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LeaderReturnBps: -5.0m);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("MACRO_LEADER_RETREATING_BLOCKED", result.NoTradeReason);
+        Assert.Contains("MACRO_LEADER_RETREATING_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksAltcoinEntryWhenLeaderInBearTrend()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(EthUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LeaderReturnBps: 0.5m,
+            LeaderRegime: MarketRegime.BearTrend);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("MACRO_LEADER_CORRECTION_REGIME_BLOCKED", result.NoTradeReason);
+        Assert.Contains("MACRO_LEADER_CORRECTION_REGIME_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenCvdImbalanceIsNegative()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(BtcUsdt, volume: 100m, takerBuyBaseVolume: 40m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("NEGATIVE_CVD_AGGRESSIVE_SELL_FLOW_BLOCKED", result.NoTradeReason);
+        Assert.Contains("NEGATIVE_CVD_AGGRESSIVE_SELL_FLOW_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenMarketBreadthIsWeak()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(BtcUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            MarketBreadthRatio: 0.25m);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("WEAK_MARKET_BREADTH_BLOCKED", result.NoTradeReason);
+        Assert.Contains("WEAK_MARKET_BREADTH_BLOCKED", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MlOrderBookConfluenceSuppressedWhenLeaderIsRetreating()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var bars = BarsForSymbol(EthUsdt, prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LeaderReturnBps = -3.5m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(106.0m), new Price(106.1m), 10_000m, TestTime,
+                isComplete: true, quantityStepSize: 0.0001m, priceTickSize: 0.01m,
+                bidQuantity: 18.0m, askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.DoesNotContain("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 }
