@@ -162,7 +162,8 @@ public sealed class AdaptiveDecisionCycle
                 staleRegime,
                 [],
                 null,
-                "INSUFFICIENT_MARKET_HISTORY: Less than 5 bars available for regime analysis.");
+                "INSUFFICIENT_MARKET_HISTORY: Less than 5 bars available for regime analysis.",
+                request: request);
         }
 
         // 2. Regime Classification
@@ -207,7 +208,8 @@ public sealed class AdaptiveDecisionCycle
                 null,
                 $"OPERATIONAL_CONTROL_BLOCKED:{request.OperationalControl.Mode}",
                 orderBookImbalance: orderBookImbalance,
-                mlEval: mlEval);
+                mlEval: mlEval,
+                request: request);
         }
 
         var minTradableExposure = request.EntryTargetNotional >= 6m && request.ExecutionMarket?.QuantityStepSize is not null
@@ -227,7 +229,8 @@ public sealed class AdaptiveDecisionCycle
                 null,
                 $"REGIME_PROHIBITS_NEW_EXPOSURE:{regime.Regime}:{regime.Reason}",
                 orderBookImbalance: orderBookImbalance,
-                mlEval: mlEval);
+                mlEval: mlEval,
+                request: request);
         }
 
         // 5. Evaluate Multi-Strategy Candidacy
@@ -239,7 +242,8 @@ public sealed class AdaptiveDecisionCycle
                 null,
                 $"SYMBOL_NOT_AUTHORIZED_IN_BUDGET_POLICY:{symbol.Value}",
                 orderBookImbalance: orderBookImbalance,
-                mlEval: mlEval);
+                mlEval: mlEval,
+                request: request);
         }
 
         var orchestration = MultiStrategyDecisionOrchestrator.Orchestrate(
@@ -530,7 +534,8 @@ public sealed class AdaptiveDecisionCycle
                 null,
                 orchestration.OrchestrationReason,
                 orderBookImbalance: orderBookImbalance,
-                mlEval: mlEval);
+                mlEval: mlEval,
+                request: request);
         }
 
         var isEntry = orchestration.SelectedSide.Value == OrderSide.Buy;
@@ -549,7 +554,8 @@ public sealed class AdaptiveDecisionCycle
                     null,
                     "ALREADY_EXPOSED",
                     orderBookImbalance: orderBookImbalance,
-                    mlEval: mlEval);
+                    mlEval: mlEval,
+                    request: request);
             }
 
             orchestration = orchestration with
@@ -577,7 +583,8 @@ public sealed class AdaptiveDecisionCycle
                     null,
                     "NO_POSITION_TO_EXIT",
                     orderBookImbalance: orderBookImbalance,
-                    mlEval: mlEval);
+                    mlEval: mlEval,
+                    request: request);
             }
 
             orchestration = orchestration with
@@ -598,7 +605,8 @@ public sealed class AdaptiveDecisionCycle
                 null,
                 $"OPERATIONAL_CONTROL_BLOCKED:{request.OperationalControl.Mode}",
                 orderBookImbalance: orderBookImbalance,
-                mlEval: mlEval);
+                mlEval: mlEval,
+                request: request);
         }
 
         if (!isEntry &&
@@ -622,7 +630,8 @@ public sealed class AdaptiveDecisionCycle
                     null,
                     "EXIT_BELOW_COST_BASIS_WITHIN_NOISE_BAND",
                     orderBookImbalance: orderBookImbalance,
-                    mlEval: mlEval);
+                    mlEval: mlEval,
+                    request: request);
             }
 
         }
@@ -826,7 +835,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && (decisionConfidence < 0.60m || mlEval.MlWinProbability < 0.50m))
@@ -839,7 +849,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && expectedNetEdgeBps <= 0m)
@@ -852,7 +863,8 @@ public sealed class AdaptiveDecisionCycle
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
-                    expectedNetEdgeBps: expectedNetEdgeBps);
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (!isEntry &&
@@ -878,7 +890,8 @@ public sealed class AdaptiveDecisionCycle
                         "HOLD_WINNER_STRONG_BID_IMBALANCE",
                         decisionConfidence: decisionConfidence,
                         orderBookImbalance: orderBookImbalance,
-                        mlEval: mlEval);
+                        mlEval: mlEval,
+                        request: request);
                 }
             }
         }
@@ -942,7 +955,8 @@ public sealed class AdaptiveDecisionCycle
                 regime,
                 orchestration.Candidates,
                 null,
-                $"ALLOCATION_ZERO: Meta-allocator assigned 0 capital to {orchestration.SelectedStrategyId} under {regime.Regime}.");
+                $"ALLOCATION_ZERO: Meta-allocator assigned 0 capital to {orchestration.SelectedStrategyId} under {regime.Regime}.",
+                request: request);
         }
 
         // 7. Portfolio Order Netting
@@ -965,7 +979,8 @@ public sealed class AdaptiveDecisionCycle
                 regime,
                 orchestration.Candidates,
                 nettingProposal,
-                "NETTING_CANCELED: Internal portfolio netting resulted in zero net quantity.");
+                "NETTING_CANCELED: Internal portfolio netting resulted in zero net quantity.",
+                request: request);
         }
 
         // 8. Adaptive Execution Tactic Selection
@@ -1041,7 +1056,8 @@ public sealed class AdaptiveDecisionCycle
                 orchestration.Candidates,
                 nettingProposal,
                 string.Join(',', execution.Decision.ReasonCodes),
-                tacticRecommendation);
+                tacticRecommendation,
+                request: request);
         }
 
         // 10. Bounded Passive Execution Planning if order book is provided
@@ -1115,7 +1131,8 @@ public sealed class AdaptiveDecisionCycle
                     tacticRecommendation,
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
-                    mlEval: mlEval);
+                    mlEval: mlEval,
+                    request: request);
             }
         }
 
