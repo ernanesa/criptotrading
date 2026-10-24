@@ -42,7 +42,10 @@ public sealed record AdaptiveDecisionCycleRequest(
     DateTimeOffset? LastClosedTradeAtUtc = null,
     decimal? MaxOpenPositionCorrelation = null,
     decimal? TargetVolatilityBps = null,
-    int MlHorizonBars = 4)
+    int MlHorizonBars = 4,
+    MarketRegime? LeaderRegime = null,
+    decimal? LeaderTrendSlope = null,
+    decimal? MarketBreadthRatio = null)
 {
     public void Validate()
     {
@@ -470,16 +473,26 @@ public sealed class AdaptiveDecisionCycle
                                         (trendPerf is { ObservationCount: >= 3, AverageReward: <= -0.0020m });
 
         var isAltcoin = !string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase);
+        var isLeaderRetreating = isAltcoin &&
+                                 ((request.LeaderReturnBps is < -1.0m) ||
+                                  (request.LeaderRegime is MarketRegime.BearTrend or MarketRegime.IlliquidOrStale) ||
+                                  (request.LeaderTrendSlope is <= -0.00002m));
         var hasCrossAssetLeaderMomentum = isAltcoin &&
+                                          !isLeaderRetreating &&
                                           request.LeaderReturnBps is >= 6.0m &&
                                           request.LeaderOrderBookImbalance is >= 0.20m;
         var hasAggressiveTakerDemand = indicators.CvdImbalance >= 0.08m && indicators.RelativeVolume >= 1.05m;
+        var hasNegativeTakerDelta = indicators.CvdImbalance < -0.05m;
+        var isWeakBreadth = request.MarketBreadthRatio is { } breadthRatio && breadthRatio < 0.40m;
 
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             !hasOpenPosition &&
             bars.Count >= 20 &&
             !isTrendQuarantined &&
             !isTrendNegativeExpectancy &&
+            !isLeaderRetreating &&
+            !hasNegativeTakerDelta &&
+            !isWeakBreadth &&
             mlEval.MlWinProbability >= 0.51m &&
             (orderBookImbalance >= 0.25m ||
              (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m) ||
@@ -700,6 +713,65 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps);
+            }
+
+            if (isEntry && indicators.CvdImbalance < -0.05m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "NEGATIVE_CVD_AGGRESSIVE_SELL_FLOW_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry && isAltcoin && isLeaderRetreating)
+            {
+                var leaderReason = request.LeaderReturnBps is < -1.0m
+                    ? "MACRO_LEADER_RETREATING_BLOCKED"
+                    : "MACRO_LEADER_CORRECTION_REGIME_BLOCKED";
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    leaderReason,
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry && request.MarketBreadthRatio is { } breadth && breadth < 0.40m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "WEAK_MARKET_BREADTH_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry && indicators.Rsi >= 78m && indicators.VwapDeviationBps >= 80m && indicators.CvdImbalance < 0m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "OVERBOUGHT_VWAP_STRETCH_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
             }
 
             if (isEntry && request.MaxOpenPositionCorrelation is { } maxCorr && maxCorr >= 0.85m)
@@ -1064,6 +1136,10 @@ public sealed class AdaptiveDecisionCycle
             CvdImbalance = indicators.CvdImbalance,
             Vpin = indicators.Vpin,
             MaxOpenPositionCorrelation = request.MaxOpenPositionCorrelation,
+            LeaderReturnBps = request.LeaderReturnBps,
+            LeaderRegime = request.LeaderRegime?.ToString(),
+            LeaderTrendSlope = request.LeaderTrendSlope,
+            MarketBreadthRatio = request.MarketBreadthRatio,
             SelectedStrategy = orchestration.SelectedStrategyId,
             SelectedSide = orchestration.SelectedSide.Value.ToString(),
             AuthorizedNotional = targetNotional,
@@ -1109,7 +1185,8 @@ public sealed class AdaptiveDecisionCycle
         decimal? decisionConfidence = null,
         decimal? orderBookImbalance = null,
         MlNetSystem1Evaluation? mlEval = null,
-        decimal? expectedNetEdgeBps = null)
+        decimal? expectedNetEdgeBps = null,
+        AdaptiveDecisionCycleRequest? request = null)
     {
         var trace = JsonSerializer.Serialize(new
         {
@@ -1128,6 +1205,10 @@ public sealed class AdaptiveDecisionCycle
             OrderBookImbalance = orderBookImbalance ?? 0m,
             TrendSlope = regime.TrendSlopeRate,
             Volatility = regime.VolatilityRate,
+            LeaderReturnBps = request?.LeaderReturnBps,
+            LeaderRegime = request?.LeaderRegime?.ToString(),
+            LeaderTrendSlope = request?.LeaderTrendSlope,
+            MarketBreadthRatio = request?.MarketBreadthRatio,
             Candidates = candidates.Select(c => new
             {
                 c.StrategyId,

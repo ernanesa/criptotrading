@@ -1038,6 +1038,8 @@ internal sealed class AutonomyCycleHostedService(
                                         entryRc.CreatedAtUtc >= now.AddMinutes(-2);
             decimal? leaderReturnBps = null;
             decimal? leaderOrderBookImbalance = null;
+            MarketRegime? leaderRegime = null;
+            decimal? leaderTrendSlope = null;
             if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
             {
                 if (klineCache.TryGetValue("BTCUSDT", out var btcKlines))
@@ -1047,6 +1049,18 @@ internal sealed class AutonomyCycleHostedService(
                         if (btcKlines.Count >= 2 && btcKlines[^2].Close > 0m)
                         {
                             leaderReturnBps = Math.Round((btcKlines[^1].Close - btcKlines[^2].Close) / btcKlines[^2].Close * 10_000m, 4);
+                        }
+
+                        if (btcKlines.Count >= 20)
+                        {
+                            var btcCloseList = btcKlines.Select(static k => k.Close).ToList();
+                            var btcSnapshot = MarketRegimeClassifier.Classify(
+                                new Symbol("BTCUSDT"),
+                                btcCloseList,
+                                now,
+                                trendSlopeThreshold: 0.00008m);
+                            leaderRegime = btcSnapshot.Regime;
+                            leaderTrendSlope = btcSnapshot.TrendSlopeRate;
                         }
                     }
                 }
@@ -1058,6 +1072,32 @@ internal sealed class AutonomyCycleHostedService(
                         (btcTicker.BidQuantity - btcTicker.AskQuantity) / (btcTicker.BidQuantity + btcTicker.AskQuantity),
                         4);
                 }
+            }
+
+            decimal? marketBreadthRatio = null;
+            var universeCount = 0;
+            var bullishCount = 0;
+            foreach (var cacheEntry in klineCache)
+            {
+                var cacheList = cacheEntry.Value;
+                lock (cacheList)
+                {
+                    if (cacheList.Count >= 20)
+                    {
+                        universeCount++;
+                        var close20 = cacheList[^20].Close;
+                        var closeNow = cacheList[^1].Close;
+                        if (closeNow > close20)
+                        {
+                            bullishCount++;
+                        }
+                    }
+                }
+            }
+
+            if (universeCount >= 5)
+            {
+                marketBreadthRatio = Math.Round((decimal)bullishCount / universeCount, 4);
             }
 
             decimal? maxOpenPositionCorrelation = null;
@@ -1120,7 +1160,10 @@ internal sealed class AutonomyCycleHostedService(
                 LeaderOrderBookImbalance: leaderOrderBookImbalance,
                 LastClosedTradeAtUtc: lastClosedTradeAtBySymbol.TryGetValue(symbol, out var closedAt) ? closedAt : null,
                 MaxOpenPositionCorrelation: maxOpenPositionCorrelation,
-                MlHorizonBars: ResolveMlHorizonBars(runtime.AutonomyInterval));
+                MlHorizonBars: ResolveMlHorizonBars(runtime.AutonomyInterval),
+                LeaderRegime: leaderRegime,
+                LeaderTrendSlope: leaderTrendSlope,
+                MarketBreadthRatio: marketBreadthRatio);
 
             if (durablePerformances is not null)
             {
