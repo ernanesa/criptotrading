@@ -328,7 +328,10 @@ public static class ExecutionPlanner
             }
         }
 
-        var limitPrice = intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk;
+        var isAggressiveTaker = request.Tactic is { SelectedTactic: ExecutionTactic.AggressiveTakerImmediate };
+        var limitPrice = isAggressiveTaker
+            ? (intent.Side is OrderSide.Buy ? market.BestAsk : market.BestBid)
+            : (intent.Side is OrderSide.Buy ? market.BestBid : market.BestAsk);
         if (market.PriceTickSize is { } tickSize && tickSize > 0m)
         {
             decimal tickSource;

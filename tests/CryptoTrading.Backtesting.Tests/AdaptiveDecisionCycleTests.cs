@@ -1536,4 +1536,218 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.True(result.IsNoTrade);
         Assert.DoesNotContain("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ExitsFullMaxNotionalAndUsesAggressiveTakerWhenPositionAppreciatesAboveMaxOrderNotional()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = Bars(
+            84_000m, 84_050m, 84_150m, 84_300m, 84_500m, 84_700m,
+            84_900m, 85_050m, 85_150m, 85_200m, 85_100m, 85_000m,
+            84_900m, 84_800m, 84_700m, 84_650m, 84_600m, 84_500m,
+            84_500m, 84_500m, 84_500m, 84_500m, 84_500m, 84_500m);
+        // Position bought at 500 USDT appreciated to 505.95 USDT (> MaxOrderNotional of 500 USDT)
+        var policy = new RiskPolicy(
+            version: "v1.0.0-test",
+            maxOrderNotional: 500m,
+            maxExposureNotional: 5000m,
+            maxDailyLoss: 200m,
+            maxDrawdown: 500m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            maxSlippageBps: 50m,
+            maxVolatilityBps: 300m,
+            minLiquidityNotional: 500m);
+        var portfolio = CreatePortfolio(505.95m) with { PositionCostNotional = 500.00m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            policy,
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 350m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-btcusdt",
+            LifetimePeakProfitBps: 142.8m)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_499m),
+                new Price(84_501m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 0.50m,
+                askQuantity: 0.50m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        // Must not fall back to ~106.25 USDT; must authorize the full 500 USDT cap and use AggressiveTakerImmediate
+        Assert.Equal(500m, result.RecommendedNotional);
+        Assert.NotNull(result.TacticRecommendation);
+        Assert.Equal(ExecutionTactic.AggressiveTakerImmediate, result.TacticRecommendation!.SelectedTactic);
+    }
+
+    [Fact]
+    public void PreemptivelyExitsAltcoinPositionOnCrossAssetLeaderShock()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = BarsForSymbol(
+            EthUsdt,
+            2_500m, 2_501m, 2_502m, 2_501m, 2_502m, 2_503m,
+            2_502m, 2_503m, 2_504m, 2_503m, 2_504m, 2_505m,
+            2_504m, 2_505m, 2_506m, 2_505m, 2_506m, 2_505m,
+            2_505m, 2_504m, 2_504m, 2_503m, 2_503m, 2_502m);
+        // Position is slightly in profit (+22 bps, inside normal <50 bps noise band),
+        // but BTC leader suffers a -18 bps shock and order book turns slightly negative.
+        var portfolio = CreatePortfolio(501.10m) with { PositionCostNotional = 500.00m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 350m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-ethusdt",
+            LeaderReturnBps: -18.5m,
+            CanaryBasketReturnBps: -22.0m)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(2_501.5m),
+                new Price(2_502.5m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 2.0m,
+                askQuantity: 4.0m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("CROSS_ASSET_LEADER_SHOCK_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Equal(ExecutionTactic.AggressiveTakerImmediate, result.TacticRecommendation!.SelectedTactic);
+    }
+
+    [Fact]
+    public void BlocksAltcoinEntryWhenCanaryBasketIsRetreating()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(EthUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LeaderReturnBps: 0.5m,
+            CanaryBasketReturnBps: -15.0m);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("CANARY_BASKET_RETREATING_BLOCKED", result.NoTradeReason);
+        Assert.Contains("\"CanaryBasketReturnBps\":-15.0", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksAltcoinEntryWhenFollowerOverextendedAgainstLeaders()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // Smooth rising bars (+48.8 bps on the final bar, RSI = 100) while BTC and Canary leaders are flat/negative
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.55m)).ToArray();
+        var bars = BarsForSymbol(EthUsdt, prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LeaderReturnBps = 0.0m,
+            CanaryBasketReturnBps = -1.0m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(113.15m),
+                new Price(113.25m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("FOLLOWER_OVEREXTENDED_AGAINST_LEADERS_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenTickSpreadIsExcessive()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(EthUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime)
+        {
+            // Simulates SHIBUSDT on Testnet where price is 0.00000543 and 1 tick (0.00000001) is 18.42 bps (>= 15 bps)
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(0.00000543m),
+                new Price(0.00000544m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 1m,
+                priceTickSize: 0.00000001m,
+                bidQuantity: 500_000_000m,
+                askQuantity: 100_000_000m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("EXCESSIVE_TICK_SPREAD_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void DoesNotPrematurelyLockBreakEvenInActiveBullTrendWithoutPriorPeak()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.40m)).ToArray();
+        var bars = Bars(prices);
+        // Position is in BullTrend at +35 bps profit with LifetimePeakProfitBps = 35 bps (< 75 bps threshold)
+        var portfolio = CreatePortfolio(501.75m) with { PositionCostNotional = 500.00m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 350m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-btcusdt",
+            LifetimePeakProfitBps: 35.0m)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(109.59m),
+                new Price(109.61m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 4.0m,
+                askQuantity: 6.0m), // Mild -0.20 imbalance should not abort an active BullTrend trade at +35 bps
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.DoesNotContain("BREAK_EVEN_PROFIT_LOCK", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
 }
