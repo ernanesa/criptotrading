@@ -220,13 +220,24 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
 
     private static async Task<PortfolioNavSnapshot?> ReadSnapshotAtOrBeforeAsync(NpgsqlConnection connection, DateTimeOffset timestampUtc, string? symbol, CancellationToken cancellationToken)
     {
-        const string sql = """
-            SELECT symbol, quote_asset, observed_at, nav_quote, unrealized_pnl_quote, external_cash_flow_quote, source
-            FROM trading.portfolio_nav_snapshots WHERE (@symbol IS NULL OR symbol = @symbol) AND quote_asset = @quote_asset AND observed_at <= @timestamp_utc
-            ORDER BY observed_at DESC LIMIT 1;
-            """;
+        var sql = symbol is null
+            ? """
+              SELECT symbol, quote_asset, observed_at, nav_quote, unrealized_pnl_quote, external_cash_flow_quote, source
+              FROM trading.portfolio_nav_snapshots
+              WHERE quote_asset = @quote_asset AND observed_at <= @timestamp_utc
+              ORDER BY observed_at DESC LIMIT 1;
+              """
+            : """
+              SELECT symbol, quote_asset, observed_at, nav_quote, unrealized_pnl_quote, external_cash_flow_quote, source
+              FROM trading.portfolio_nav_snapshots
+              WHERE symbol = @symbol AND quote_asset = @quote_asset AND observed_at <= @timestamp_utc
+              ORDER BY observed_at DESC LIMIT 1;
+              """;
         await using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol ?? (object)DBNull.Value));
+        if (symbol is not null)
+        {
+            command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol));
+        }
         command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
         command.Parameters.Add(Parameter("timestamp_utc", NpgsqlDbType.TimestampTz, timestampUtc));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -238,13 +249,22 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
 
     private static async Task<(bool Known, decimal Amount)> ReadExternalFlowAsync(NpgsqlConnection connection, DateTimeOffset afterUtc, DateTimeOffset untilUtc, string? symbol, CancellationToken cancellationToken)
     {
-        const string sql = """
-            SELECT COUNT(*) FILTER (WHERE external_cash_flow_quote IS NULL), COALESCE(SUM(external_cash_flow_quote), 0)
-            FROM trading.portfolio_nav_snapshots
-            WHERE (@symbol IS NULL OR symbol = @symbol) AND quote_asset = @quote_asset AND observed_at > @after_utc AND observed_at <= @until_utc;
-            """;
+        var sql = symbol is null
+            ? """
+              SELECT COUNT(*) FILTER (WHERE external_cash_flow_quote IS NULL), COALESCE(SUM(external_cash_flow_quote), 0)
+              FROM trading.portfolio_nav_snapshots
+              WHERE quote_asset = @quote_asset AND observed_at > @after_utc AND observed_at <= @until_utc;
+              """
+            : """
+              SELECT COUNT(*) FILTER (WHERE external_cash_flow_quote IS NULL), COALESCE(SUM(external_cash_flow_quote), 0)
+              FROM trading.portfolio_nav_snapshots
+              WHERE symbol = @symbol AND quote_asset = @quote_asset AND observed_at > @after_utc AND observed_at <= @until_utc;
+              """;
         await using var command = new NpgsqlCommand(sql, connection);
-        command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol ?? (object)DBNull.Value));
+        if (symbol is not null)
+        {
+            command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, symbol));
+        }
         command.Parameters.Add(Parameter("quote_asset", NpgsqlDbType.Varchar, PerformanceQuoteAsset));
         command.Parameters.Add(Parameter("after_utc", NpgsqlDbType.TimestampTz, afterUtc));
         command.Parameters.Add(Parameter("until_utc", NpgsqlDbType.TimestampTz, untilUtc));
