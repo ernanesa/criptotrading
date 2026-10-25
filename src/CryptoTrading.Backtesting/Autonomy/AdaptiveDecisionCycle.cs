@@ -45,7 +45,10 @@ public sealed record AdaptiveDecisionCycleRequest(
     int MlHorizonBars = 4,
     MarketRegime? LeaderRegime = null,
     decimal? LeaderTrendSlope = null,
-    decimal? MarketBreadthRatio = null)
+    decimal? MarketBreadthRatio = null,
+    decimal? EthBtcSpreadReturnBps = null,
+    decimal? CanaryBasketReturnBps = null,
+    decimal? CanaryBasketTrendSlope = null)
 {
     public void Validate()
     {
@@ -362,6 +365,37 @@ public sealed class AdaptiveDecisionCycle
             ? request.PositionOriginatingStrategyId
             : meanReversionId;
 
+        var isAltcoin = !string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase);
+        var isLeaderRetreating = isAltcoin &&
+                                 ((request.LeaderReturnBps is < -1.0m) ||
+                                  (request.LeaderRegime is MarketRegime.BearTrend or MarketRegime.IlliquidOrStale) ||
+                                  (request.LeaderTrendSlope is <= -0.00002m));
+        var isCanaryBasketRetreating = isAltcoin &&
+                                       ((request.CanaryBasketReturnBps is <= -12.0m) ||
+                                        (request.CanaryBasketReturnBps is <= -6.0m && request.CanaryBasketTrendSlope is <= -0.00008m));
+        var symbolReturnBps = bars.Count >= 2 && bars[^2].ClosePrice.Value > 0m
+            ? Math.Round((bars[^1].ClosePrice.Value - bars[^2].ClosePrice.Value) / bars[^2].ClosePrice.Value * 10_000m, 4)
+            : 0m;
+        var effectiveLeaderReturnBps = request.CanaryBasketReturnBps is { } canaryRet && request.LeaderReturnBps is { } btcRet
+            ? Math.Round((btcRet * 0.50m) + (canaryRet * 0.50m), 4)
+            : (request.LeaderReturnBps ?? request.CanaryBasketReturnBps);
+        var catchUpDivergenceBps = effectiveLeaderReturnBps is { } leadRet
+            ? Math.Round(leadRet - symbolReturnBps, 4)
+            : (decimal?)null;
+        var hasCrossAssetLeaderMomentum = isAltcoin &&
+                                          !isLeaderRetreating &&
+                                          !isCanaryBasketRetreating &&
+                                          ((request.LeaderReturnBps is >= 6.0m && request.LeaderOrderBookImbalance is >= 0.20m) ||
+                                           (request.CanaryBasketReturnBps is >= 10.0m &&
+                                            (request.EthBtcSpreadReturnBps is null or >= 0m) &&
+                                            catchUpDivergenceBps is >= 4.0m));
+        var isCrossAssetLeaderShock = isAltcoin &&
+                                      ((request.LeaderReturnBps is <= -15.0m) ||
+                                       (request.CanaryBasketReturnBps is <= -18.0m) ||
+                                       (request.LeaderReturnBps is <= -10.0m &&
+                                        request.CanaryBasketReturnBps is <= -12.0m &&
+                                        request.EthBtcSpreadReturnBps is <= -8.0m));
+
         // High-volatility chop is a risk event, not merely the absence of an entry
         // signal.  Do not depend on alpha ownership or a profitable exit signal to
         // reduce an existing position while a fresh snapshot is available.
@@ -394,8 +428,7 @@ public sealed class AdaptiveDecisionCycle
 
         if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
             request.HasPendingExitReplan &&
-            request.Portfolio.GrossExposureNotional > minTradableExposure &&
-            (bars.Count < 20 || !isWithinCostBasisNoiseBand))
+            request.Portfolio.GrossExposureNotional > minTradableExposure)
         {
             var fallbackExitStrategy = !string.IsNullOrWhiteSpace(request.PendingExitReplanStrategyId)
                 ? request.PendingExitReplanStrategyId
@@ -409,6 +442,24 @@ public sealed class AdaptiveDecisionCycle
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = "SELECTED: Pending exit replan candidate after TTL expiration.",
+                IsNoTrade = false
+            };
+        }
+        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+                 bars.Count >= 20 &&
+                 request.Portfolio.GrossExposureNotional > minTradableExposure &&
+                 request.Portfolio.PositionCostNotional > 0m &&
+                 isCrossAssetLeaderShock &&
+                 (currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) ||
+                  (currentUnrealizedProfitBps >= -maxNoiseLossBps &&
+                   (orderBookImbalance < 0m || indicators.CvdImbalance < 0m || regime.TrendSlopeRate <= 0m))))
+        {
+            orchestration = orchestration with
+            {
+                SelectedStrategyId = exitStrategyId,
+                SelectedSide = OrderSide.Sell,
+                SelectedNotional = request.Portfolio.GrossExposureNotional,
+                OrchestrationReason = $"CROSS_ASSET_LEADER_SHOCK_EXIT: Preemptive exit on leader shock (BtcRet={request.LeaderReturnBps ?? 0m:+0.0;-0.0}bps, CanaryRet={request.CanaryBasketReturnBps ?? 0m:+0.0;-0.0}bps, Unrealized={currentUnrealizedProfitBps:+0.0;-0.0}bps).",
                 IsNoTrade = false
             };
         }
@@ -464,6 +515,12 @@ public sealed class AdaptiveDecisionCycle
                  bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
                  currentUnrealizedProfitBps >= breakEvenFloorBps &&
+                 (regime.Regime != MarketRegime.BullTrend ||
+                  regime.TrendSlopeRate <= 0m ||
+                  isLeaderRetreating ||
+                  isCanaryBasketRetreating ||
+                  request.LifetimePeakProfitBps is >= 75.0m ||
+                  (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.42m)) &&
                  (orderBookImbalance <= -0.15m || mlEval.MlWinProbability < 0.46m))
         {
             orchestration = orchestration with
@@ -481,15 +538,6 @@ public sealed class AdaptiveDecisionCycle
         var isTrendNegativeExpectancy = (trendPerf is { ObservationCount: >= 5, AverageReward: < 0m }) ||
                                         (trendPerf is { ObservationCount: >= 3, AverageReward: <= -0.0020m });
 
-        var isAltcoin = !string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase);
-        var isLeaderRetreating = isAltcoin &&
-                                 ((request.LeaderReturnBps is < -1.0m) ||
-                                  (request.LeaderRegime is MarketRegime.BearTrend or MarketRegime.IlliquidOrStale) ||
-                                  (request.LeaderTrendSlope is <= -0.00002m));
-        var hasCrossAssetLeaderMomentum = isAltcoin &&
-                                          !isLeaderRetreating &&
-                                          request.LeaderReturnBps is >= 6.0m &&
-                                          request.LeaderOrderBookImbalance is >= 0.20m;
         var hasAggressiveTakerDemand = indicators.CvdImbalance >= 0.08m && indicators.RelativeVolume >= 1.05m;
         var hasNegativeTakerDelta = indicators.CvdImbalance < -0.05m;
         var isWeakBreadth = request.MarketBreadthRatio is { } breadthRatio && breadthRatio < 0.40m;
@@ -500,6 +548,7 @@ public sealed class AdaptiveDecisionCycle
             !isTrendQuarantined &&
             !isTrendNegativeExpectancy &&
             !isLeaderRetreating &&
+            !isCanaryBasketRetreating &&
             !hasNegativeTakerDelta &&
             !isWeakBreadth &&
             mlEval.MlWinProbability >= 0.51m &&
@@ -611,10 +660,13 @@ public sealed class AdaptiveDecisionCycle
 
         if (!isEntry &&
             request.Portfolio.PositionCostNotional > 0m &&
+            !request.HasPendingExitReplan &&
+            !orchestration.OrchestrationReason.StartsWith("CROSS_ASSET_LEADER_SHOCK_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("BREAK_EVEN_PROFIT_LOCK", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("TRAILING_STOP_CHANDELIER_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("PROTECTIVE_STOP_LOSS_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("HIGH_VOLATILITY_CHOP_RISK_EXIT", StringComparison.Ordinal) &&
+            !(regime.Regime == MarketRegime.BearTrend && (request.LifetimePeakProfitBps is >= 60.0m || indicators.CvdImbalance < -0.05m)) &&
             (request.Portfolio.GrossExposureNotional < request.Portfolio.PositionCostNotional ||
              (bars.Count >= 20 &&
               (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps)))
@@ -777,6 +829,52 @@ public sealed class AdaptiveDecisionCycle
                     request: request);
             }
 
+            if (isEntry && isCanaryBasketRetreating)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "CANARY_BASKET_RETREATING_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry && isAltcoin && symbolReturnBps >= 45.0m && catchUpDivergenceBps is <= -45.0m && indicators.Rsi >= 72m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "FOLLOWER_OVEREXTENDED_AGAINST_LEADERS_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry &&
+                request.ExecutionMarket?.PriceTickSize is { } tickSizeVal &&
+                tickSizeVal > 0m &&
+                request.ExecutionMarket.BestBid.Value > 0m &&
+                (tickSizeVal / request.ExecutionMarket.BestBid.Value * 10_000m) >= 15.0m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "EXCESSIVE_TICK_SPREAD_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
             if (isEntry && request.MarketBreadthRatio is { } breadth && breadth < 0.40m)
             {
                 return CreateNoTradeResult(
@@ -869,6 +967,9 @@ public sealed class AdaptiveDecisionCycle
 
             if (!isEntry &&
                 request.Portfolio.PositionCostNotional > 0m &&
+                !request.HasPendingExitReplan &&
+                !orchestration.OrchestrationReason.StartsWith("TRAILING_STOP_CHANDELIER_EXIT", StringComparison.Ordinal) &&
+                !orchestration.OrchestrationReason.StartsWith("CROSS_ASSET_LEADER_SHOCK_EXIT", StringComparison.Ordinal) &&
                 (orderBookImbalance >= 0.70m ||
                  (regime.Regime == MarketRegime.BullTrend &&
                   regime.TrendSlopeRate >= 0.00018m &&
@@ -906,13 +1007,22 @@ public sealed class AdaptiveDecisionCycle
 
         var selectedWeight = weights.FirstOrDefault(w => string.Equals(w.StrategyId, orchestration.SelectedStrategyId, StringComparison.OrdinalIgnoreCase));
         var targetNotional = selectedWeight?.AllocatedCapital ?? request.EntryTargetNotional;
-        if (!isEntry && request.Portfolio.GrossExposureNotional > 0m && request.Portfolio.GrossExposureNotional <= request.RiskPolicy.MaxOrderNotional)
+        if (!isEntry && request.Portfolio.GrossExposureNotional > 0m)
         {
-            targetNotional = request.Portfolio.GrossExposureNotional;
+            targetNotional = Math.Min(request.Portfolio.GrossExposureNotional, request.RiskPolicy.MaxOrderNotional);
+            if (request.ExecutionMarket is { AvailableLiquidityNotional: >= 10m } exitMarket &&
+                exitMarket.AvailableLiquidityNotional < targetNotional)
+            {
+                targetNotional = exitMarket.AvailableLiquidityNotional;
+            }
         }
         else if (bars.Count >= 20 && isEntry && request.ExecutionMarket?.QuantityStepSize is not null && request.EntryTargetNotional >= 6m && targetNotional > 0m)
         {
-            var baseTarget = Math.Min(request.EntryTargetNotional, request.RiskPolicy.MaxOrderNotional);
+            var maxEntryOrderNotional = request.RiskPolicy.MaxOrderNotional >= 100m &&
+                                        request.EntryTargetNotional <= request.RiskPolicy.MaxOrderNotional * 0.90m
+                ? Math.Round(request.RiskPolicy.MaxOrderNotional * 0.90m, 2)
+                : request.RiskPolicy.MaxOrderNotional;
+            var baseTarget = Math.Min(request.EntryTargetNotional, maxEntryOrderNotional);
             var kellyMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.72m && orderBookImbalance >= 0.30m && microPriceDivergenceBps >= 0.35m)
                 ? 1.55m
                 : (decisionConfidence >= 0.82m && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
@@ -924,8 +1034,8 @@ public sealed class AdaptiveDecisionCycle
                             : 1.06m;
             targetNotional = Math.Clamp(
                 Math.Round(baseTarget * kellyMultiplier, 2),
-                Math.Min(10m, request.RiskPolicy.MaxOrderNotional),
-                request.RiskPolicy.MaxOrderNotional);
+                Math.Min(10m, maxEntryOrderNotional),
+                maxEntryOrderNotional);
         }
         else if (request.EntryTargetNotional >= 6m && targetNotional > 0m && targetNotional < 10m)
         {
@@ -967,6 +1077,15 @@ public sealed class AdaptiveDecisionCycle
             var steps = Math.Floor(decimal.Round(targetNotional / referencePrice, 8) / stepSize);
             rawQuantity = steps * stepSize;
         }
+        if (rawQuantity <= 0m)
+        {
+            return CreateNoTradeResult(
+                regime,
+                orchestration.Candidates,
+                null,
+                "NETTING_CANCELED: Target notional is below minimum quantity step size.",
+                request: request);
+        }
         var strategyIntents = new List<StrategyOrderIntent>
         {
             new(orchestration.SelectedStrategyId!, symbol, orchestration.SelectedSide!.Value, rawQuantity, referencePrice, request.EvaluatedAtUtc)
@@ -988,9 +1107,9 @@ public sealed class AdaptiveDecisionCycle
             (mlEval.MlWinProbability >= 0.65m ||
              volBps >= 20.0m ||
              (request.ExecutionMarket is not null && request.ExecutionMarket.OrderBookImbalance >= 0.30m));
-        var urgency = isUrgentBreakout
-            ? 0.80m
-            : (isMomentumEntry ? 0.50m : (orchestration.SelectedSide == OrderSide.Sell ? 0.45m : 0.30m));
+        var urgency = orchestration.SelectedSide == OrderSide.Sell
+            ? 0.85m
+            : (isUrgentBreakout ? 0.80m : (isMomentumEntry ? 0.50m : 0.30m));
         var topOfBookSpreadBps = request.ExecutionMarket is not null && request.ExecutionMarket.BestBid.Value > 0m
             ? Math.Round((request.ExecutionMarket.BestAsk.Value - request.ExecutionMarket.BestBid.Value) / request.ExecutionMarket.BestBid.Value * 10_000m, 2)
             : 3.0m;
@@ -1167,6 +1286,10 @@ public sealed class AdaptiveDecisionCycle
             LeaderRegime = request.LeaderRegime?.ToString(),
             LeaderTrendSlope = request.LeaderTrendSlope,
             MarketBreadthRatio = request.MarketBreadthRatio,
+            EthBtcSpreadReturnBps = request.EthBtcSpreadReturnBps,
+            CanaryBasketReturnBps = request.CanaryBasketReturnBps,
+            CanaryBasketTrendSlope = request.CanaryBasketTrendSlope,
+            CatchUpDivergenceBps = catchUpDivergenceBps,
             SelectedStrategy = orchestration.SelectedStrategyId,
             SelectedSide = orchestration.SelectedSide.Value.ToString(),
             AuthorizedNotional = targetNotional,
@@ -1236,6 +1359,9 @@ public sealed class AdaptiveDecisionCycle
             LeaderRegime = request?.LeaderRegime?.ToString(),
             LeaderTrendSlope = request?.LeaderTrendSlope,
             MarketBreadthRatio = request?.MarketBreadthRatio,
+            EthBtcSpreadReturnBps = request?.EthBtcSpreadReturnBps,
+            CanaryBasketReturnBps = request?.CanaryBasketReturnBps,
+            CanaryBasketTrendSlope = request?.CanaryBasketTrendSlope,
             Candidates = candidates.Select(c => new
             {
                 c.StrategyId,

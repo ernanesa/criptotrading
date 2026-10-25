@@ -53,6 +53,7 @@ internal sealed class AutonomyCycleHostedService(
     IOutboxWakeupSignal? outboxWakeupSignal = null) : BackgroundService
 {
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
+    private static readonly string[] CanaryBasketSymbols = ["SUIUSDT", "ARBUSDT", "TIAUSDT", "AVAXUSDT", "SOLUSDT"];
     private readonly System.Threading.Channels.Channel<DateTimeOffset> barCloseSignalChannel =
         System.Threading.Channels.Channel.CreateBounded<DateTimeOffset>(
             new System.Threading.Channels.BoundedChannelOptions(1)
@@ -893,6 +894,7 @@ internal sealed class AutonomyCycleHostedService(
         var mappedExecutionMarket = BinanceExecutionMarketSnapshotMapper.Map(bookTicker, rules);
         var hasCompleteTradingRules = HasCompleteTradingRules(rules, symbol);
         decimal? depthImbalanceTop5 = null;
+        decimal? depthLiquidityTop5 = null;
         var localBook = localOrderBooks.GetOrAdd(symbol, s => new BinanceLocalOrderBook(s));
         bool needsBookSnapshot;
         lock (localBook)
@@ -924,14 +926,16 @@ internal sealed class AutonomyCycleHostedService(
             if (localBook.Status == BinanceOrderBookStatus.Healthy)
             {
                 depthImbalanceTop5 = localBook.CalculateTopDepthImbalance(5);
+                depthLiquidityTop5 = localBook.CalculateTopDepthLiquidityNotional(5);
             }
         }
         var temporalOfi = temporalOfiBySymbol.TryGetValue(symbol, out var tOfi) ? (decimal?)tOfi : null;
         var tradeAggressionDelta = tradeAggressionDeltaBySymbol.TryGetValue(symbol, out var tAgg) ? (decimal?)tAgg : null;
+        var effectiveAvailableLiquidity = Math.Max(mappedExecutionMarket.AvailableLiquidityNotional, depthLiquidityTop5 ?? 0m);
         var executionMarket = new ExecutionMarketSnapshot(
             mappedExecutionMarket.BestBid,
             mappedExecutionMarket.BestAsk,
-            mappedExecutionMarket.AvailableLiquidityNotional,
+            effectiveAvailableLiquidity,
             mappedExecutionMarket.ObservedAtUtc,
             isComplete: mappedExecutionMarket.IsComplete && hasCompleteTradingRules,
             quantityStepSize: mappedExecutionMarket.QuantityStepSize,
@@ -974,17 +978,10 @@ internal sealed class AutonomyCycleHostedService(
             positionCostBases[symbol] = (accounting.PositionCostNotional, baseQuantity);
             var curProfitBps = (portfolio.GrossExposureNotional - accounting.PositionCostNotional) / accounting.PositionCostNotional * 10_000m;
 
-            // Reconstruct historical lifetime peak from closed bars if unrecorded (e.g. after daemon restart)
-            var avgEntryPrice = baseQuantity > 0m ? accounting.PositionCostNotional / baseQuantity : 0m;
-            var highestRecentPrice = avgEntryPrice > 0m && closed.Count > 0 ? closed.Max(c => c.Bar.ClosePrice.Value) : 0m;
-            var reconstructedPeakBps = avgEntryPrice > 0m && highestRecentPrice > avgEntryPrice
-                ? (highestRecentPrice - avgEntryPrice) / avgEntryPrice * 10_000m
-                : curProfitBps;
-
             lifetimePeakBps = positionLifetimePeakProfitBps.AddOrUpdate(
                 symbol,
-                Math.Max(curProfitBps, reconstructedPeakBps),
-                (_, peak) => Math.Max(peak, Math.Max(curProfitBps, reconstructedPeakBps)));
+                Math.Max(0m, curProfitBps),
+                (_, peak) => Math.Max(peak, curProfitBps));
 
             if (!positionOriginatingStrategy.TryGetValue(symbol, out var strat) || string.IsNullOrWhiteSpace(strat))
             {
@@ -1013,7 +1010,7 @@ internal sealed class AutonomyCycleHostedService(
         var marketRisk = new MarketRiskSnapshot(
             Math.Max(buyRisk.ExpectedSlippageBps, sellRisk.ExpectedSlippageBps),
             buyRisk.VolatilityBps,
-            Math.Min(buyRisk.AvailableLiquidityNotional, sellRisk.AvailableLiquidityNotional),
+            Math.Max(Math.Min(buyRisk.AvailableLiquidityNotional, sellRisk.AvailableLiquidityNotional), depthLiquidityTop5 ?? 0m),
             bookTicker.ObservedAtUtc, buyRisk.IsComplete && sellRisk.IsComplete);
         var runtimeSnapshot = runtimeSupervisor.Snapshot;
         var effectiveControl = runtimeSnapshot.CanCreateNewExposure
@@ -1040,6 +1037,9 @@ internal sealed class AutonomyCycleHostedService(
             decimal? leaderOrderBookImbalance = null;
             MarketRegime? leaderRegime = null;
             decimal? leaderTrendSlope = null;
+            decimal? ethBtcSpreadReturnBps = null;
+            decimal? canaryBasketReturnBps = null;
+            decimal? canaryBasketTrendSlope = null;
             if (!string.Equals(symbol, "BTCUSDT", StringComparison.OrdinalIgnoreCase))
             {
                 if (klineCache.TryGetValue("BTCUSDT", out var btcKlines))
@@ -1071,6 +1071,72 @@ internal sealed class AutonomyCycleHostedService(
                             }
                         }
                     }
+                }
+
+                if (leaderReturnBps is { } btcRetVal && klineCache.TryGetValue("ETHUSDT", out var ethKlines))
+                {
+                    lock (ethKlines)
+                    {
+                        if (ethKlines.Count >= 2 && ethKlines[^2].Close > 0m)
+                        {
+                            var ethRetBps = (ethKlines[^1].Close - ethKlines[^2].Close) / ethKlines[^2].Close * 10_000m;
+                            ethBtcSpreadReturnBps = Math.Round(ethRetBps - btcRetVal, 4);
+                        }
+                    }
+                }
+
+                var canaryReturnsSum = 0m;
+                var canaryReturnsCount = 0;
+                var canarySlopeSum = 0m;
+                var canarySlopeCount = 0;
+                foreach (var canarySym in CanaryBasketSymbols)
+                {
+                    if (string.Equals(canarySym, symbol, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (klineCache.TryGetValue(canarySym, out var canaryKlines))
+                    {
+                        lock (canaryKlines)
+                        {
+                            if (canaryKlines.Count >= 2 && canaryKlines[^2].Close > 0m)
+                            {
+                                canaryReturnsSum += (canaryKlines[^1].Close - canaryKlines[^2].Close) / canaryKlines[^2].Close * 10_000m;
+                                canaryReturnsCount++;
+                            }
+
+                            if (canaryKlines.Count >= 20)
+                            {
+                                var canaryCloseList = canaryKlines
+                                    .Skip(canaryKlines.Count - 20)
+                                    .Take(20)
+                                    .Where(static k => k.Close > 0m)
+                                    .Select(static k => k.Close)
+                                    .ToList();
+                                if (canaryCloseList.Count >= 20)
+                                {
+                                    var canarySnap = MarketRegimeClassifier.Classify(
+                                        new Symbol(canarySym),
+                                        canaryCloseList,
+                                        now,
+                                        trendSlopeThreshold: 0.00008m);
+                                    canarySlopeSum += canarySnap.TrendSlopeRate;
+                                    canarySlopeCount++;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (canaryReturnsCount > 0)
+                {
+                    canaryBasketReturnBps = Math.Round(canaryReturnsSum / canaryReturnsCount, 4);
+                }
+
+                if (canarySlopeCount > 0)
+                {
+                    canaryBasketTrendSlope = Math.Round(canarySlopeSum / canarySlopeCount, 6);
                 }
 
                 if (streamBookTickers.TryGetValue("BTCUSDT", out var btcTicker) &&
@@ -1171,7 +1237,10 @@ internal sealed class AutonomyCycleHostedService(
                 MlHorizonBars: ResolveMlHorizonBars(runtime.AutonomyInterval),
                 LeaderRegime: leaderRegime,
                 LeaderTrendSlope: leaderTrendSlope,
-                MarketBreadthRatio: marketBreadthRatio);
+                MarketBreadthRatio: marketBreadthRatio,
+                EthBtcSpreadReturnBps: ethBtcSpreadReturnBps,
+                CanaryBasketReturnBps: canaryBasketReturnBps,
+                CanaryBasketTrendSlope: canaryBasketTrendSlope);
 
             if (durablePerformances is not null)
             {

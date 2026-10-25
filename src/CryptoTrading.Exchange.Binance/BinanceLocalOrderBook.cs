@@ -116,6 +116,24 @@ public sealed class BinanceLocalOrderBook
     }
 
     /// <summary>
+    /// Computes the conservative available notional liquidity (minimum of cumulative bid notional and cumulative ask notional)
+    /// across the top <paramref name="levels"/> of the local L2 book.
+    /// Returns <see langword="null"/> if the book is invalid or empty.
+    /// </summary>
+    public decimal? CalculateTopDepthLiquidityNotional(int levels = 5)
+    {
+        if (Status is not BinanceOrderBookStatus.Healthy || levels <= 0 || bids.Count == 0 || asks.Count == 0)
+        {
+            return null;
+        }
+
+        var topBidNotional = bids.OrderByDescending(static p => p.Key).Take(levels).Sum(static p => p.Key * p.Value);
+        var topAskNotional = asks.OrderBy(static p => p.Key).Take(levels).Sum(static p => p.Key * p.Value);
+        var minNotional = Math.Min(topBidNotional, topAskNotional);
+        return minNotional > 0m ? Math.Round(minNotional, 2) : null;
+    }
+
+    /// <summary>
     /// Computes Cont-Kukanov-Stoikov (2014) normalized Temporal Order Flow Imbalance (OFI)
     /// across two consecutive best-bid/best-ask observations in [-1, 1].
     /// </summary>
