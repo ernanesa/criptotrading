@@ -75,6 +75,8 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarTriggerUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastProcessedCloseByScope = new(StringComparer.Ordinal);
+    private (RiskPolicyDocument Document, DateTimeOffset CachedAtUtc)? cachedActiveRiskPolicy;
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
@@ -442,13 +444,53 @@ internal sealed class AutonomyCycleHostedService(
         var isAdaptive = adaptiveCycle is not null && !string.Equals(runtime.AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase);
         var activeStrategyVersion = isAdaptive ? AdaptiveDecisionCycle.StrategyVersion : activeCycle.StrategyVersion;
         var checkpointScope = $"{symbol}:{runtime.AutonomyInterval}:{activeStrategyVersion}";
-        var checkpointTask = decisionCommitStore.GetLastProcessedCloseAsync(checkpointScope, cancellationToken);
-        var policyTask = riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken);
+        DateTimeOffset? cachedLatestBarCloseUtc = null;
+        if (klineCache.TryGetValue(symbol, out var existingCacheList))
+        {
+            lock (existingCacheList)
+            {
+                for (var idx = existingCacheList.Count - 1; idx >= 0; idx--)
+                {
+                    if (existingCacheList[idx].CloseTimeUtc <= now)
+                    {
+                        cachedLatestBarCloseUtc = existingCacheList[idx].CloseTimeUtc;
+                        break;
+                    }
+                }
+            }
+        }
+
+        var canUseCachedCheckpoint = lastProcessedCloseByScope.TryGetValue(checkpointScope, out var cachedCheckpointCloseUtc) &&
+            cachedLatestBarCloseUtc is { } latestBarInCache &&
+            latestBarInCache <= cachedCheckpointCloseUtc;
+        var checkpointTask = canUseCachedCheckpoint
+            ? Task.FromResult<DateTimeOffset?>(cachedCheckpointCloseUtc)
+            : decisionCommitStore.GetLastProcessedCloseAsync(checkpointScope, cancellationToken);
+
+        var cachedPolicySnapshot = cachedActiveRiskPolicy;
+        var canUseCachedPolicy = cachedPolicySnapshot is { } cp &&
+            now >= cp.CachedAtUtc &&
+            (now - cp.CachedAtUtc) < TimeSpan.FromSeconds(5);
+        var policyTask = canUseCachedPolicy
+            ? Task.FromResult<RiskPolicyDocument?>(cachedPolicySnapshot!.Value.Document)
+            : riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken);
         await Task.WhenAll(checkpointTask, policyTask).ConfigureAwait(false);
 
         var lastProcessedCloseUtc = await checkpointTask.ConfigureAwait(false);
+        if (!canUseCachedCheckpoint && lastProcessedCloseUtc is { } dbCheckpointCloseUtc)
+        {
+            lastProcessedCloseByScope.AddOrUpdate(
+                checkpointScope,
+                dbCheckpointCloseUtc,
+                (_, prev) => dbCheckpointCloseUtc > prev ? dbCheckpointCloseUtc : prev);
+        }
+
         var policyDocument = await policyTask.ConfigureAwait(false)
             ?? throw new InvalidOperationException("No active RiskPolicy is available for the autonomy cycle.");
+        if (!canUseCachedPolicy)
+        {
+            cachedActiveRiskPolicy = (policyDocument, now);
+        }
         if (policyDocument.Policy.WithdrawalsEnabled)
         {
             throw new InvalidOperationException("Autonomy cycle refuses a RiskPolicy with withdrawals enabled.");
@@ -634,6 +676,7 @@ internal sealed class AutonomyCycleHostedService(
                         blockedTrace,
                         null),
                     cancellationToken).ConfigureAwait(false);
+                lastProcessedCloseByScope[checkpointScope] = closed[^1].Bar.CloseTimeUtc;
                 return;
             }
         }
@@ -1318,10 +1361,12 @@ internal sealed class AutonomyCycleHostedService(
             {
                 AutonomyCycleLog.MarketDataRejected(logger, symbol, $"Commit skipped: {ex.Message}");
                 lastProcessedCloseUtc = latest.CloseTimeUtc;
+                lastProcessedCloseByScope[checkpointScope] = latest.CloseTimeUtc;
                 return;
             }
 
             lastProcessedCloseUtc = latest.CloseTimeUtc;
+            lastProcessedCloseByScope[checkpointScope] = latest.CloseTimeUtc;
             if (!hasCompleteTradingRules || adaptiveResult.IsNoTrade)
             {
                 TradingTelemetry.RecordAutonomyDecision("NO_TRADE", adaptiveReason);
@@ -1399,9 +1444,11 @@ internal sealed class AutonomyCycleHostedService(
         {
             AutonomyCycleLog.MarketDataRejected(logger, symbol, $"Commit skipped: {ex.Message}");
             lastProcessedCloseUtc = latest.CloseTimeUtc;
+            lastProcessedCloseByScope[checkpointScope] = latest.CloseTimeUtc;
             return;
         }
         lastProcessedCloseUtc = latest.CloseTimeUtc;
+        lastProcessedCloseByScope[checkpointScope] = latest.CloseTimeUtc;
         if (!hasCompleteTradingRules || isUnauthorizedEntrySymbol || result.IsNoTrade)
         {
             TradingTelemetry.RecordAutonomyDecision("NO_TRADE", reason);
