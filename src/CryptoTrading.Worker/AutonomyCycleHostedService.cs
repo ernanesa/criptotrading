@@ -76,7 +76,8 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastProcessedCloseByScope = new(StringComparer.Ordinal);
-    private (RiskPolicyDocument Document, DateTimeOffset CachedAtUtc)? cachedActiveRiskPolicy;
+    private sealed record CachedRiskPolicy(RiskPolicyDocument Document, DateTimeOffset CachedAtUtc);
+    private CachedRiskPolicy? cachedActiveRiskPolicy;
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
@@ -104,6 +105,17 @@ internal sealed class AutonomyCycleHostedService(
                     }
                     else
                     {
+                        var batchNow = DateTimeOffset.UtcNow;
+                        var batchPolicySnapshot = Volatile.Read(ref cachedActiveRiskPolicy);
+                        if (batchPolicySnapshot is null || batchNow < batchPolicySnapshot.CachedAtUtc || (batchNow - batchPolicySnapshot.CachedAtUtc) >= TimeSpan.FromSeconds(5))
+                        {
+                            var activeBatchPolicy = await riskPolicyStore.GetActiveRiskPolicyAsync(batchNow, stoppingToken).ConfigureAwait(false);
+                            if (activeBatchPolicy is not null)
+                            {
+                                Volatile.Write(ref cachedActiveRiskPolicy, new CachedRiskPolicy(activeBatchPolicy, batchNow));
+                            }
+                        }
+
                         await Task.WhenAll(symbols.Select(symbol => RunOnceAsync(runtime, symbol, stoppingToken))).ConfigureAwait(false);
                     }
                     consecutiveTransientFailures = 0;
@@ -467,12 +479,12 @@ internal sealed class AutonomyCycleHostedService(
             ? Task.FromResult<DateTimeOffset?>(cachedCheckpointCloseUtc)
             : decisionCommitStore.GetLastProcessedCloseAsync(checkpointScope, cancellationToken);
 
-        var cachedPolicySnapshot = cachedActiveRiskPolicy;
+        var cachedPolicySnapshot = Volatile.Read(ref cachedActiveRiskPolicy);
         var canUseCachedPolicy = cachedPolicySnapshot is { } cp &&
             now >= cp.CachedAtUtc &&
             (now - cp.CachedAtUtc) < TimeSpan.FromSeconds(5);
         var policyTask = canUseCachedPolicy
-            ? Task.FromResult<RiskPolicyDocument?>(cachedPolicySnapshot!.Value.Document)
+            ? Task.FromResult<RiskPolicyDocument?>(cachedPolicySnapshot!.Document)
             : riskPolicyStore.GetActiveRiskPolicyAsync(now, cancellationToken);
         await Task.WhenAll(checkpointTask, policyTask).ConfigureAwait(false);
 
@@ -489,7 +501,7 @@ internal sealed class AutonomyCycleHostedService(
             ?? throw new InvalidOperationException("No active RiskPolicy is available for the autonomy cycle.");
         if (!canUseCachedPolicy)
         {
-            cachedActiveRiskPolicy = (policyDocument, now);
+            Volatile.Write(ref cachedActiveRiskPolicy, new CachedRiskPolicy(policyDocument, now));
         }
         if (policyDocument.Policy.WithdrawalsEnabled)
         {
