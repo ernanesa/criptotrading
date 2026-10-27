@@ -203,6 +203,18 @@ public sealed class PostgresTradingStoreIntegrationTests
         Assert.False(firstResult.IsDuplicate);
         Assert.True(replay.IsDuplicate);
         Assert.Equal(firstResult.LedgerEntry.Id, replay.LedgerEntry.Id);
+        var conflictingReplay = new ExecutionAccountingCommand(
+            first.ExecutionId, first.TradeId, first.OrderId, first.Symbol, first.BaseAsset, first.QuoteAsset,
+            first.Side, new Quantity(2m), first.Price, first.Commission, first.WalletAccount, first.FeesAccount,
+            first.LedgerEntryId, first.CorrelationId, first.IdempotencyKey, first.OccurredAtUtc);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.RecordExecutionAsync(conflictingReplay, TestContext.Current.CancellationToken));
+        var conflictingOrder = new ExecutionAccountingCommand(
+            first.ExecutionId, first.TradeId, first.OrderId + 1, first.Symbol, first.BaseAsset, first.QuoteAsset,
+            first.Side, first.Quantity, first.Price, first.Commission, first.WalletAccount, first.FeesAccount,
+            first.LedgerEntryId, first.CorrelationId, first.IdempotencyKey, first.OccurredAtUtc);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.RecordExecutionAsync(conflictingOrder, TestContext.Current.CancellationToken));
 
         var sell = ExecutionCommand("sell-" + suffix, 1002, OrderSide.Sell, .5m, 120m, .05m, symbol, baseAsset, quoteAsset, wallet, fees);
         var sellResult = await store.RecordExecutionAsync(sell, cancellationToken: TestContext.Current.CancellationToken);
@@ -215,6 +227,66 @@ public sealed class PostgresTradingStoreIntegrationTests
                 id, tradeId, tradeId, symbol, baseAsset, quoteAsset, side, new Quantity(quantity), new Price(price),
                 new Money(commission, quoteAsset), wallet, fees, LedgerEntryId.New(), CorrelationId.New(),
                 new IdempotencyKey("integration-" + id), DateTimeOffset.UtcNow);
+    }
+
+    [Fact]
+    public async Task IdenticalReplayAcceptsPostgresNumericScaleForFillAndJournal()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must point to an isolated test database.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(TestContext.Current.CancellationToken);
+        var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var baseAsset = new Asset("BAS" + suffix);
+        var quote = new Asset("USDT");
+        var command = new ExecutionAccountingCommand(
+            "numeric-replay-" + suffix, Convert.ToInt64(suffix, 16), 1, new Symbol(baseAsset.Value + "USDT"),
+            baseAsset, quote, OrderSide.Buy, new Quantity(0.1234567890123456789m), new Price(1.234567890123456789m),
+            new Money(0m, quote), new AccountId("isolated-wallet-" + suffix), new AccountId("isolated-fees-" + suffix),
+            LedgerEntryId.New(), CorrelationId.New(), IdempotencyKey.New(), DateTimeOffset.UtcNow);
+
+        var initial = await store.RecordExecutionAsync(command, TestContext.Current.CancellationToken);
+        var replay = await store.RecordExecutionAsync(command, TestContext.Current.CancellationToken);
+
+        Assert.False(initial.IsDuplicate);
+        Assert.True(replay.IsDuplicate);
+        Assert.Equal(initial.LedgerEntry.Id, replay.LedgerEntry.Id);
+    }
+
+    [Fact]
+    public async Task SellWithoutBasisDoesNotCommitExecutionOrJournal()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw SkipException.ForSkip("POSTGRES_CONNECTION_STRING must point to an isolated test database.");
+        }
+
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(TestContext.Current.CancellationToken);
+        var suffix = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var baseAsset = new Asset("BAS" + suffix);
+        var quote = new Asset("USDT");
+        var entryId = LedgerEntryId.New();
+        var command = new ExecutionAccountingCommand(
+            "missing-basis-" + suffix, Convert.ToInt64(suffix, 16), 1, new Symbol(baseAsset.Value + "USDT"),
+            baseAsset, quote, OrderSide.Sell, new Quantity(1m), new Price(120m), new Money(0m, quote),
+            new AccountId("isolated-wallet-" + suffix), new AccountId("isolated-fees-" + suffix),
+            entryId, CorrelationId.New(), IdempotencyKey.New(), DateTimeOffset.UtcNow);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RecordExecutionAsync(command, TestContext.Current.CancellationToken));
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var query = new NpgsqlCommand(
+            "SELECT (SELECT count(*) FROM trading.execution_fills WHERE execution_id = @execution_id) + (SELECT count(*) FROM trading.journal_entries WHERE entry_id = @entry_id);", connection);
+        query.Parameters.AddWithValue("execution_id", command.ExecutionId);
+        query.Parameters.AddWithValue("entry_id", entryId.Value);
+        Assert.Equal(0L, await query.ExecuteScalarAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]

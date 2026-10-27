@@ -1750,4 +1750,427 @@ public sealed class AdaptiveDecisionCycleTests
 
         Assert.DoesNotContain("BREAK_EVEN_PROFIT_LOCK", result.DecisionTraceJson, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void SuppressesConfluenceEntryWhenRelativeVolumeIsDeadOnFinalBar()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 25 rising bars in BullTrend, but the final bar has dead relative volume (5% of average, like ARBUSDT at 01:45 UTC)
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var start = TestTime.AddMinutes(-prices.Length);
+        var bars = prices
+            .Select((p, idx) => new CloseBar(
+                BtcUsdt,
+                start.AddMinutes(idx + 1),
+                p,
+                openPrice: p,
+                highPrice: p + 0.20m,
+                lowPrice: p - 0.20m,
+                volume: idx == prices.Length - 1 ? 5m : 100m))
+            .ToArray();
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(111.95m),
+                new Price(112.05m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.DoesNotContain("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenExtremeVpinOccursOnThinRelativeVolumeEvenWithPositiveCvd()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = new[]
+        {
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m,
+        };
+        var start = TestTime.AddMinutes(-prices.Length);
+        var bars = prices
+            .Select((p, idx) =>
+            {
+                var vol = idx == prices.Length - 1 ? 10m : 100m;
+                return new CloseBar(
+                    BtcUsdt,
+                    start.AddMinutes(idx + 1),
+                    p,
+                    openPrice: p,
+                    highPrice: p + 2m,
+                    lowPrice: p - 2m,
+                    volume: vol,
+                    takerBuyBaseVolume: vol * 0.98m, // Positive CVD (+0.96), extreme VPIN (0.96 >= 0.92), thin RVOL (0.10 <= 0.20)
+                    quoteVolume: p * vol,
+                    numberOfTrades: 50);
+            })
+            .ToArray();
+
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("TOXIC_VPIN_FLOW_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void ExitsImmediatelyInConfirmedBearTrendWithinNoiseBandWhenMarketBreadthOrCanaryIsWeak()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // 18 rising/flat bars followed by sharp rollover on the final bars so FastSMA crosses below SlowSMA on the final bar in BearTrend
+        var bars = BarsForSymbol(
+            EthUsdt,
+            2_510m, 2_510m, 2_510m, 2_510m, 2_510m, 2_510m,
+            2_509m, 2_508m, 2_507m, 2_506m, 2_505m, 2_504m,
+            2_503m, 2_502m, 2_501m, 2_500m, 2_499m, 2_498m,
+            2_498m, 2_498m, 2_498m, 2_497m, 2_495m, 2_490m);
+        // Unrealized loss is -20 bps (499.00 vs 500.00 cost basis), inside the 50 bps noise band, with LifetimePeakProfitBps = 0
+        var portfolio = CreatePortfolio(499.00m) with { PositionCostNotional = 500.00m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 350m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-ethusdt",
+            LifetimePeakProfitBps: 0m,
+            MarketBreadthRatio: 0.20m,
+            CanaryBasketReturnBps: -14.2m)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(2_489.5m),
+                new Price(2_490.5m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 3.0m,
+                askQuantity: 5.0m),
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.NotEqual("EXIT_BELOW_COST_BASIS_WITHIN_NOISE_BAND", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void TriggersConfluenceBreakdownDefensiveExitWhenMlOrderBookAndCanaryCollapseSimultaneously()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        // Bars in mild BullTrend that stall and roll over at the top (giving low ML win probability <= 0.24)
+        var bars = BarsForSymbol(
+            EthUsdt,
+            2_480m, 2_482m, 2_484m, 2_486m, 2_488m, 2_490m,
+            2_492m, 2_494m, 2_496m, 2_498m, 2_500m, 2_502m,
+            2_504m, 2_506m, 2_508m, 2_510m, 2_512m, 2_514m,
+            2_515m, 2_515m, 2_514m, 2_513m, 2_512m, 2_511m);
+        // Position is slightly below cost basis (-10 bps: 499.50 vs 500.00), order book is heavily offered (-0.54), and Canary slope is negative
+        var portfolio = CreatePortfolio(499.50m) with { PositionCostNotional = 500.00m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 350m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "trend-following-ethusdt",
+            CanaryBasketReturnBps: -5.5m,
+            CanaryBasketTrendSlope: -0.00012m)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(2_510.5m),
+                new Price(2_511.5m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 2.3m,
+                askQuantity: 7.7m), // Imbalance = -0.54 <= -0.45
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("CONFLUENCE_BREAKDOWN_DEFENSIVE_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Equal(ExecutionTactic.AggressiveTakerImmediate, result.TacticRecommendation!.SelectedTactic);
+    }
+
+    [Fact]
+    public void RehabilitatesTrendConfluenceEntryWhenNegativeExpectancyIsOvercomeByStrongMlBookAndBreadth()
+    {
+        var allocator = new CryptoTrading.Domain.Research.ContextualMetaAllocator();
+        for (var i = 0; i < 5; i++)
+        {
+            allocator.RecordReward("trend-following-ethusdt", MarketRegime.BullTrend, -0.0010m);
+        }
+
+        var cycle = new AdaptiveDecisionCycle(allocator);
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var bars = BarsForSymbol(EthUsdt, prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LeaderRegime = MarketRegime.BullTrend,
+            LeaderTrendSlope = 0.00021m,
+            LeaderReturnBps = 18.9m,
+            CanaryBasketReturnBps = 31.2m,
+            MarketBreadthRatio = 0.95m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(111.95m),
+                new Price(112.05m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.Equal("trend-following-ethusdt", result.SelectedStrategyId);
+        Assert.Contains("ML_ORDERBOOK_CONFLUENCE_ENTRY", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DoesNotBlockAltcoinEntryOnMinorLeaderBarPullbackWhenLeaderIsInBullTrendWithPositiveSlope()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
+        var bars = BarsForSymbol(EthUsdt, prices);
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LeaderRegime = MarketRegime.BullTrend,
+            LeaderTrendSlope = 0.00020m,
+            LeaderReturnBps = -3.0m, // Mild -3.0 bps 5m pause while BTC is in strong BullTrend (> -6.0 bps threshold)
+            CanaryBasketReturnBps = 5.0m,
+            MarketBreadthRatio = 0.90m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(111.95m),
+                new Price(112.05m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.NotEqual("MACRO_LEADER_RETREATING_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksAltcoinEntryWhenCanaryBasketRetreatsAtTightenedThreshold()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(EthUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LeaderReturnBps: 0.5m,
+            CanaryBasketReturnBps: -8.5m); // Tightened threshold <= -8.0 bps
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("CANARY_BASKET_RETREATING_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksAltcoinEntryWhenCanaryBasketRetreatsWithNegativeSlopeAtTightenedThreshold()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var bars = CreateMeanReversionEntryBars(EthUsdt);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LeaderReturnBps: 0.5m,
+            CanaryBasketReturnBps: -4.5m, // Tightened slope threshold <= -4.0 bps when slope <= -0.00005m
+            CanaryBasketTrendSlope: -0.00006m);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("CANARY_BASKET_RETREATING_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenRsiIsExtremelyOverboughtAndVwapStretched()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var start = TestTime.AddMinutes(-30);
+        // Construct 25 bars with steep surge on final bars with live taker volume
+        var prices = new List<decimal>();
+        for (var i = 0; i < 20; i++) prices.Add(100m);
+        prices.AddRange([101m, 103m, 105m, 108m, 112m]);
+
+        var bars = prices
+            .Select((p, idx) =>
+            {
+                var vol = 100m;
+                return new CloseBar(
+                    EthUsdt,
+                    start.AddMinutes(idx + 1),
+                    p,
+                    openPrice: p - 0.20m,
+                    highPrice: p + 0.50m,
+                    lowPrice: p - 0.20m,
+                    volume: vol,
+                    takerBuyBaseVolume: vol * 0.80m, // Live taker buy volume > 0
+                    quoteVolume: p * vol,
+                    numberOfTrades: 50);
+            })
+            .ToArray();
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LeaderRegime = MarketRegime.BullTrend,
+            LeaderTrendSlope = 0.00020m,
+            LeaderReturnBps = 10.0m,
+            CanaryBasketReturnBps = 10.0m,
+            MarketBreadthRatio = 0.90m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(111.95m),
+                new Price(112.05m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("OVERBOUGHT_VWAP_STRETCH_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenRelativeVolumeIsThin()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var start = TestTime.AddMinutes(-30);
+        var baseBars = CreateMeanReversionEntryBars(EthUsdt, volume: 100m, takerBuyBaseVolume: 50m);
+        // Set the final entry bar volume to 10m (rvol = 10 / 100 = 0.10 <= 0.15m)
+        var bars = baseBars
+            .Select((b, idx) => idx == baseBars.Length - 1
+                ? new CloseBar(b.Symbol, b.CloseTimeUtc, b.ClosePrice.Value, b.OpenPrice.Value, b.HighPrice.Value, b.LowPrice.Value,
+                               volume: 10m, takerBuyBaseVolume: 5m, quoteVolume: b.ClosePrice.Value * 10m, numberOfTrades: 5)
+                : b)
+            .ToArray();
+
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LeaderReturnBps: 0.5m,
+            CanaryBasketReturnBps: 5.0m);
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("THIN_RELATIVE_VOLUME_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksConfluenceEntryWhenSubmergedBelowVwap()
+    {
+        var cycle = new AdaptiveDecisionCycle();
+        var start = TestTime.AddMinutes(-35);
+        // 25 bars in BullTrend: bars 0..4 start at 90.0. Bar 5 has 105.0 with 1,000,000 volume (anchoring VWAP at ~105.0).
+        // Bars 6..24 rise steadily from 97.0 to 102.0. Price 102.0 is submerged by -285 bps below VWAP (105.0).
+        // Confluence entry requires VwapDeviationBps >= -10m, so entry is blocked.
+        var prices = new List<(decimal price, decimal volume)>();
+        for (var i = 0; i < 5; i++) prices.Add((90.0m + (i * 0.5m), 100m));
+        prices.Add((105.0m, 1_000_000m));
+        for (var i = 1; i <= 19; i++) prices.Add((97.0m + (i * 0.26m), 100m));
+
+        var bars = prices
+            .Select((pv, idx) => new CloseBar(
+                EthUsdt,
+                start.AddMinutes(idx + 1),
+                pv.price,
+                openPrice: pv.price - 0.05m,
+                highPrice: pv.price + 0.05m,
+                lowPrice: pv.price - 0.05m,
+                volume: pv.volume,
+                takerBuyBaseVolume: pv.volume * 0.70m,
+                quoteVolume: pv.price * pv.volume,
+                numberOfTrades: 50))
+            .ToArray();
+
+        var lastBar = bars[^1];
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LeaderRegime = MarketRegime.BullTrend,
+            LeaderTrendSlope = 0.00020m,
+            LeaderReturnBps = 10.0m,
+            CanaryBasketReturnBps = 10.0m,
+            MarketBreadthRatio = 0.90m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(lastBar.ClosePrice.Value - 0.05m),
+                new Price(lastBar.ClosePrice.Value + 0.05m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 18.0m,
+                askQuantity: 2.0m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.NotEqual(OrderSide.Buy, result.RecommendedSide);
+    }
 }

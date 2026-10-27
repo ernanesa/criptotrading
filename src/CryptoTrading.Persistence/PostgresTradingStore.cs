@@ -1327,6 +1327,37 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         return entry;
     }
 
+    internal static (decimal Quantity, decimal CostQuote, decimal? RealizedPnlQuote) ApplyPersistedAverageCost(
+        ExecutionAccountingCommand command, decimal currentQuantity, decimal currentCost)
+    {
+        // A sale price cannot establish the acquisition cost of missing inventory.
+        // ApplyAverageCost rejects disposal without a complete verified basis.
+        return ExecutionAccounting.ApplyAverageCost(command, currentQuantity, currentCost);
+    }
+
+    internal static void ValidateExecutionReplayJournal(LedgerEntry existing, LedgerEntry candidate)
+    {
+        EnsureEquivalent(existing, candidate);
+    }
+
+    internal static void ValidateExecutionReplayFacts(ExecutionReplayFacts facts, ExecutionAccountingCommand candidate)
+    {
+        if (facts.LedgerEntryId != candidate.LedgerEntryId.Value ||
+            facts.TradeId != candidate.TradeId || facts.OrderId != candidate.OrderId ||
+            !string.Equals(facts.Symbol, candidate.Symbol.Value, StringComparison.Ordinal) ||
+            !string.Equals(facts.BaseAsset, candidate.BaseAsset.Value, StringComparison.Ordinal) ||
+            !string.Equals(facts.QuoteAsset, candidate.QuoteAsset.Value, StringComparison.Ordinal) ||
+            !string.Equals(facts.Side, candidate.Side == OrderSide.Buy ? "BUY" : "SELL", StringComparison.Ordinal) ||
+            !MatchesPostgresNumeric(facts.Quantity, candidate.Quantity.Value) ||
+            !MatchesPostgresNumeric(facts.Price, candidate.Price.Value) ||
+            !MatchesPostgresNumeric(facts.Commission, candidate.Commission.Amount) ||
+            !string.Equals(facts.CommissionAsset, candidate.Commission.Asset.Value, StringComparison.Ordinal) ||
+            facts.OccurredAtUtc.ToUniversalTime().Ticks / 10 != candidate.OccurredAtUtc.ToUniversalTime().Ticks / 10)
+        {
+            throw new InvalidOperationException("Execution identity is already associated with different persisted facts.");
+        }
+    }
+
     /// <summary>
     /// Atomically records an execution fact, balanced ledger postings, average-cost
     /// position state and known-trade evidence. Replays are immutable and idempotent.
@@ -1358,7 +1389,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
 
         await using (var existingCommand = new NpgsqlCommand(
-            "SELECT ledger_entry_id, realized_pnl_quote, average_cost_quote FROM trading.execution_fills WHERE execution_id = @execution_id;",
+            "SELECT ledger_entry_id, realized_pnl_quote, average_cost_quote, trade_id, order_id, symbol, base_asset, quote_asset, side, quantity, price, commission, commission_asset, occurred_at FROM trading.execution_fills WHERE execution_id = @execution_id;",
             connection, transaction))
         {
             existingCommand.Parameters.Add(Parameter("execution_id", NpgsqlDbType.Varchar, command.ExecutionId));
@@ -1368,7 +1399,13 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                 var existingEntryId = new LedgerEntryId(reader.GetGuid(0));
                 decimal? realized = reader.IsDBNull(1) ? null : reader.GetDecimal(1);
                 decimal? existingAverageCost = reader.IsDBNull(2) ? null : reader.GetDecimal(2);
+                var facts = new ExecutionReplayFacts(
+                    reader.IsDBNull(3) ? null : reader.GetInt64(3), reader.GetInt64(4), reader.GetString(5),
+                    reader.GetString(6), reader.GetString(7), reader.GetString(8), reader.GetDecimal(9),
+                    reader.GetDecimal(10), reader.GetDecimal(11), reader.GetString(12),
+                    new DateTimeOffset(reader.GetFieldValue<DateTime>(13).ToUniversalTime()), existingEntryId.Value);
                 await reader.DisposeAsync().ConfigureAwait(false);
+                ValidateExecutionReplayFacts(facts, command);
                 if (existingEntryId != entry.Id)
                 {
                     throw new InvalidOperationException("Execution identity is already associated with a different ledger entry.");
@@ -1376,6 +1413,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
 
                 var existingEntry = await ReadExistingJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidOperationException("Execution record exists without its journal entry.");
+                ValidateExecutionReplayJournal(existingEntry, entry);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
                 return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true, feeComparison, qualityComparison);
             }
@@ -1402,16 +1440,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             }
         }
 
-        var commissionInBase = command.Commission.Asset == command.BaseAsset ? command.Commission.Amount : 0m;
-        var requiredQuantity = command.Quantity.Value + commissionInBase;
-        if (command.Side == OrderSide.Sell && currentQuantity < requiredQuantity)
-        {
-            var excess = requiredQuantity - currentQuantity;
-            currentQuantity = requiredQuantity;
-            currentCost += excess * command.Price.Value;
-        }
-
-        var update = ExecutionAccounting.ApplyAverageCost(command, currentQuantity, currentCost);
+        var update = ApplyPersistedAverageCost(command, currentQuantity, currentCost);
         decimal? averageCost = update.Quantity == 0m ? null : update.CostQuote / update.Quantity;
         var inserted = await InsertJournalEntryAsync(connection, transaction, entry, cancellationToken).ConfigureAwait(false);
         if (!inserted)
@@ -3430,10 +3459,29 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             || existing.OccurredAt.ToUniversalTime().Ticks / 10 != candidate.OccurredAt.ToUniversalTime().Ticks / 10
             || !string.Equals(existing.Reason, candidate.Reason, StringComparison.Ordinal)
             || existing.IdempotencyKey != candidate.IdempotencyKey
-            || !existing.Postings.SequenceEqual(candidate.Postings))
+            || !MatchesPostgresPostings(existing.Postings, candidate.Postings))
         {
             throw new InvalidOperationException("The journal identity is already associated with different data.");
         }
+    }
+
+    private static bool MatchesPostgresNumeric(decimal left, decimal right) =>
+        decimal.Round(left, 18, MidpointRounding.AwayFromZero) == decimal.Round(right, 18, MidpointRounding.AwayFromZero);
+
+    private static bool MatchesPostgresPostings(IReadOnlyList<LedgerPosting> existing, IReadOnlyList<LedgerPosting> candidate)
+    {
+        if (existing.Count != candidate.Count) return false;
+        for (var index = 0; index < existing.Count; index++)
+        {
+            if (existing[index].Account != candidate[index].Account ||
+                existing[index].Amount.Asset != candidate[index].Amount.Asset ||
+                !MatchesPostgresNumeric(existing[index].Amount.Amount, candidate[index].Amount.Amount))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private sealed record RiskPolicyRow(

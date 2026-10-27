@@ -1,5 +1,6 @@
 using CryptoTrading.Domain.Accounting;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Exchange.Binance;
@@ -232,6 +233,17 @@ public sealed class AccountReconciliationServiceTests
     [Fact]
     public async Task FreshExchangeSnapshotResolvesUnknownOrderIdempotently()
     {
+        long mismatches = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, meterListener) =>
+        {
+            if (instrument.Meter.Name == TradingTelemetry.MeterName && instrument.Name == "cryptotrading.reconciliation.mismatches")
+            {
+                meterListener.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, _, _) => Interlocked.Add(ref mismatches, value));
+        listener.Start();
         var control = CreateControl();
         var sink = new InMemoryReconciliationEventSink();
         var resolver = new RecordingOpenOrderResolutionSink();
@@ -250,6 +262,7 @@ public sealed class AccountReconciliationServiceTests
         var result = await service.ReconcileAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsHealthy);
+        Assert.Equal(0, mismatches);
         var resolved = Assert.Single(result.Events.OfType<OpenOrderReconciled>());
         Assert.Equal("UNKNOWN", resolved.PreviousLocalStatus);
         Assert.Equal("NEW", resolved.AuthoritativeStatus);
@@ -448,6 +461,43 @@ public sealed class AccountReconciliationServiceTests
             snapshot.Fills.OrderBy(static fill => fill.Symbol, StringComparer.Ordinal));
     }
 
+    [Fact]
+    public async Task BinanceSnapshotProviderPreservesSameOrderIdAcrossSymbols()
+    {
+        var orders = new[]
+        {
+            new BinanceOpenOrder("BTCUSDT", 42, "btc-client", "100", "1", "0", "0", "NEW", 1, 1, true, "LIMIT", "BUY"),
+            new BinanceOpenOrder("ETHUSDT", 42, "eth-client", "100", "1", "0", "0", "NEW", 1, 1, true, "LIMIT", "BUY")
+        };
+        var client = new FakeBinanceClient([], [], openOrders: orders);
+        var provider = new BinanceReadOnlySnapshotProvider(
+            client,
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT", "ETHUSDT"]),
+            new FixedTimeProvider(Now));
+
+        var snapshot = await provider.GetSnapshotAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, snapshot.OpenOrders.Count);
+        Assert.Contains(snapshot.OpenOrders, order => order.Symbol == "BTCUSDT" && order.OrderId == 42);
+        Assert.Contains(snapshot.OpenOrders, order => order.Symbol == "ETHUSDT" && order.OrderId == 42);
+    }
+
+    [Fact]
+    public async Task BinanceSnapshotProviderRejectsConflictingDuplicateOrderSnapshots()
+    {
+        var orders = new[]
+        {
+            new BinanceOpenOrder("BTCUSDT", 42, "first-client", "100", "1", "0", "0", "NEW", 1, 1, true, "LIMIT", "BUY"),
+            new BinanceOpenOrder("BTCUSDT", 42, "other-client", "100", "1", "0", "0", "NEW", 1, 1, true, "LIMIT", "BUY")
+        };
+        var provider = new BinanceReadOnlySnapshotProvider(
+            new FakeBinanceClient([], [], openOrders: orders),
+            new ReconciliationOptions(new AccountId("exchange-wallet"), ["BTCUSDT"]),
+            new FixedTimeProvider(Now));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => provider.GetSnapshotAsync(TestContext.Current.CancellationToken));
+    }
+
     private static AccountReconciliationService CreateService(
         ReconciliationSnapshot snapshot,
         IReadOnlyDictionary<string, decimal> balances,
@@ -551,7 +601,8 @@ public sealed class AccountReconciliationServiceTests
     private sealed class FakeBinanceClient(
         IReadOnlyList<BinanceTrade> firstPage,
         IReadOnlyList<BinanceTrade> secondPage,
-        Action? onGetAccount = null) : IBinanceSpotAccountClient
+        Action? onGetAccount = null,
+        IReadOnlyList<BinanceOpenOrder>? openOrders = null) : IBinanceSpotAccountClient
     {
         public List<long?> FromIds { get; } = [];
 
@@ -562,7 +613,7 @@ public sealed class AccountReconciliationServiceTests
         }
 
         public Task<IReadOnlyList<BinanceOpenOrder>> GetOpenOrdersAsync(string? symbol = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<BinanceOpenOrder>>([]);
+            Task.FromResult<IReadOnlyList<BinanceOpenOrder>>(openOrders?.Where(order => order.Symbol == symbol).ToArray() ?? []);
 
         public Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(string symbol, BinanceTradeQuery? query = null, CancellationToken cancellationToken = default)
         {

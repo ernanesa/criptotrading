@@ -72,8 +72,8 @@ internal sealed class ExecutionSubmissionGuard(
                 command.CommissionValidUntilUtc is not { } plannedCommissionValidUntil ||
                 plannedCommissionValidUntil <= now || commission.ObservedAtUtc > now ||
                 now - commission.ObservedAtUtc > finalPolicy.Policy.MaxMarketDataAge ||
-                observation.MarketObservedAtUtc > now ||
-                now - observation.MarketObservedAtUtc > finalPolicy.Policy.MaxMarketDataAge)
+                observation.LatestMarketObservedAtUtc > now ||
+                now - observation.EarliestMarketObservedAtUtc > finalPolicy.Policy.MaxMarketDataAge)
             {
                 throw new ExecutionDispatchBlockedException("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST");
             }
@@ -159,11 +159,10 @@ internal sealed class ExecutionSubmissionGuard(
         }
         var baseBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == baseAsset);
         var quoteBalance = snapshot.Balances.FirstOrDefault(item => item.Asset == quote);
-        var rawPositionQuantity = Parse(baseBalance?.Free) + Parse(baseBalance?.Locked);
+        var positionQuantity = Parse(baseBalance?.Free) + Parse(baseBalance?.Locked);
         var configuredUniverseAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            quote,
-            "BNB"
+            quote
         };
         foreach (var s in options.Value.ResolveAutonomySymbols())
         {
@@ -171,41 +170,16 @@ internal sealed class ExecutionSubmissionGuard(
             configuredUniverseAssets.Add(b);
         }
 
-        var isTestnetFaucetWallet = string.Equals(options.Value.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
-            && snapshot.Balances.Count > 20;
-        var faucetEndowment = isTestnetFaucetWallet ? baseAsset.ToUpperInvariant() switch
-        {
-            "BTC" => 1.0m,
-            "ETH" => 1.0m,
-            "BNB" => 1.0m,
-            "SOL" => 4.0m,
-            "XRP" => 341.0m,
-            "ADA" => 1937.0m,
-            "DOGE" => 5501.0m,
-            "AVAX" => 44.0m,
-            "LINK" => 36.0m,
-            "NEAR" => 96.0m,
-            "SUI" => 438.0m,
-            "DOT" => 442.0m,
-            "UNI" => 61.0m,
-            "AAVE" => 2.0m,
-            "INJ" => 66.0m,
-            "ARB" => 2660.0m,
-            "OP" => 4138.0m,
-            "TIA" => 1088.0m,
-            "APT" => 645.0m,
-            "SHIB" => 18446.0m,
-            _ => 0m
-        } : 0m;
-        var positionQuantity = Math.Max(0m, rawPositionQuantity - faucetEndowment);
         var quoteQuantity = Parse(quoteBalance?.Free) + Parse(quoteBalance?.Locked);
         var mid = (ticker.BidPrice + ticker.AskPrice) / 2m;
-        var unsupportedAsset = !isTestnetFaucetWallet && snapshot.Balances
+        var unsupportedAsset = snapshot.Balances
             .Where(item => !configuredUniverseAssets.Contains(item.Asset))
             .Any(item => Parse(item.Free) + Parse(item.Locked) > 0m);
 
         decimal totalOtherPositionsNotional = 0m;
-        int aggregateOpenPositionsCount = positionQuantity * mid > (isTestnetFaucetWallet ? 5m : 0m) ? 1 : 0;
+        int aggregateOpenPositionsCount = positionQuantity * mid > 0m ? 1 : 0;
+        var earliestMarketObservedAt = ticker.ObservedAtUtc;
+        var latestMarketObservedAt = ticker.ObservedAtUtc;
 
         var otherSymbolsToFetch = new List<(string Symbol, decimal NetQty)>();
         foreach (var otherSymbol in options.Value.ResolveAutonomySymbols())
@@ -222,32 +196,7 @@ internal sealed class ExecutionSubmissionGuard(
                 continue;
             }
 
-            var otherRaw = Parse(otherBal.Free) + Parse(otherBal.Locked);
-            var otherEndw = isTestnetFaucetWallet ? otherBase.ToUpperInvariant() switch
-            {
-                "BTC" => 1.0m,
-                "ETH" => 1.0m,
-                "BNB" => 1.0m,
-                "SOL" => 4.0m,
-                "XRP" => 341.0m,
-                "ADA" => 1937.0m,
-                "DOGE" => 5501.0m,
-                "AVAX" => 44.0m,
-                "LINK" => 36.0m,
-                "NEAR" => 96.0m,
-                "SUI" => 438.0m,
-                "DOT" => 442.0m,
-                "UNI" => 61.0m,
-                "AAVE" => 2.0m,
-                "INJ" => 66.0m,
-                "ARB" => 2660.0m,
-                "OP" => 4138.0m,
-                "TIA" => 1088.0m,
-                "APT" => 645.0m,
-                "SHIB" => 18446.0m,
-                _ => 0m
-            } : 0m;
-            var otherNet = Math.Max(0m, otherRaw - otherEndw);
+            var otherNet = Parse(otherBal.Free) + Parse(otherBal.Locked);
             if (otherNet > 0m)
             {
                 otherSymbolsToFetch.Add((otherSymbol, otherNet));
@@ -276,14 +225,18 @@ internal sealed class ExecutionSubmissionGuard(
             for (var i = 0; i < otherSymbolsToFetch.Count; i++)
             {
                 var otherTicker = otherTickers[i];
-                if (otherTicker is null || otherTicker.BidPrice <= 0m || otherTicker.AskPrice <= 0m)
+                var valuationAt = UtcNow;
+                if (!PortfolioTickerValidation.IsValid(otherTicker, otherSymbolsToFetch[i].Symbol, valuationAt, policy.Policy.MaxMarketDataAge))
                 {
                     throw new ExecutionDispatchBlockedException("PRE_SUBMIT_MARKET_DATA_UNAVAILABLE");
                 }
 
+                if (otherTicker.ObservedAtUtc < earliestMarketObservedAt) earliestMarketObservedAt = otherTicker.ObservedAtUtc;
+                if (otherTicker.ObservedAtUtc > latestMarketObservedAt) latestMarketObservedAt = otherTicker.ObservedAtUtc;
+
                 var otherPrice = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
                 var otherNotional = otherSymbolsToFetch[i].NetQty * otherPrice;
-                if (otherNotional > (isTestnetFaucetWallet ? 5m : 0m))
+                if (otherNotional > 0m)
                 {
                     totalOtherPositionsNotional += otherNotional;
                     aggregateOpenPositionsCount++;
@@ -351,7 +304,7 @@ internal sealed class ExecutionSubmissionGuard(
         ValidateOperationalState(command);
         ExecutionGuardLog.Approved(logger, message.MessageId, command.Symbol.Value, command.PolicyVersion,
             measuredRisk.ExpectedSlippageBps, measuredRisk.VolatilityBps, measuredRisk.AvailableLiquidityNotional);
-        return new ValidationObservation(policy.DocumentHash, ticker.ObservedAtUtc, currentNotional);
+        return new ValidationObservation(policy.DocumentHash, earliestMarketObservedAt, latestMarketObservedAt, currentNotional);
     }
 
     private void ValidateOperationalState(SubmitOrderCommand command)
@@ -598,7 +551,7 @@ internal sealed class ExecutionSubmissionGuard(
         }
     }
 
-    private sealed record ValidationObservation(string PolicyDocumentHash, DateTimeOffset MarketObservedAtUtc, decimal EffectiveNotional);
+    private sealed record ValidationObservation(string PolicyDocumentHash, DateTimeOffset EarliestMarketObservedAtUtc, DateTimeOffset LatestMarketObservedAtUtc, decimal EffectiveNotional);
     private sealed record CommissionObservation(decimal Rate, DateTimeOffset ObservedAtUtc);
 }
 

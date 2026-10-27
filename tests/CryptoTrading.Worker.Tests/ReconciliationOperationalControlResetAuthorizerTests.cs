@@ -9,7 +9,48 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     private readonly ReconciliationOperationalControlResetAuthorizer _authorizer = new();
 
     [Fact]
-    public void IsAuthorizedWhenSafeModeEnteredByReconciliationAndResetByReconciliationReturnsTrue()
+    public void AccountingFailureDuringTransientSafeModeCannotBeAutomaticallyCleared()
+    {
+        var control = new InMemoryOperationalControl(_authorizer);
+        var now = DateTimeOffset.UtcNow;
+        control.EnterSafeMode(new OperationalControlCommand("account-stream", "ACCOUNT_STREAM_FAILURE", IdempotencyKey.New(), now));
+        control.EnterSafeMode(new OperationalControlCommand("account-stream", "ACCOUNTING_EXECUTION_FAILURE", IdempotencyKey.New(), now));
+        var reset = new OperationalControlCommand("account-reconciliation", "Reconciliation healthy", IdempotencyKey.New(), now);
+        var authorization = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:test");
+
+        Assert.Throws<OperationalControlResetDeniedException>(() => control.Reset(reset, authorization));
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public void RestoredDurableStopCannotBeAutomaticallyCleared()
+    {
+        var control = new InMemoryOperationalControl(_authorizer);
+        var now = DateTimeOffset.UtcNow;
+        control.EnterSafeMode(new OperationalControlCommand("worker-bootstrap", "RESTORED_DURABLE_STOP:abc", IdempotencyKey.New(), now));
+        var reset = new OperationalControlCommand("account-reconciliation", "Reconciliation healthy", IdempotencyKey.New(), now);
+        var authorization = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:test");
+
+        Assert.Throws<OperationalControlResetDeniedException>(() => control.Reset(reset, authorization));
+        Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task AccountingFailureCannotClearOrDowngradeKillSwitchAsync()
+    {
+        var control = new InMemoryOperationalControl(_authorizer);
+        var now = DateTimeOffset.UtcNow;
+        await control.ActivateKillSwitchAsync(new OperationalControlCommand("operator", "stop", IdempotencyKey.New(), now), TestContext.Current.CancellationToken);
+        await control.EnterSafeModeAsync(new OperationalControlCommand("account-stream", "ACCOUNTING_EXECUTION_FAILURE", IdempotencyKey.New(), now), TestContext.Current.CancellationToken);
+        var reset = new OperationalControlCommand("account-reconciliation", "Reconciliation healthy", IdempotencyKey.New(), now);
+        var authorization = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:test");
+
+        await Assert.ThrowsAsync<OperationalControlResetDeniedException>(() => control.ResetAsync(reset, authorization, TestContext.Current.CancellationToken));
+        Assert.Equal(OperationalMode.KillSwitch, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public void IsAuthorizedWhenSafeModeEnteredByReconciliationReturnsFalse()
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -30,11 +71,11 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.True(result);
+        Assert.False(result);
     }
 
     [Fact]
-    public void IsAuthorizedWhenSafeModeRestoredByWorkerBootstrapReturnsTrue()
+    public void IsAuthorizedWhenSafeModeRestoredByWorkerBootstrapReturnsFalse()
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -55,11 +96,11 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.True(result);
+        Assert.False(result);
     }
 
     [Fact]
-    public void IsAuthorizedWhenSafeModeEnteredByPeriodicReconciliationReturnsTrue()
+    public void IsAuthorizedWhenSafeModeEnteredByPeriodicReconciliationReturnsFalse()
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -80,7 +121,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.True(result);
+        Assert.False(result);
     }
 
     [Theory]
@@ -94,7 +135,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [InlineData("Binance kline quality gate rejected the REST snapshot: OutOfOrder.")]
     [InlineData("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.")]
     [InlineData("A2 failure: Stale market data snapshot (severity=Transient, consecutive=1)")]
-    public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsTrue(string reason)
+    public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsFalse(string reason)
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -115,7 +156,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.True(result);
+        Assert.False(result);
     }
 
     [Fact]
@@ -256,7 +297,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [InlineData("ACCOUNT_STREAM_TIMEOUT")]
     [InlineData("ACCOUNT_STREAM_ENDED")]
     [InlineData("ACCOUNT_STREAM_FAILURE")]
-    public void IsAuthorizedWhenSafeModeEnteredByAccountStreamTransientTerminationReturnsTrue(string reason)
+    public void IsAuthorizedWhenSafeModeEnteredByAccountStreamTransientTerminationReturnsFalse(string reason)
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -277,7 +318,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.True(result);
+        Assert.False(result);
     }
 
     [Theory]

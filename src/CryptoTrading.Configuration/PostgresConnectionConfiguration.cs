@@ -31,11 +31,11 @@ public static class PostgresConnectionConfiguration
 
         if (string.IsNullOrEmpty(path))
         {
-            if (configuration["POSTGRES_PASSWORD"] is not null ||
-                configuration["POSTGRES_HOST"] is not null ||
-                configuration["POSTGRES_DB"] is not null ||
-                configuration["POSTGRES_USER"] is not null ||
-                configuration["POSTGRES_PORT"] is not null)
+            if (!string.IsNullOrWhiteSpace(configuration["POSTGRES_PASSWORD"]) ||
+                !string.IsNullOrWhiteSpace(configuration["POSTGRES_HOST"]) ||
+                !string.IsNullOrWhiteSpace(configuration["POSTGRES_DB"]) ||
+                !string.IsNullOrWhiteSpace(configuration["POSTGRES_USER"]) ||
+                !string.IsNullOrWhiteSpace(configuration["POSTGRES_PORT"]))
             {
                 throw new InvalidOperationException("PostgreSQL file configuration is incomplete.");
             }

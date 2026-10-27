@@ -231,6 +231,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
     {
         public int GetKlinesCallCount { get; private set; }
         public int GetBookTickerCallCount { get; private set; }
+        public BinanceBookTicker? OtherTicker { get; init; }
         public int MinuteOffset { get; set; }
 
         public Task PingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -270,7 +271,9 @@ public sealed class AutonomyCycleExecutionGuardsTests
         public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default)
         {
             GetBookTickerCallCount++;
-            return Task.FromResult(new BinanceBookTicker(symbol, 100m, 10m, 101m, 10m, DateTimeOffset.UtcNow));
+            return Task.FromResult(symbol == "BTCUSDT" && OtherTicker is not null
+                ? OtherTicker
+                : new BinanceBookTicker(symbol, 100m, 10m, 101m, 10m, DateTimeOffset.UtcNow));
         }
 
         public Task<BinanceExchangeInfo> GetExchangeInfoAsync(string? symbol = null, CancellationToken cancellationToken = default) =>
@@ -345,11 +348,18 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
     private sealed class FakeRiskContextStore : IAutonomyRiskContextStore
     {
+        public decimal? LastRecordedEquity { get; private set; }
+        public int RecordCount { get; private set; }
+
         public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) =>
             Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, DateTimeOffset.UtcNow));
 
-        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, valuationAtUtc, currentEquityNotional, null, null, false, true));
+        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default)
+        {
+            LastRecordedEquity = currentEquityNotional;
+            RecordCount++;
+            return Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, valuationAtUtc, currentEquityNotional, null, null, false, currentEquityNotional.HasValue));
+        }
     }
 
     private sealed class FakeDecisionCommitStore : IAutonomyDecisionCommitStore
@@ -580,7 +590,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
     }
 
     [Fact]
-    public async Task RunOnceAllowsMultiAssetScanningWhileHoldingPositionsInUniverseAssets()
+    public async Task RunOnceDoesNotValuePortfolioWhenBnbIsOutsideUniverse()
     {
         var marketClient = new FakeMarketClient();
         var accountClient = new FakeAccountClient([
@@ -630,8 +640,45 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
         Assert.Single(decisionCommitStore.Commits);
         Assert.Equal("ETHUSDT", decisionCommitStore.Commits[0].Symbol.Value);
-        Assert.DoesNotContain(RiskReasonCodes.RiskContextUnavailable, decisionCommitStore.Commits[0].RiskDecision?.ReasonCodes ?? []);
-        Assert.NotEqual(RiskReasonCodes.RiskContextUnavailable, decisionCommitStore.Commits[0].NoTradeReason);
+        Assert.Equal(1, riskContextStore.RecordCount);
+        Assert.Null(riskContextStore.LastRecordedEquity);
+        Assert.Null(decisionCommitStore.Commits[0].OutboxRecord);
+    }
+
+    [Theory]
+    [InlineData("stale")]
+    [InlineData("future")]
+    [InlineData("crossed")]
+    [InlineData("wrong-symbol")]
+    public async Task RunOnceDoesNotValueOtherPositionWithInvalidTicker(string failure)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var ticker = new BinanceBookTicker(
+            failure == "wrong-symbol" ? "SOLUSDT" : "BTCUSDT", 100m, 10m,
+            failure == "crossed" ? 99m : 101m, 10m,
+            failure == "stale" ? now.AddHours(-1) : failure == "future" ? now.AddHours(1) : now);
+        var market = new FakeMarketClient { OtherTicker = ticker };
+        var account = new FakeAccountClient([new BinanceBalance("BTC", "1", "0"), new BinanceBalance("ETH", "0", "0"), new BinanceBalance("USDT", "5000", "0")]);
+        var risk = new FakeRiskContextStore();
+        var commits = new FakeDecisionCommitStore();
+        var control = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("ETHUSDT"), 2, 3, 0m, 0m));
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true, AutonomySymbol = "ETHUSDT", AutonomySymbols = "BTCUSDT,ETHUSDT",
+            AutonomyInterval = "1m", AutonomyKlineLimit = 50, PollIntervalMilliseconds = 100,
+            ExecutionMode = "PAPER", NoTrade = true, ReconciliationAccount = "test-account"
+        });
+        using var service = new AutonomyCycleHostedService(options, market, account, new FakePolicyStore(), risk,
+            commits, control, supervisor, cycle, NullLogger<AutonomyCycleHostedService>.Instance);
+        service.StreamBookTickers["BTCUSDT"] = ticker;
+
+        await service.RunOnceAsync(options.Value, "ETHUSDT", TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, risk.RecordCount);
+        Assert.Null(risk.LastRecordedEquity);
+        Assert.Null(Assert.Single(commits.Commits).OutboxRecord);
     }
 
     [Fact]
@@ -710,16 +757,18 @@ public sealed class AutonomyCycleExecutionGuardsTests
         Assert.Equal(initialKlinesCount, marketClient.GetKlinesCallCount);
     }
 
-    [Fact]
-    public async Task RunOnceDeductsMultiAssetTestnetFaucetBalancesContinuouslyWithoutCliffEdge()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunOnceDoesNotTreatTestnetEndowmentsAsZeroOrIgnoreOtherAssets(bool unsupportedBalances)
     {
         var marketClient = new FakeMarketClient();
         var balances = new List<BinanceBalance>
         {
             new("USDT", "10000", "0"),
-            new("BTC", "1.0", "0"),
-            new("ETH", "1.0", "0"),
-            new("SOL", "4.0", "0"),
+            new("BTC", unsupportedBalances ? "1.0" : "0", "0"),
+            new("ETH", unsupportedBalances ? "1.0" : "0", "0"),
+            new("SOL", unsupportedBalances ? "4.0" : "0", "0"),
             new("BNB", "0.985", "0") // BNB burned from 1.0 down to 0.985 for fee discount
         };
         for (var i = 0; i < 20; i++)
@@ -768,8 +817,16 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
         Assert.NotEmpty(decisionCommitStore.Commits);
         var latestCommit = decisionCommitStore.Commits[^1];
-        Assert.NotEqual("POSITION_BASIS_DRIFT", latestCommit.NoTradeReason);
-        Assert.DoesNotContain("POSITION_BASIS_DRIFT", latestCommit.NoTradeReason ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal(1, riskContextStore.RecordCount);
+        if (unsupportedBalances)
+        {
+            Assert.Null(riskContextStore.LastRecordedEquity);
+        }
+        else
+        {
+            Assert.True(riskContextStore.LastRecordedEquity > 10_000m);
+        }
+        Assert.Null(latestCommit.OutboxRecord);
     }
 
     [Fact]

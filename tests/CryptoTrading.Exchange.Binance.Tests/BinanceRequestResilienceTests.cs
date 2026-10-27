@@ -14,7 +14,25 @@ public sealed class BinanceRequestResilienceTests
         Assert.Equal(TimeSpan.FromSeconds(2), policy.GetDelay(1));
         Assert.Equal(TimeSpan.FromSeconds(5), policy.GetDelay(10));
         Assert.Equal(TimeSpan.FromSeconds(3), policy.GetDelay(0, TimeSpan.FromSeconds(3)));
-        Assert.Equal(TimeSpan.FromSeconds(5), policy.GetDelay(0, TimeSpan.FromSeconds(30)));
+        Assert.Equal(TimeSpan.FromSeconds(30), policy.GetDelay(0, TimeSpan.FromSeconds(30)));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData((HttpStatusCode)418)]
+    public void RateLimitRetryNeverPrecedesServerDeadline(HttpStatusCode status)
+    {
+        using var response = new HttpResponseMessage(status);
+        response.Headers.TryAddWithoutValidation("Retry-After", "30");
+        var now = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+        var policy = new BinanceRequestRetryPolicy(new BinanceRequestResilienceOptions
+        {
+            InitialRetryDelay = TimeSpan.FromSeconds(1),
+            MaxRetryDelay = TimeSpan.FromSeconds(5)
+        });
+
+        Assert.True(policy.ShouldRetry(status, 0));
+        Assert.True(policy.GetDelay(response, 0, now) >= TimeSpan.FromSeconds(30));
     }
 
     [Fact]

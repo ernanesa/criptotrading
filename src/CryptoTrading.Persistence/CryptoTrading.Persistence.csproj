@@ -15,4 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\CryptoTrading.Domain\CryptoTrading.Domain.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="CryptoTrading.Persistence.Tests" />
+  </ItemGroup>
 </Project>
