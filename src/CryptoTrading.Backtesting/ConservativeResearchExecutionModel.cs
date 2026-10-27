@@ -244,6 +244,12 @@ public sealed class ConservativeResearchExecutionModel
 
         executedPrice = Filters.QuantizePrice(executedPrice);
 
+        if (order.LimitPrice is { } orderLimit &&
+            ((isBuy && executedPrice > orderLimit) || (isSell && executedPrice < orderLimit)))
+        {
+            return Unfilled(order.SubmissionBarIndex, executionBarIndex, "Simulated execution price violates the order limit.");
+        }
+
         // Filter: quantity quantization
         var requestedQuantized = Filters.QuantizeQuantity(order.RequestedQuantity);
         if (requestedQuantized < Filters.MinimumQuantity || requestedQuantized > Filters.MaximumQuantity)
@@ -325,4 +331,3 @@ public sealed class ConservativeResearchExecutionModel
         StrategyExecutionOutcome outcome, int submissionIndex, int executionIndex, string reason) =>
         new(false, outcome, submissionIndex, executionIndex, 0m, 0m, 0m, 0m, 0m, 0m, reason);
 }
-

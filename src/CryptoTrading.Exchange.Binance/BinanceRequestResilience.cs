@@ -44,8 +44,8 @@ public interface IBinanceBackoffPolicy
 }
 
 /// <summary>
-/// Deterministic bounded exponential backoff. Jitter is deliberately not hidden in
-/// this primitive so tests and replay runs can reproduce request timing exactly.
+/// Deterministic exponential backoff bounded locally, with any server deadline as
+/// a minimum. Jitter is deliberately not hidden so replay timing is reproducible.
 /// </summary>
 public sealed class BinanceExponentialBackoffPolicy : IBinanceBackoffPolicy
 {
@@ -77,7 +77,7 @@ public sealed class BinanceExponentialBackoffPolicy : IBinanceBackoffPolicy
             return exponential;
         }
 
-        return suggested > maximumDelay ? maximumDelay : suggested;
+        return suggested > exponential ? suggested : exponential;
     }
 
     internal static TimeSpan ComputeExponentialDelay(TimeSpan initial, TimeSpan maximum, int attempt)
@@ -169,7 +169,8 @@ public sealed class BinanceRequestRetryPolicy
         var suggested = snapshot.RetryAfterUtc is { } retryAfter
             ? retryAfter - now
             : (TimeSpan?)null;
-        return backoffPolicy.GetDelay(attempt, suggested);
+        var delay = backoffPolicy.GetDelay(attempt, suggested);
+        return suggested is { } minimum && minimum > delay ? minimum : delay;
     }
 }
 

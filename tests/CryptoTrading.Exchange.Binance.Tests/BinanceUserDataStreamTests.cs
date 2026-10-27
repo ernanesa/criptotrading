@@ -223,6 +223,71 @@ public sealed class BinanceUserDataStreamTests
         await cancellation.CancelAsync();
     }
 
+    [Fact]
+    public async Task HandshakeTimeoutWaitsForPendingReadBeforeDisposalAndReconnect()
+    {
+        using var first = new DelayedCancellationTransport();
+        var attemptCount = 0;
+        var client = new BinanceUserDataStreamApiClient(
+            new BinanceUserDataStreamApiOptions
+            {
+                ApiKey = "api-key", ApiSecret = "secret",
+                ConnectAndSubscribeTimeout = TimeSpan.FromMilliseconds(50),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectAttempts = 3
+            },
+            () => Interlocked.Increment(ref attemptCount) == 1 ? first : new ModernFakeTransport());
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var enumerator = client.ReadAsync("ignored", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+        var move = enumerator.MoveNextAsync().AsTask();
+        try
+        {
+            await first.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<TimeoutException>(async () => await move.WaitAsync(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken).ConfigureAwait(false));
+            Assert.Equal(1, attemptCount);
+        }
+        finally
+        {
+            first.Release.TrySetResult();
+        }
+
+        Assert.True(await move.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
+        Assert.Equal(2, attemptCount);
+        await cancellation.CancelAsync();
+    }
+
+    [Fact]
+    public async Task ExternalCancellationDuringHandshakeWaitsForReadWithoutReconnecting()
+    {
+        using var first = new DelayedCancellationTransport();
+        var attempts = 0;
+        var client = new BinanceUserDataStreamApiClient(
+            new BinanceUserDataStreamApiOptions
+            {
+                ApiKey = "api-key", ApiSecret = "secret",
+                ConnectAndSubscribeTimeout = TimeSpan.FromSeconds(5)
+            },
+            () => { Interlocked.Increment(ref attempts); return first; });
+        using var cancellation = new CancellationTokenSource();
+        await using var enumerator = client.ReadAsync("ignored", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+        var move = enumerator.MoveNextAsync().AsTask();
+        await first.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        try
+        {
+            await first.CancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<TimeoutException>(async () => await move.WaitAsync(TimeSpan.FromMilliseconds(200), TestContext.Current.CancellationToken).ConfigureAwait(false));
+            Assert.Equal(1, attempts);
+        }
+        finally
+        {
+            first.Release.TrySetResult();
+        }
+
+        Assert.False(await move.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
+        Assert.Equal(1, attempts);
+    }
+
     private sealed class FakeTransport(params string[] payloads) : IBinanceWebSocketTransport, IDisposable
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
@@ -321,6 +386,35 @@ public sealed class BinanceUserDataStreamTests
         }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DelayedCancellationTransport : IBinanceWebSocketTransport, IDisposable
+    {
+        public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+        public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) => ValueTask.CompletedTask;
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            ReadStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                CancellationObserved.TrySetResult();
+                await Release.Task.ConfigureAwait(false);
+                throw;
+            }
+
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void Dispose() { }
     }
 
     private sealed class LifecycleHandler : HttpMessageHandler

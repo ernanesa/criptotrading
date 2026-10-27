@@ -126,12 +126,71 @@ public sealed class ExecutionSubmissionGuardTests
         var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => ReadyGuard(supervisor, market, new GuardAccountClient(clock), policies: policies, timeProvider: clock).ValidateFinalAsync(command, message, TestContext.Current.CancellationToken));
         Assert.Equal("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST", exception.Message);
     }
+
+    [Fact]
+    public async Task FinalGuardBlocksOtherAssetTickerThatExpiresDuringFinalPolicyRead()
+    {
+        var clock = new ManualTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        await using var supervisor = await ReadySupervisorAsync();
+        var (command, message) = FreshCommand(clock);
+        var policies = new GuardPolicyStore(clock) { OnRead = read => { if (read > 1) clock.Advance(TimeSpan.FromSeconds(3)); } };
+        var market = new GuardMarketClient(clock)
+        {
+            OtherTicker = new BinanceBookTicker("ETHUSDT", 100m, 10m, 101m, 10m, clock.GetUtcNow().AddMinutes(-15).AddSeconds(2))
+        };
+        var account = new GuardAccountClient(clock) { ExtraBalances = [new BinanceBalance("ETH", "1", "0")] };
+        var runtime = new WorkerRuntimeOptions { AutonomySymbols = "BTCUSDT,ETHUSDT" };
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            ReadyGuard(supervisor, market, account, runtime, policies, clock).ValidateFinalAsync(command, message, TestContext.Current.CancellationToken));
+
+        Assert.Equal("FINAL_EXECUTION_EXPIRED_OR_LEASE_LOST", exception.Message);
+    }
     [Fact]
     public async Task FinalGuardBlocksAdverseAccountPosition()
     {
         await using var supervisor = await ReadySupervisorAsync(); var (command, message) = FreshCommand();
         var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => ReadyGuard(supervisor, new GuardMarketClient(), new GuardAccountClient { BitcoinFree = "100" }).ValidateFinalAsync(command, message, TestContext.Current.CancellationToken));
         Assert.Equal("PRE_SUBMIT_ACCOUNTING_OR_LOSS_BREAKER", exception.Message);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GuardRejectsUnvaluedBnbEvenInLargeTestnetWallet(bool testnet)
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (command, message) = FreshCommand();
+        var account = new GuardAccountClient { ExtraBalances = [new BinanceBalance("BNB", "1", "0"), .. Enumerable.Range(0, 20).Select(i => new BinanceBalance($"OTHER{i}", "0", "0"))] };
+        var runtime = new WorkerRuntimeOptions { ExecutionMode = testnet ? "TESTNET" : "PAPER" };
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            ReadyGuard(supervisor, new GuardMarketClient(), account, runtime).ValidateAsync(command, message, TestContext.Current.CancellationToken));
+
+        Assert.Equal("PRE_SUBMIT_ACCOUNTING_OR_LOSS_BREAKER", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("stale")]
+    [InlineData("future")]
+    [InlineData("crossed")]
+    [InlineData("wrong-symbol")]
+    public async Task GuardRejectsInvalidTickerForOtherPortfolioAsset(string failure)
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (command, message) = FreshCommand();
+        var now = DateTimeOffset.UtcNow;
+        var otherTicker = new BinanceBookTicker(
+            failure == "wrong-symbol" ? "SOLUSDT" : "ETHUSDT", 100m, 10m,
+            failure == "crossed" ? 99m : 101m, 10m,
+            failure == "stale" ? now.AddHours(-1) : failure == "future" ? now.AddHours(1) : now);
+        var market = new GuardMarketClient { OtherTicker = otherTicker };
+        var account = new GuardAccountClient { ExtraBalances = [new BinanceBalance("ETH", "1", "0")] };
+        var runtime = new WorkerRuntimeOptions { AutonomySymbols = "BTCUSDT,ETHUSDT" };
+
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            ReadyGuard(supervisor, market, account, runtime).ValidateAsync(command, message, TestContext.Current.CancellationToken));
+
+        Assert.Equal("PRE_SUBMIT_MARKET_DATA_UNAVAILABLE", exception.Message);
     }
     [Fact]
     public async Task FinalGuardBlocksAdverseFreshMarketPrice()
@@ -247,6 +306,7 @@ public sealed class ExecutionSubmissionGuardTests
         public int BookTickerCalls { get; private set; }
         public decimal AskPrice { get; init; } = 101m;
         public TimeSpan TickerAge { get; init; }
+        public BinanceBookTicker? OtherTicker { get; init; }
         public bool ReturnInvalidKlines { get; init; }
         public Task PingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default) => Task.FromResult(new BinanceServerTime(timeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
@@ -260,7 +320,7 @@ public sealed class ExecutionSubmissionGuardTests
             return Task.FromResult<IReadOnlyList<BinanceSpotKline>>([Kline(minute.AddMinutes(-4), 100m), Kline(minute.AddMinutes(-3), 101m), Kline(minute.AddMinutes(-2), 102m), Kline(minute.AddMinutes(-1), 103m), Kline(minute, 104m)]);
         }
         public Task<IReadOnlyList<BinanceAggregateTrade>> GetAggregateTradesAsync(string symbol, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<BinanceAggregateTrade>>([]);
-        public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default) { BookTickerCalls++; return Task.FromResult(new BinanceBookTicker(symbol, 100m, 10m, AskPrice, 10m, timeProvider.GetUtcNow() - TickerAge)); }
+        public Task<BinanceBookTicker> GetBookTickerAsync(string symbol, CancellationToken cancellationToken = default) { BookTickerCalls++; return Task.FromResult(symbol == "ETHUSDT" && OtherTicker is not null ? OtherTicker : new BinanceBookTicker(symbol, 100m, 10m, AskPrice, 10m, timeProvider.GetUtcNow() - TickerAge)); }
         public Task<BinanceExchangeInfo> GetExchangeInfoAsync(string? symbol = null, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public Task<BinanceSymbolTradingRules> GetTradingRulesAsync(string symbol, CancellationToken cancellationToken = default) => throw new NotImplementedException();
     }
@@ -277,6 +337,7 @@ public sealed class ExecutionSubmissionGuardTests
         public string QuoteFree { get; init; } = "1000";
         public string QuoteLocked { get; init; } = "0";
         public string? QuoteFreeAfterFirstRead { get; init; }
+        public IReadOnlyList<BinanceBalance> ExtraBalances { get; init; } = [];
         public bool ThrowOnCommission { get; init; }
         public DateTimeOffset? CommissionObservedAt { get; init; }
         private int accountReads;
@@ -285,7 +346,7 @@ public sealed class ExecutionSubmissionGuardTests
             var isLaterRead = Interlocked.Increment(ref accountReads) > 1;
             var quoteFree = isLaterRead ? QuoteFreeAfterFirstRead ?? QuoteFree : QuoteFree;
             var bitcoinFree = isLaterRead ? BitcoinFreeAfterFirstRead ?? BitcoinFree : BitcoinFree;
-            return Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT", [new BinanceBalance("BTC", bitcoinFree, BitcoinLocked), new BinanceBalance("USDT", quoteFree, QuoteLocked)]));
+            return Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT", [new BinanceBalance("BTC", bitcoinFree, BitcoinLocked), new BinanceBalance("USDT", quoteFree, QuoteLocked), .. ExtraBalances]));
         }
         public Task<BinanceCommissionSnapshot> GetCommissionAsync(string symbol, CancellationToken cancellationToken = default)
         {
@@ -325,7 +386,7 @@ public sealed class ExecutionSubmissionGuardTests
     private sealed class GuardRiskContextStore : IAutonomyRiskContextStore
     {
         public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) => Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, DateTimeOffset.UtcNow, 1000m, 1000m, 0m, true, true));
-        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) => Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, valuationAtUtc, 1000m, 1000m, 0m, true, true));
+        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) => Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, valuationAtUtc, currentEquityNotional, 1000m, 0m, true, currentEquityNotional.HasValue));
     }
     private sealed class GuardOpenOrderStore : ILocalOpenOrderStore
     {

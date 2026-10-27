@@ -587,8 +587,9 @@ public sealed class AccountReconciliationService
             _ = await operationalControl.EnterSafeModeAsync(command, cancellationToken).ConfigureAwait(false);
         }
 
-        TradingTelemetry.RecordReconciliation(healthy, events.Count(static item => item is not BalanceReconciled));
-        return new(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count, unknownTrades);
+        var result = new ReconciliationRunResult(correlationId, snapshot.ObservedAtUtc, healthy, events.AsReadOnly(), unknownTradeIds, snapshot.OpenOrders.Count, unknownTrades);
+        TradingTelemetry.RecordReconciliation(healthy, result.MismatchCount);
+        return result;
     }
 
 #pragma warning disable CA1031 // Persistence/provider failures must trigger SafeMode regardless of the concrete adapter exception type.
@@ -649,13 +650,18 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
         var observedAtUtc = timeProvider.GetUtcNow();
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         var trades = new Dictionary<KnownTradeIdentity, ReconciliationFill>();
-        var openOrders = new Dictionary<long, ReconciliationOpenOrder>();
+        var openOrders = new Dictionary<(string Symbol, long OrderId), ReconciliationOpenOrder>();
         foreach (var symbol in options.Symbols)
         {
             var symbolOpenOrders = await accountClient.GetOpenOrdersAsync(symbol, cancellationToken).ConfigureAwait(false);
             foreach (var order in symbolOpenOrders)
             {
-                openOrders.TryAdd(order.OrderId, ReconciliationOpenOrder.FromBinance(order));
+                var normalized = ReconciliationOpenOrder.FromBinance(order);
+                var key = (normalized.Symbol, normalized.OrderId);
+                if (!openOrders.TryAdd(key, normalized) && openOrders[key] != normalized)
+                {
+                    throw new InvalidOperationException("Conflicting open-order snapshots for the same symbol and order ID.");
+                }
             }
 
             long? fromId = null;

@@ -38,7 +38,7 @@ public sealed class PortfolioPerformanceIntegrationTests
         await store.RecordExecutionAsync(NewExecution("unvalued-" + suffix, 400_000 + Convert.ToInt64(suffix, 16), new Money(.01m, new Asset("BNB")), occurredAtUtc,
             new ExecutionFeeAssetValuation(new Asset("BNB"), new Asset("USDT"), 20m, occurredAtUtc.AddMinutes(-1), "integration-bnb-mark"), hasFeeEstimate: false), cancellationToken: TestContext.Current.CancellationToken);
 
-        var metrics = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero), cancellationToken: TestContext.Current.CancellationToken);
+        var metrics = await store.GetPerformanceMetricsAsync(new DateTimeOffset(2026, 10, 7, 12, 0, 0, TimeSpan.Zero), "BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("BTCUSDT", metrics.ScopeSymbol);
         Assert.Equal("USDT", metrics.QuoteAsset);

@@ -7,11 +7,17 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 port="${API_TEST_PORT:-58081}"
 [[ "$port" =~ ^[0-9]+$ ]] || { echo 'API_TEST_PORT must be numeric.' >&2; exit 2; }
 
-# Run outside the repository and set the persistence key to an empty process
-# value. Process variables take precedence over .env, so this prevents a local
+# Run outside the repository and set the persistence keys to empty process
+# values. Process variables take precedence over .env, so this prevents a local
 # developer database from changing this isolated fail-closed smoke.
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/cryptotrading-api-smoke-work.XXXXXX")"
 export POSTGRES_CONNECTION_STRING=
+export POSTGRES_PASSWORD_FILE=
+export POSTGRES_PASSWORD=
+export POSTGRES_HOST=
+export POSTGRES_DB=
+export POSTGRES_USER=
+export POSTGRES_PORT=
 unset API_INTERNAL_ACCESS_TOKEN API_INTERNAL_ACCESS_TOKEN_FILE
 cd "$work_dir"
 

@@ -131,116 +131,122 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             long? subscriptionId = null;
             try
             {
-                using var handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
-                handshakeCancellation.CancelAfter(options.ConnectAndSubscribeTimeout);
-                var handshakeToken = handshakeCancellation.Token;
-                await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), handshakeToken).ConfigureAwait(false);
-                enumerator = transport.ReadMessagesAsync(sessionToken).GetAsyncEnumerator(sessionToken);
-                subscriptionId = await SubscribeAsync(transport, enumerator, handshakeToken).ConfigureAwait(false);
-                subscriptionSucceeded = true;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                yield break;
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                // Session lifetime elapsed; dispose and establish a fresh subscription.
-            }
-            catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
-            {
-            }
-            catch (IOException) when (!cancellationToken.IsCancellationRequested)
-            {
-            }
-            catch (BinanceUserDataStreamProtocolException) when (!cancellationToken.IsCancellationRequested)
-            {
-            }
-
-            if (subscriptionSucceeded && enumerator is not null)
-            {
-                var establishedAt = timeProvider.GetUtcNow();
-                yield return new BinanceUserDataStreamControlEvent(
-                    establishedAt,
-                    establishedAt.ToUnixTimeMilliseconds(),
-                    "connectionEstablished",
-                    subscriptionId)
+                try
                 {
-                    SessionId = sessionId,
-                    SessionGeneration = currentGeneration,
-                    StreamSubscriptionId = subscriptionId
-                };
-                var terminatedByControlEvent = false;
-                while (!cancellationToken.IsCancellationRequested)
+                    using var handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
+                    handshakeCancellation.CancelAfter(options.ConnectAndSubscribeTimeout);
+                    var handshakeToken = handshakeCancellation.Token;
+                    await transport.ConnectAsync(options.GetWebSocketApiBaseAddress(), handshakeToken).ConfigureAwait(false);
+                    enumerator = transport.ReadMessagesAsync(sessionToken).GetAsyncEnumerator(sessionToken);
+                    subscriptionId = await SubscribeAsync(transport, enumerator, sessionCancellation, handshakeToken).ConfigureAwait(false);
+                    subscriptionSucceeded = true;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    bool hasMessage;
-                    try
-                    {
-                        hasMessage = await enumerator.MoveNextAsync().ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                    {
-                        yield break;
-                    }
-                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-                    catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-                    catch (IOException) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        break;
-                    }
-
-                    if (!hasMessage)
-                    {
-                        break;
-                    }
-
-                    var parsed = ParseMessage(enumerator.Current.Span, timeProvider.GetUtcNow());
-                    if (parsed is null)
-                    {
-                        continue;
-                    }
-
-                    yield return parsed with
-                    {
-                        SessionId = sessionId,
-                        SessionGeneration = currentGeneration,
-                        StreamSubscriptionId = subscriptionId ?? (parsed as BinanceUserDataStreamControlEvent)?.SubscriptionId
-                    };
-                    receivedEvent = true;
-                    if (parsed is BinanceUserDataStreamControlEvent control &&
-                        control.EventType is "eventStreamTerminated" or "serverShutdown")
-                    {
-                        terminatedByControlEvent = true;
-                        break;
-                    }
+                    yield break;
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Session lifetime elapsed; dispose and establish a fresh subscription.
+                }
+                catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
+                {
+                }
+                catch (IOException) when (!cancellationToken.IsCancellationRequested)
+                {
+                }
+                catch (BinanceUserDataStreamProtocolException) when (!cancellationToken.IsCancellationRequested)
+                {
                 }
 
-                if (!cancellationToken.IsCancellationRequested && !terminatedByControlEvent)
+                if (subscriptionSucceeded && enumerator is not null)
                 {
-                    var lostAt = timeProvider.GetUtcNow();
+                    var establishedAt = timeProvider.GetUtcNow();
                     yield return new BinanceUserDataStreamControlEvent(
-                        lostAt,
-                        lostAt.ToUnixTimeMilliseconds(),
-                        "connectionLost",
+                        establishedAt,
+                        establishedAt.ToUnixTimeMilliseconds(),
+                        "connectionEstablished",
                         subscriptionId)
                     {
                         SessionId = sessionId,
                         SessionGeneration = currentGeneration,
                         StreamSubscriptionId = subscriptionId
                     };
-                }
-            }
+                    var terminatedByControlEvent = false;
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        bool hasMessage;
+                        try
+                        {
+                            hasMessage = await enumerator.MoveNextAsync().ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            yield break;
+                        }
+                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+                        catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+                        catch (IOException) when (!cancellationToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
 
-            if (enumerator is not null)
+                        if (!hasMessage)
+                        {
+                            break;
+                        }
+
+                        var parsed = ParseMessage(enumerator.Current.Span, timeProvider.GetUtcNow());
+                        if (parsed is null)
+                        {
+                            continue;
+                        }
+
+                        yield return parsed with
+                        {
+                            SessionId = sessionId,
+                            SessionGeneration = currentGeneration,
+                            StreamSubscriptionId = subscriptionId ?? (parsed as BinanceUserDataStreamControlEvent)?.SubscriptionId
+                        };
+                        receivedEvent = true;
+                        if (parsed is BinanceUserDataStreamControlEvent control &&
+                            control.EventType is "eventStreamTerminated" or "serverShutdown")
+                        {
+                            terminatedByControlEvent = true;
+                            break;
+                        }
+                    }
+
+                    if (!cancellationToken.IsCancellationRequested && !terminatedByControlEvent)
+                    {
+                        var lostAt = timeProvider.GetUtcNow();
+                        yield return new BinanceUserDataStreamControlEvent(
+                            lostAt,
+                            lostAt.ToUnixTimeMilliseconds(),
+                            "connectionLost",
+                            subscriptionId)
+                        {
+                            SessionId = sessionId,
+                            SessionGeneration = currentGeneration,
+                            StreamSubscriptionId = subscriptionId
+                        };
+                    }
+                }
+
+            }
+            finally
             {
-                await sessionCancellation.CancelAsync().ConfigureAwait(false);
-                await enumerator.DisposeAsync().ConfigureAwait(false);
+                if (enumerator is not null)
+                {
+                    await sessionCancellation.CancelAsync().ConfigureAwait(false);
+                    await enumerator.DisposeAsync().ConfigureAwait(false);
+                }
             }
 
             attempt = (subscriptionSucceeded || receivedEvent) ? 0 : attempt + 1;
@@ -289,6 +295,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
     private async Task<long?> SubscribeAsync(
         IBinanceWebSocketTransport transport,
         IAsyncEnumerator<ReadOnlyMemory<byte>> enumerator,
+        CancellationTokenSource sessionCancellation,
         CancellationToken cancellationToken)
     {
         var requestId = Guid.NewGuid();
@@ -299,7 +306,28 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             options.RecvWindowMilliseconds,
             requestId);
         await transport.SendAsync(Encoding.UTF8.GetBytes(request), cancellationToken).ConfigureAwait(false);
-        if (!await enumerator.MoveNextAsync().AsTask().WaitAsync(cancellationToken).ConfigureAwait(false))
+        var pendingRead = enumerator.MoveNextAsync().AsTask();
+        bool hasResponse;
+        try
+        {
+            hasResponse = await pendingRead.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await sessionCancellation.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await pendingRead.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (sessionCancellation.IsCancellationRequested)
+            {
+                // Observe the cancelled read before its enumerator is disposed.
+            }
+
+            throw;
+        }
+
+        if (!hasResponse)
         {
             throw new BinanceUserDataStreamProtocolException("WebSocket API closed before subscription acknowledgement.");
         }

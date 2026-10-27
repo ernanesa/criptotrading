@@ -209,6 +209,45 @@ public sealed class ResearchFinalizationSliceTests
         Assert.Equal(1.0m, result.ExecutedQuantity); // Capped at 10% of 10 volume
     }
 
+    [Theory]
+    [InlineData(StrategyExecutionAction.BuyBaseQuantity)]
+    [InlineData(StrategyExecutionAction.SellBaseQuantity)]
+    public void F08LimitOrdersNeverExecuteAtWorseThanTheirLimit(StrategyExecutionAction action)
+    {
+        var model = new ConservativeResearchExecutionModel(new ResearchExchangeFilters(0.01m, 0.001m, 0.001m, 100m, 5m));
+        var bars = new[]
+        {
+            new ResearchBar(BtcUsdt, Start, Start.AddHours(1), 100m, 105m, 95m, 100m, 1_000m),
+            new ResearchBar(BtcUsdt, Start.AddHours(1), Start.AddHours(2), 100m, 105m, 95m, 100m, 1_000m)
+        };
+        var order = new ConservativeExecutionOrder(0, action, 1m, LimitPrice: 100m);
+
+        var result = model.SimulateFill(order, bars, availableCash: 10_000m, availablePosition: 10m);
+
+        Assert.False(result.IsFilled);
+        Assert.Equal(StrategyExecutionOutcome.NoTrade, result.Outcome);
+        Assert.Equal(0m, result.ExecutedQuantity);
+    }
+
+    [Fact]
+    public void F08SellLimitIsCheckedAfterPriceQuantization()
+    {
+        var model = new ConservativeResearchExecutionModel(
+            new ResearchExchangeFilters(0.01m, 0.001m, 0.001m, 100m, 5m),
+            halfSpreadRate: 0m, slippageRate: 0m);
+        var bars = new[]
+        {
+            new ResearchBar(BtcUsdt, Start, Start.AddHours(1), 100m, 105m, 95m, 100m, 1_000m),
+            new ResearchBar(BtcUsdt, Start.AddHours(1), Start.AddHours(2), 100m, 105m, 95m, 100m, 1_000m)
+        };
+        var result = model.SimulateFill(
+            new ConservativeExecutionOrder(0, StrategyExecutionAction.SellBaseQuantity, 1m, LimitPrice: 100.005m),
+            bars, availableCash: 10_000m, availablePosition: 10m);
+
+        Assert.False(result.IsFilled);
+        Assert.Equal(StrategyExecutionOutcome.NoTrade, result.Outcome);
+    }
+
     // ==========================================
     // F09: Dynamic Costs & R$ 100 Budget Capacity Gate
     // ==========================================
@@ -328,4 +367,3 @@ public sealed class ResearchFinalizationSliceTests
         Assert.Contains("delisting", liquidation.Reason, StringComparison.OrdinalIgnoreCase);
     }
 }
-

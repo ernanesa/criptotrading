@@ -730,34 +730,7 @@ internal sealed class AutonomyCycleHostedService(
             ? symbol[..^4]
             : symbol;
         var baseBalance = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, baseAsset, StringComparison.OrdinalIgnoreCase));
-        var rawBaseQuantity = ParseBalance(baseBalance?.Free) + ParseBalance(baseBalance?.Locked);
-        var isTestnetFaucetWallet = string.Equals(runtime.ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase)
-            && account.Balances.Count > 20;
-        var faucetEndowment = isTestnetFaucetWallet ? baseAsset.ToUpperInvariant() switch
-        {
-            "BTC" => 1.0m,
-            "ETH" => 1.0m,
-            "BNB" => 1.0m,
-            "SOL" => 4.0m,
-            "XRP" => 341.0m,
-            "ADA" => 1937.0m,
-            "DOGE" => 5501.0m,
-            "AVAX" => 44.0m,
-            "LINK" => 36.0m,
-            "NEAR" => 96.0m,
-            "SUI" => 438.0m,
-            "DOT" => 442.0m,
-            "UNI" => 61.0m,
-            "AAVE" => 2.0m,
-            "INJ" => 66.0m,
-            "ARB" => 2660.0m,
-            "OP" => 4138.0m,
-            "TIA" => 1088.0m,
-            "APT" => 645.0m,
-            "SHIB" => 18446.0m,
-            _ => 0m
-        } : 0m;
-        var baseQuantity = Math.Max(0m, rawBaseQuantity - faucetEndowment);
+        var baseQuantity = ParseBalance(baseBalance?.Free) + ParseBalance(baseBalance?.Locked);
         var quoteAsset = new Asset("USDT");
         var quote = account.Balances.FirstOrDefault(balance => string.Equals(balance.Asset, quoteAsset.Value, StringComparison.OrdinalIgnoreCase));
         var availableQuoteLiquidity = ParseBalance(quote?.Free);
@@ -765,8 +738,7 @@ internal sealed class AutonomyCycleHostedService(
         var latest = closed[^1].Bar;
         var configuredUniverseAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            quoteAsset.Value,
-            "BNB"
+            quoteAsset.Value
         };
         foreach (var s in runtime.ResolveAutonomySymbols())
         {
@@ -774,7 +746,7 @@ internal sealed class AutonomyCycleHostedService(
             configuredUniverseAssets.Add(b);
         }
 
-        var unsupportedAssetBalance = !isTestnetFaucetWallet && account.Balances
+        var unsupportedAssetBalance = account.Balances
             .Where(balance => !configuredUniverseAssets.Contains(balance.Asset))
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
 
@@ -796,39 +768,12 @@ internal sealed class AutonomyCycleHostedService(
                 continue;
             }
 
-            var otherRawQty = ParseBalance(otherBal.Free) + ParseBalance(otherBal.Locked);
-            var otherFaucet = isTestnetFaucetWallet ? otherBase.ToUpperInvariant() switch
-            {
-                "BTC" => 1.0m,
-                "ETH" => 1.0m,
-                "BNB" => 1.0m,
-                "SOL" => 4.0m,
-                "XRP" => 341.0m,
-                "ADA" => 1937.0m,
-                "DOGE" => 5501.0m,
-                "AVAX" => 44.0m,
-                "LINK" => 36.0m,
-                "NEAR" => 96.0m,
-                "SUI" => 438.0m,
-                "DOT" => 442.0m,
-                "UNI" => 61.0m,
-                "AAVE" => 2.0m,
-                "INJ" => 66.0m,
-                "ARB" => 2660.0m,
-                "OP" => 4138.0m,
-                "TIA" => 1088.0m,
-                "APT" => 645.0m,
-                "SHIB" => 18446.0m,
-                _ => 0m
-            } : 0m;
-            var otherNetQty = Math.Max(0m, otherRawQty - otherFaucet);
+            var otherNetQty = ParseBalance(otherBal.Free) + ParseBalance(otherBal.Locked);
             if (otherNetQty > 0m)
             {
                 decimal? otherMid = null;
                 if (streamBookTickers.TryGetValue(otherSymbol, out var otherTicker) &&
-                    DateTimeOffset.UtcNow - otherTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge &&
-                    otherTicker.BidPrice > 0m &&
-                    otherTicker.AskPrice >= otherTicker.BidPrice)
+                    PortfolioTickerValidation.IsValid(otherTicker, otherSymbol, DateTimeOffset.UtcNow, policyDocument.Policy.MaxMarketDataAge))
                 {
                     otherMid = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
                 }
@@ -837,10 +782,14 @@ internal sealed class AutonomyCycleHostedService(
                     try
                     {
                         var restTicker = await marketClient.GetBookTickerAsync(otherSymbol, cancellationToken).ConfigureAwait(false);
-                        if (restTicker.BidPrice > 0m && restTicker.AskPrice >= restTicker.BidPrice)
+                        if (PortfolioTickerValidation.IsValid(restTicker, otherSymbol, DateTimeOffset.UtcNow, policyDocument.Policy.MaxMarketDataAge))
                         {
                             otherMid = (restTicker.BidPrice + restTicker.AskPrice) / 2m;
                         }
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
                     }
                     catch
                     {
