@@ -33,8 +33,11 @@ internal sealed class AccountStreamHostedService(
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
     ILogger<AccountStreamHostedService> logger,
-    IExecutionLearningRewardStore? learningRewards = null) : BackgroundService
+    IExecutionLearningRewardStore? learningRewards = null,
+    TimeProvider? timeProvider = null) : BackgroundService
 {
+    private static readonly TimeSpan FailureContainmentTimeout = TimeSpan.FromSeconds(5);
+    private readonly TimeProvider failureTimeProvider = timeProvider ?? TimeProvider.System;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private bool initialConnectionPending = true;
 
@@ -45,6 +48,8 @@ internal sealed class AccountStreamHostedService(
             return;
         }
 
+        var accountingFailureDetected = false;
+        var fillInProgress = false;
         try
         {
             // The modern signed API creates the subscription on the WebSocket;
@@ -52,6 +57,8 @@ internal sealed class AccountStreamHostedService(
             // by BinanceUserDataStreamApiClient.
             await foreach (var userEvent in streamClient.ReadAsync(string.Empty, stoppingToken).ConfigureAwait(false))
             {
+                fillInProgress = userEvent is BinanceExecutionReportEvent report &&
+                    string.Equals(report.ExecutionType, "TRADE", StringComparison.OrdinalIgnoreCase) && report.LastExecutedQuantity > 0m;
                 var record = ToRecord(userEvent);
                 using var streamActivity = CryptoTrading.Observability.TradingTelemetry.ActivitySource.StartActivity("account-stream.persist");
                 using var streamScope = logger.BeginScope(new Dictionary<string, object?>
@@ -96,8 +103,9 @@ internal sealed class AccountStreamHostedService(
                                 await HandleFeeComparisonFailureAsync(execution, comparison, stoppingToken).ConfigureAwait(false);
                             }
                         }
-                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        catch (Exception ex) when (ex is not OperationCanceledException || fillInProgress)
                         {
+                            accountingFailureDetected = true;
                             using var accountingErrorScope = logger.BeginScope(new Dictionary<string, object?>
                             {
                                 ["error_stack"] = ex.StackTrace,
@@ -105,10 +113,13 @@ internal sealed class AccountStreamHostedService(
                                 ["client_order_id"] = execution.ClientOrderId
                             });
                             AccountStreamLog.Failed(logger, ex.GetType().Name);
-                            await EnterSafeModeAsync("ACCOUNTING_EXECUTION_FAILURE", stoppingToken).ConfigureAwait(false);
+                            await ContainFailureAsync("ACCOUNTING_EXECUTION_FAILURE").ConfigureAwait(false);
+                            throw new InvalidOperationException("Account-stream accounting failed; processing stopped.");
                         }
                     }
                 }
+
+                fillInProgress = false;
 
                 if (userEvent is BinanceUserDataStreamControlEvent control &&
                     control.EventType is "eventStreamTerminated" or "serverShutdown" or "connectionLost")
@@ -138,18 +149,71 @@ internal sealed class AccountStreamHostedService(
                 throw new InvalidOperationException("The account stream ended before host cancellation.");
             }
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested && !accountingFailureDetected && !fillInProgress)
         {
             // Normal host shutdown must not be recorded as an operational fault.
         }
         catch (Exception exception)
         {
             using var errorScope = logger.BeginScope(new Dictionary<string, object?> { ["error_stack"] = exception.StackTrace });
-            await runtimeSupervisor.MarkAccountStreamAsync(false, "account-stream-failure", stoppingToken).ConfigureAwait(false);
-            await EnterSafeModeAsync("ACCOUNT_STREAM_FAILURE", stoppingToken).ConfigureAwait(false);
+            if (!accountingFailureDetected)
+            {
+                await ContainFailureAsync(fillInProgress ? "ACCOUNTING_EXECUTION_FAILURE" : "ACCOUNT_STREAM_FAILURE").ConfigureAwait(false);
+            }
             AccountStreamLog.Failed(logger, exception.GetType().Name);
             // The host logs terminal BackgroundService exceptions; do not forward an upstream payload to it.
             throw new InvalidOperationException("Account stream failed closed; inspect the correlated structured failure event.");
+        }
+    }
+
+    private async Task ContainFailureAsync(string reason)
+    {
+        using var timeout = new CancellationTokenSource(FailureContainmentTimeout, failureTimeProvider);
+        var safeMode = TryEnterSafeModeAsync(reason, timeout.Token);
+        var operations = Task.WhenAll(MarkDisconnectedAsync(timeout.Token), safeMode);
+        try
+        {
+            await operations.WaitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            AccountStreamLog.ControlFailure(logger, "ContainmentTimeout");
+        }
+
+        if (!safeMode.IsCompletedSuccessfully || !await safeMode.ConfigureAwait(false))
+        {
+            AccountStreamLog.SafeModeNotConfirmed(logger);
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "A failed external supervisor must not replace the sanitized terminal failure.")]
+    private async Task MarkDisconnectedAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await runtimeSupervisor.MarkAccountStreamAsync(false, "account-stream-failure", cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            AccountStreamLog.ControlFailure(logger, exception.GetType().Name);
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031", Justification = "A failed external control must not replace the sanitized terminal failure.")]
+    private async Task<bool> TryEnterSafeModeAsync(string reason, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await operationalControl.EnterSafeModeAsync(new OperationalControlCommand(
+                "account-stream", reason, IdempotencyKey.New(), failureTimeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
+            var confirmed = result.Snapshot.Mode is OperationalMode.SafeMode or OperationalMode.KillSwitch;
+            if (confirmed) AccountStreamLog.SafeMode(logger, reason);
+            return confirmed;
+        }
+        catch (Exception exception)
+        {
+            AccountStreamLog.ControlFailure(logger, exception.GetType().Name);
+            return false;
         }
     }
 
@@ -308,4 +372,7 @@ internal static partial class AccountStreamLog
 
     [LoggerMessage(LogLevel.Error, "Account stream SafeMode control failed. ExceptionType={ExceptionType}")]
     public static partial void ControlFailure(ILogger logger, string exceptionType);
+
+    [LoggerMessage(LogLevel.Critical, "SafeMode was not confirmed after account stream failure; further exposure must remain blocked.")]
+    public static partial void SafeModeNotConfirmed(ILogger logger);
 }

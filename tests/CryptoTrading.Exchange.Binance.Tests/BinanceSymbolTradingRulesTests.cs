@@ -73,9 +73,38 @@ public sealed class BinanceSymbolTradingRulesTests
 
         Assert.Equal(12m, rules.MinimumNotional);
         Assert.Equal(1000m, rules.MaximumNotional);
-        Assert.Contains(rules.ExchangeFilters!, filter => filter.FilterType == "MAX_NUM_ORDERS");
+        Assert.Contains(rules.SymbolFilters!, filter => filter.FilterType == "MAX_NUM_ORDERS");
         Assert.Contains(rules.ValidateLimitOrder(100m, 11m).Violations,
             violation => violation.Code == "NOTIONAL_ABOVE_MAXIMUM");
+    }
+
+    [Fact]
+    public void ZeroTickSizeDisablesThePriceTickRule()
+    {
+        var symbol = CreateSymbol() with
+        {
+            Filters =
+            [
+                new("PRICE_FILTER", MinPrice: "0", MaxPrice: "0", TickSize: "0.00000000"),
+                new("LOT_SIZE", MinQty: "0.0001", MaxQty: "9000", StepSize: "0.0001"),
+                new("MIN_NOTIONAL", MinNotional: "10.00", ApplyToMarket: true, AveragePriceMinutes: 5)
+            ]
+        };
+
+        var rules = BinanceSymbolTradingRulesParser.Parse(symbol);
+        var result = rules.ValidateLimitOrder(100.007m, 0.1000m);
+
+        Assert.Equal(0m, rules.PriceTickSize);
+        Assert.True(result.IsValid);
+        Assert.DoesNotContain(result.Violations, violation => violation.Code == "PRICE_TICK_MISMATCH");
+    }
+
+    [Fact]
+    public void NonZeroTickSizeStillRejectsUnalignedPrice()
+    {
+        var result = BinanceSymbolTradingRulesParser.Parse(CreateSymbol()).ValidateLimitOrder(100.007m, 0.1000m);
+
+        Assert.Contains(result.Violations, violation => violation.Code == "PRICE_TICK_MISMATCH");
     }
 
     private static BinanceSymbolInfo CreateSymbol() => new(
@@ -89,5 +118,6 @@ public sealed class BinanceSymbolTradingRulesTests
             new("PRICE_FILTER", MinPrice: "0.01", MaxPrice: "100000.00", TickSize: "0.01"),
             new("LOT_SIZE", MinQty: "0.0001", MaxQty: "9000", StepSize: "0.0001"),
             new("MIN_NOTIONAL", MinNotional: "10.00", ApplyToMarket: true, AveragePriceMinutes: 5)
-        ]);
+        ],
+        OrderTypes: ["LIMIT", "LIMIT_MAKER", "MARKET"]);
 }

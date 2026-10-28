@@ -40,6 +40,14 @@ public sealed class BinanceAuthenticatedClientOptions
     public TimeSpan CommissionCacheDuration { get; set; } = TimeSpan.Zero;
 
     /// <summary>
+    /// Optional TTL for reusing GET /api/v3/myFilters per symbol. Account filter
+    /// configuration changes rarely, and a stale decision is still rejected by
+    /// the venue, so a bounded cache saves 40 weight units per submission.
+    /// Defaults to five minutes; zero always fetches fresh.
+    /// </summary>
+    public TimeSpan AccountFiltersCacheDuration { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
     /// Allows a Spot Testnet account payload to report <c>canWithdraw=true</c>.
     /// This is an observation-only compatibility switch for Testnet diagnostics;
     /// it neither enables nor adds a withdrawal endpoint.
@@ -82,6 +90,12 @@ public sealed class BinanceAuthenticatedClientOptions
         if (string.IsNullOrWhiteSpace(ApiSecret) || ApiSecret.Any(char.IsWhiteSpace))
         {
             throw new ArgumentException("Binance API secret is required and cannot contain whitespace.", nameof(ApiSecret));
+        }
+
+        if (AccountFiltersCacheDuration < TimeSpan.Zero || AccountFiltersCacheDuration > TimeSpan.FromHours(1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(AccountFiltersCacheDuration),
+                "Account filters cache duration must be between zero and one hour.");
         }
 
         if (RecvWindowMilliseconds is < 1 or > 60_000)

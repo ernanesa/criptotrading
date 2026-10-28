@@ -45,12 +45,11 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         {
             var fills = await ReadFillMetricsAsync(connection, period.StartUtc, asOfUtc, targetSymbol, cancellationToken).ConfigureAwait(false);
             var snapshots = await ReadSnapshotPeriodMetricsAsync(connection, period.StartUtc, asOfUtc, targetSymbol, cancellationToken).ConfigureAwait(false);
-            periods.Add(new(period.Name, fills.TradesCount, fills.WinningCount, fills.LosingCount, fills.RealizedPnlQuote, fills.FeesPaidQuote)
+            periods.Add(new(period.Name, fills.RealizedExitFillCount, fills.WinningCount, fills.LosingCount, fills.RealizedPnlQuote, fills.FeesPaidQuote)
             {
                 NetAssetValueDeltaQuote = snapshots.NetAssetValueDeltaQuote,
                 UnrealizedPnlDeltaQuote = snapshots.UnrealizedPnlDeltaQuote,
                 SnapshotAvailability = snapshots.Availability,
-                RealisticNetProfitQuote = fills.RealisticNetPnlQuote,
                 AverageReturnBps = fills.AvgReturnBps,
                 AverageWinBps = fills.AvgWinBps,
                 AverageLossBps = fills.AvgLossBps,
@@ -61,7 +60,7 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
             ? (string.Equals(basis?.Symbol, PerformanceSymbol, StringComparison.OrdinalIgnoreCase) ? basis : await ReadPositionBasisAsync(connection, PerformanceSymbol, cancellationToken).ConfigureAwait(false))
             : null;
 
-        return new(totals.TradesCount, totals.WinningCount, totals.LosingCount, totals.RealizedPnlQuote, totals.FeesPaidQuote,
+        return new(totals.RealizedExitFillCount, totals.WinningCount, totals.LosingCount, totals.RealizedPnlQuote, totals.FeesPaidQuote,
             totals.GrossProfitQuote, totals.GrossLossQuote, periods, btcBasis)
         {
             ScopeSymbol = targetSymbol ?? "PORTFOLIO",
@@ -72,7 +71,6 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
             CurrentNetAssetValueQuote = currentSnapshot?.NetAssetValueQuote,
             CurrentUnrealizedPnlQuote = currentSnapshot?.UnrealizedPnlQuote,
             UnvaluedFeeAmounts = unvaluedFees,
-            RealisticNetPnlQuote = totals.RealisticNetPnlQuote,
             AverageReturnBps = totals.AvgReturnBps,
             AverageWinBps = totals.AvgWinBps,
             AverageLossBps = totals.AvgLossBps,
@@ -154,7 +152,6 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
                    COALESCE(SUM(CASE WHEN actual_commission_quote IS NOT NULL AND commission_valuation_source IS NOT NULL AND commission_valuation_at IS NOT NULL THEN actual_commission_quote ELSE 0 END), 0),
                    COALESCE(SUM(CASE WHEN realized_pnl_quote > 0 THEN realized_pnl_quote ELSE 0 END), 0),
                    COALESCE(SUM(CASE WHEN realized_pnl_quote < 0 THEN -realized_pnl_quote ELSE 0 END), 0),
-                   ROUND(COALESCE(SUM(realized_pnl_quote - 0.0018 * (price * quantity)) FILTER (WHERE realized_pnl_quote IS NOT NULL), 0), 8),
                    ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote IS NOT NULL), 2),
                    ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote > 0), 2),
                    ROUND(AVG(realized_pnl_quote / NULLIF(price * quantity, 0) * 10000) FILTER (WHERE realized_pnl_quote < 0), 2)
@@ -169,9 +166,9 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         command.Parameters.Add(Parameter("start_utc", NpgsqlDbType.TimestampTz, startUtc.HasValue ? startUtc.Value : DBNull.Value));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         _ = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-        var avgReturnBps = await reader.IsDBNullAsync(8, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(8);
-        var avgWinBps = await reader.IsDBNullAsync(9, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(9);
-        var avgLossBps = await reader.IsDBNullAsync(10, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(10);
+        var avgReturnBps = await reader.IsDBNullAsync(7, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(7);
+        var avgWinBps = await reader.IsDBNullAsync(8, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(8);
+        var avgLossBps = await reader.IsDBNullAsync(9, cancellationToken).ConfigureAwait(false) ? (decimal?)null : reader.GetDecimal(9);
         return new(
             checked((int)reader.GetInt64(0)),
             checked((int)reader.GetInt64(1)),
@@ -180,7 +177,6 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
             reader.GetDecimal(4),
             reader.GetDecimal(5),
             reader.GetDecimal(6),
-            reader.GetDecimal(7),
             avgReturnBps,
             avgWinBps,
             avgLossBps);
@@ -301,15 +297,20 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
         if (snapshot.NetAssetValueQuote < 0m) throw new ArgumentOutOfRangeException(nameof(snapshot), "Net asset value cannot be negative.");
     }
 
+    /// <summary>
+    /// Metrics aggregated per realized exit fill. <see cref="RealizedExitFillCount"/>
+    /// is not a closed-trade count: one position exit split across fills counts
+    /// multiple times. Accounting PnL already includes commissions, so no
+    /// estimated spread/slippage is subtracted on top.
+    /// </summary>
     private sealed record FillMetrics(
-        int TradesCount,
+        int RealizedExitFillCount,
         int WinningCount,
         int LosingCount,
         decimal RealizedPnlQuote,
         decimal FeesPaidQuote,
         decimal GrossProfitQuote,
         decimal GrossLossQuote,
-        decimal RealisticNetPnlQuote,
         decimal? AvgReturnBps,
         decimal? AvgWinBps,
         decimal? AvgLossBps);

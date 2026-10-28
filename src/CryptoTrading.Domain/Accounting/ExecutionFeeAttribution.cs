@@ -65,7 +65,7 @@ public enum ExecutionFeeComparisonStatus
 
 public sealed record ExecutionFeeComparison(
     ExecutionFeeComparisonStatus Status,
-    decimal ExpectedQuote,
+    decimal? ExpectedQuote,
     decimal? ActualQuote,
     decimal? DeviationBps,
     string Reason,
@@ -123,7 +123,7 @@ public static class ExecutionFeeDriftEvaluator
     {
         if (estimate is null)
         {
-            return new(ExecutionFeeComparisonStatus.NotComparable, 0m, null, null, "FEE_ESTIMATE_UNAVAILABLE", null, null);
+            return new(ExecutionFeeComparisonStatus.NotComparable, null, null, null, "FEE_ESTIMATE_UNAVAILABLE", null, null);
         }
 
         if (toleranceBps < 0m || toleranceBps > 10_000m)

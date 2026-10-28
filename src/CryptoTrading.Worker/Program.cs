@@ -30,6 +30,7 @@ if (args.Length > 0 && (string.Equals(args[0], "--health-probe", StringCompariso
 }
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddWorkerFailureSafety();
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole(options =>
 {

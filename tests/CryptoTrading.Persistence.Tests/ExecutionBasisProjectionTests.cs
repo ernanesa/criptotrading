@@ -102,7 +102,53 @@ public sealed class ExecutionBasisProjectionTests
         }
     }
 
-    private static ExecutionAccountingCommand CreateSell(decimal baseFee)
+    [Theory]
+    [InlineData(null, "client-A")]
+    [InlineData("client-A", null)]
+    [InlineData("client-A", "client-B")]
+    public void ReplayRejectsMissingOrConflictingClientOrderIdentity(string? persistedId, string? replayId)
+    {
+        var command = CreateSell(0m, replayId);
+        var facts = new ExecutionReplayFacts(command.TradeId, command.OrderId, command.Symbol.Value,
+            command.BaseAsset.Value, command.QuoteAsset.Value, "SELL", command.Quantity.Value,
+            command.Price.Value, command.Commission.Amount, command.Commission.Asset.Value,
+            command.OccurredAtUtc, command.LedgerEntryId.Value, persistedId);
+
+        Assert.Throws<InvalidOperationException>(() => PostgresTradingStore.ValidateExecutionReplayFacts(facts, command));
+    }
+
+    [Fact]
+    public void ReplayRestoresFeeAndQualityFromPersistedEvidenceWithoutInventingLegacyValues()
+    {
+        Assert.Null(PostgresTradingStore.RestorePersistedFeeComparison(null, null, null, null, null, null, null));
+        Assert.Null(PostgresTradingStore.RestorePersistedQualityComparison(null, null, null, null, null));
+        var observedAt = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var fee = PostgresTradingStore.RestorePersistedFeeComparison("DRIFT", 1m, 2m, 10m, "EXECUTION_FEE_DRIFT", "recorded-source", observedAt);
+        var quality = PostgresTradingStore.RestorePersistedQualityComparison(0.5m, 3m, 123, "COMPARABLE", "EXECUTION_QUALITY_COMPARABLE");
+
+        Assert.NotNull(fee);
+        Assert.Equal(ExecutionFeeComparisonStatus.Drift, fee.Status);
+        Assert.Equal(1m, fee.ExpectedQuote);
+        Assert.Equal(observedAt, fee.ValuationAtUtc);
+        Assert.NotNull(quality);
+        Assert.Equal(0.5m, quality.FillRatio);
+        Assert.Equal(123, quality.DecisionToFillLatencyMilliseconds);
+        Assert.Throws<InvalidOperationException>(() => PostgresTradingStore.RestorePersistedFeeComparison("UNKNOWN", 1m, 2m, null, "bad", null, null));
+    }
+
+    [Fact]
+    public void ReplayPreservesLegacyUncomparableFeeWithoutInventingExpectedCost()
+    {
+        var fee = PostgresTradingStore.RestorePersistedFeeComparison(
+            "NOT_COMPARABLE", null, null, null, "FEE_ESTIMATE_UNAVAILABLE", null, null);
+
+        Assert.NotNull(fee);
+        Assert.Equal(ExecutionFeeComparisonStatus.NotComparable, fee.Status);
+        Assert.Null(fee.ExpectedQuote);
+        Assert.Equal("FEE_ESTIMATE_UNAVAILABLE", fee.Reason);
+    }
+
+    private static ExecutionAccountingCommand CreateSell(decimal baseFee, string? clientOrderId = null)
     {
         var baseAsset = new Asset("BTC");
         var quoteAsset = new Asset("USDT");
@@ -110,6 +156,6 @@ public sealed class ExecutionBasisProjectionTests
             "unit-execution", 1, 1, new Symbol("BTCUSDT"), baseAsset, quoteAsset,
             OrderSide.Sell, new Quantity(1m), new Price(120m), new Money(baseFee, baseAsset),
             new AccountId("wallet"), new AccountId("fees"), LedgerEntryId.New(), CorrelationId.New(),
-            IdempotencyKey.New(), new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+            IdempotencyKey.New(), new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), clientOrderId: clientOrderId);
     }
 }

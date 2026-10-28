@@ -261,7 +261,7 @@ public sealed class BinanceUserDataStreamClient : IBinanceUserDataStreamClient
                 {
                     await foreach (var payload in transport.ReadMessagesAsync(cancellationToken).ConfigureAwait(false))
                     {
-                        var parsed = BinanceUserDataParser.TryParse(payload.Span, timeProvider.GetUtcNow());
+                        var parsed = BinanceUserDataParser.TryParse(payload, timeProvider.GetUtcNow());
                         if (parsed is not null)
                         {
                             yield return parsed;
@@ -312,14 +312,30 @@ public sealed class BinanceUserDataStreamClient : IBinanceUserDataStreamClient
 
 internal static class BinanceUserDataParser
 {
-    public static BinanceUserDataEvent? TryParse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAtUtc)
+    public static BinanceUserDataEvent? TryParse(ReadOnlyMemory<byte> payload, DateTimeOffset receivedAtUtc)
     {
         try
         {
-            using var document = JsonDocument.Parse(payload.ToArray());
-            var root = document.RootElement;
+            using var document = JsonDocument.Parse(payload);
+            return TryParse(document.RootElement, receivedAtUtc);
+        }
+        catch (Exception exception) when (exception is JsonException or FormatException or OverflowException)
+        {
+            return null;
+        }
+    }
+
+    public static BinanceUserDataEvent? TryParse(JsonElement root, DateTimeOffset receivedAtUtc)
+    {
+        try
+        {
             var eventRoot = root.TryGetProperty("event", out var nested) ? nested : root;
-            var eventType = eventRoot.GetProperty("e").GetString();
+            if (!eventRoot.TryGetProperty("e", out var eventTypeProp))
+            {
+                return null;
+            }
+
+            var eventType = eventTypeProp.GetString();
             return eventType switch
             {
                 "executionReport" => ParseExecution(eventRoot, receivedAtUtc),
@@ -331,6 +347,11 @@ internal static class BinanceUserDataParser
         {
             return null;
         }
+    }
+
+    public static BinanceUserDataEvent? TryParse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAtUtc)
+    {
+        return TryParse((ReadOnlyMemory<byte>)payload.ToArray(), receivedAtUtc);
     }
 
     private static BinanceExecutionReportEvent ParseExecution(JsonElement root, DateTimeOffset receivedAtUtc) =>

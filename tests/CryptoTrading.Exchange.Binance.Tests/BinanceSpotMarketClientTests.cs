@@ -103,7 +103,7 @@ public sealed class BinanceSpotMarketClientTests
     public async Task GetTradingRulesParsesFiltersFromExchangeInfo()
     {
         using var httpClient = CreateHttpClient(
-            "{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8,\"filters\":[{\"filterType\":\"PRICE_FILTER\",\"minPrice\":\"0.01\",\"maxPrice\":\"100000\",\"tickSize\":\"0.01\"},{\"filterType\":\"LOT_SIZE\",\"minQty\":\"0.0001\",\"maxQty\":\"9000\",\"stepSize\":\"0.0001\"},{\"filterType\":\"MIN_NOTIONAL\",\"minNotional\":\"10\"}]}]}");
+            "{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8,\"filters\":[{\"filterType\":\"PRICE_FILTER\",\"minPrice\":\"0.01\",\"maxPrice\":\"100000\",\"tickSize\":\"0.01\"},{\"filterType\":\"LOT_SIZE\",\"minQty\":\"0.0001\",\"maxQty\":\"9000\",\"stepSize\":\"0.0001\"},{\"filterType\":\"MIN_NOTIONAL\",\"minNotional\":\"10\"}],\"orderTypes\":[\"LIMIT\",\"LIMIT_MAKER\",\"MARKET\"]}]}");
         var client = new BinanceSpotMarketClient(httpClient);
 
         var rules = await client.GetTradingRulesAsync("btcusdt", cancellationToken: TestContext.Current.CancellationToken);

@@ -30,7 +30,6 @@ jobs:
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           global-json-file: global.json
-          dotnet-quality: preview
 
       - name: Show SDK
         run: dotnet --info
@@ -155,7 +154,6 @@ jobs:
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           global-json-file: global.json
-          dotnet-quality: preview
 
       - name: Restore locked .NET dependencies
         run: dotnet restore CryptoTrading.slnx --locked-mode

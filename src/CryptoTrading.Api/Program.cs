@@ -643,7 +643,6 @@ localDiagnostics.MapGet("/portfolio/performance", async (
         totalProfitPctAvailabilityReason = "UNKNOWN_UNTIL_BASELINE_AND_EXTERNAL_CASH_FLOWS_ARE_DURABLE",
         totalRealizedPnlUsd,
         totalUnrealizedPnlUsd,
-        realisticNetProfitUsd = metrics.RealisticNetPnlQuote,
         averageReturnBps = metrics.AverageReturnBps,
         averageWinBps = metrics.AverageWinBps,
         averageLossBps = metrics.AverageLossBps,
@@ -665,7 +664,6 @@ localDiagnostics.MapGet("/portfolio/performance", async (
                 ? Math.Round(periodProfit / totalNavUsd * 100m, 2)
                 : (decimal?)null,
             realizedProfitUsd = period.RealizedPnlQuote,
-            realisticProfitUsd = period.RealisticNetProfitQuote,
             averageReturnBps = period.AverageReturnBps,
             averageWinBps = period.AverageWinBps,
             averageLossBps = period.AverageLossBps,

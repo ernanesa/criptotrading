@@ -215,6 +215,22 @@ public sealed class PostgresTradingStoreIntegrationTests
             first.LedgerEntryId, first.CorrelationId, first.IdempotencyKey, first.OccurredAtUtc);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             store.RecordExecutionAsync(conflictingOrder, TestContext.Current.CancellationToken));
+        var conflictingClientId = new ExecutionAccountingCommand(
+            first.ExecutionId, first.TradeId, first.OrderId, first.Symbol, first.BaseAsset, first.QuoteAsset,
+            first.Side, first.Quantity, first.Price, first.Commission, first.WalletAccount, first.FeesAccount,
+            first.LedgerEntryId, first.CorrelationId, first.IdempotencyKey, first.OccurredAtUtc, clientOrderId: "different-client");
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.RecordExecutionAsync(conflictingClientId, TestContext.Current.CancellationToken));
+        var laterEstimate = new ExecutionFeeEstimate(0.001m, "offline-snapshot", "unit-test",
+            first.OccurredAtUtc.AddMinutes(-1), first.OccurredAtUtc.AddMinutes(1));
+        var replayWithChangedEstimate = new ExecutionAccountingCommand(
+            first.ExecutionId, first.TradeId, first.OrderId, first.Symbol, first.BaseAsset, first.QuoteAsset,
+            first.Side, first.Quantity, first.Price, first.Commission, first.WalletAccount, first.FeesAccount,
+            first.LedgerEntryId, first.CorrelationId, first.IdempotencyKey, first.OccurredAtUtc, feeEstimate: laterEstimate);
+        var historical = await store.RecordExecutionAsync(replayWithChangedEstimate, TestContext.Current.CancellationToken);
+        Assert.True(historical.IsDuplicate);
+        Assert.Equal(firstResult.FeeComparison, historical.FeeComparison);
+        Assert.Equal(firstResult.QualityComparison, historical.QualityComparison);
 
         var sell = ExecutionCommand("sell-" + suffix, 1002, OrderSide.Sell, .5m, 120m, .05m, symbol, baseAsset, quoteAsset, wallet, fees);
         var sellResult = await store.RecordExecutionAsync(sell, cancellationToken: TestContext.Current.CancellationToken);
@@ -1048,7 +1064,7 @@ public sealed class PostgresTradingStoreIntegrationTests
             dataset.Bars,
             parameters,
             BacktestEvaluationOptions.DailyCrypto(),
-            WalkForwardPlan.Create(dataset.Bars.Count, 60, 20, 20));
+            WalkForwardPlan.Create(dataset.Bars.Count, 60, 20, 20).Take(1).ToArray());
         var preregistration = new ExperimentPreregistration(
             ExperimentId.New(),
             "integration-governed-evidence",

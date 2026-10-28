@@ -11,7 +11,7 @@ namespace CryptoTrading.Exchange.Binance;
 /// Binance Spot signed client restricted to account-state reads.
 /// The request builder only emits GET requests and the public surface has no mutation endpoint.
 /// </summary>
-public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
+public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinanceAccountFiltersProvider, IBinanceAccountTradingStateProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient httpClient;
@@ -19,8 +19,10 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     private readonly IBinanceClockDriftEstimator clock;
     private readonly TimeProvider timeProvider;
     private readonly BinanceRequestRetryPolicy retryPolicy;
+    private readonly BinanceRateLimitGate rateLimitGate;
     private volatile CachedAccountEntry? cachedAccount;
     private readonly ConcurrentDictionary<string, CachedCommissionEntry> cachedCommissions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, BinanceAccountFilters> cachedFilters = new(StringComparer.OrdinalIgnoreCase);
 
     private sealed record CachedAccountEntry(BinanceAccountSnapshot Snapshot, DateTimeOffset FetchedAtUtc);
     private sealed record CachedCommissionEntry(BinanceCommissionSnapshot Snapshot, DateTimeOffset FetchedAtUtc);
@@ -30,7 +32,8 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         BinanceAuthenticatedClientOptions options,
         IBinanceClockDriftEstimator? clock = null,
         TimeProvider? timeProvider = null,
-        BinanceRequestRetryPolicy? retryPolicy = null)
+        BinanceRequestRetryPolicy? retryPolicy = null,
+        BinanceRateLimitGate? rateLimitGate = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
@@ -38,6 +41,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         this.clock = clock ?? new BinanceClockDriftEstimator(timeProvider);
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.retryPolicy = retryPolicy ?? new BinanceRequestRetryPolicy();
+        this.rateLimitGate = rateLimitGate ?? new BinanceRateLimitGate();
     }
 
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
@@ -88,6 +92,82 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
         var orders = await SendSignedAsync<List<BinanceOpenOrder>>("v3/openOrders", parameters, cancellationToken).ConfigureAwait(false);
         return BinanceAuthenticatedResponseValidator.Validate(orders);
     }
+
+    /// <summary>
+    /// Queries <c>GET /api/v3/myFilters</c> (USER_DATA, weight 40). This is the
+    /// only endpoint that reports whether the account has MAX_ASSET filters.
+    /// The result is evidence only; it does not authorize an order by itself.
+    /// </summary>
+    public async Task<BinanceAccountFilters> GetAccountFiltersAsync(
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        if (options.AccountFiltersCacheDuration > TimeSpan.Zero &&
+            cachedFilters.TryGetValue(normalizedSymbol, out var cached) &&
+            timeProvider.GetUtcNow() >= cached.ObservedAtUtc &&
+            timeProvider.GetUtcNow() - cached.ObservedAtUtc <= options.AccountFiltersCacheDuration)
+        {
+            // ObservedAtUtc is preserved so callers can see the evidence age.
+            return cached;
+        }
+
+        await EnsureClockSynchronizedAsync(cancellationToken).ConfigureAwait(false);
+        var filters = await SendSignedAsync<BinanceAccountFilters>(
+            "v3/myFilters",
+            [new("symbol", normalizedSymbol)],
+            cancellationToken).ConfigureAwait(false) with
+        {
+            ObservedAtUtc = timeProvider.GetUtcNow()
+        };
+
+        if (options.AccountFiltersCacheDuration > TimeSpan.Zero)
+        {
+            cachedFilters[normalizedSymbol] = filters;
+        }
+
+        return filters;
+    }
+
+    /// <summary>
+    /// Account-wide open order count. Binance caps this per interval; an
+    /// unavailable count must be treated as unknown, never as zero.
+    /// </summary>
+    /// <summary>
+    /// Single snapshot for order-count and MAX_POSITION checks. Binance defines
+    /// an account's base position as free + locked balance plus the open BUY
+    /// order quantity, so both reads must describe the same instant.
+    /// </summary>
+    public async Task<BinanceAccountTradingState> GetTradingStateAsync(
+        string symbol,
+        string baseAsset,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(baseAsset);
+        var normalizedSymbol = NormalizeSymbol(symbol);
+
+        var accountTask = GetAccountAsync(cancellationToken);
+        var ordersTask = GetOpenOrdersAsync(null, cancellationToken);
+        await Task.WhenAll(accountTask, ordersTask).ConfigureAwait(false);
+
+        var account = await accountTask.ConfigureAwait(false);
+        var orders = await ordersTask.ConfigureAwait(false);
+        var balance = account.Balances
+            .Where(item => string.Equals(item.Asset, baseAsset, StringComparison.Ordinal))
+            .SingleOrDefault();
+
+        var position = (balance is null ? 0m : ParseExact(balance.Free) + ParseExact(balance.Locked)) +
+            orders.Where(order => string.Equals(order.Symbol, normalizedSymbol, StringComparison.Ordinal) &&
+                                  string.Equals(order.Side, "BUY", StringComparison.Ordinal))
+                  .Sum(order => Math.Max(0m, ParseExact(order.OriginalQuantity) - ParseExact(order.ExecutedQuantity)));
+
+        var symbolOrderCount = orders.Count(order => string.Equals(order.Symbol, normalizedSymbol, StringComparison.Ordinal));
+        return new BinanceAccountTradingState(
+            orders.Count, symbolOrderCount, position, timeProvider.GetUtcNow(), account.CanTrade);
+    }
+
+    private static decimal ParseExact(string? raw) =>
+        decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var value) ? value : 0m;
 
     public async Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(
         string symbol,
@@ -192,6 +272,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
     {
         for (var attempt = 0; ; attempt++)
         {
+            await rateLimitGate.WaitAsync(timeProvider, cancellationToken).ConfigureAwait(false);
             var queryParameters = new List<KeyValuePair<string, string>>(parameters.Count + 2);
             queryParameters.AddRange(parameters);
             queryParameters.Add(new("recvWindow", options.RecvWindowMilliseconds.ToString(CultureInfo.InvariantCulture)));
@@ -204,12 +285,14 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient
             using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
+                var observedAt = timeProvider.GetUtcNow();
+                rateLimitGate.ObserveResponse(response, observedAt);
                 if (!retryPolicy.ShouldRetry(response.StatusCode, attempt))
                 {
                     throw new BinanceApiException(response.StatusCode, endpoint);
                 }
 
-                var delay = retryPolicy.GetDelay(response, attempt, timeProvider.GetUtcNow());
+                var delay = retryPolicy.GetDelay(response, attempt, observedAt);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                 continue;
             }

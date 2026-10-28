@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +17,11 @@ public sealed record ExperimentEvidenceInput
     public required string Decision { get; init; }
     public required IReadOnlyDictionary<string, decimal> BenchmarkNetReturns { get; init; }
     public required string BenchmarkComparisonFingerprint { get; init; }
+    public BacktestExecutionTiming? ExecutionTiming { get; init; }
+    public string? EvaluationAssumptionsFingerprint { get; init; }
+    public string? ObservedSeriesFingerprint { get; init; }
+    public string? ObservedSeriesFingerprintVersion { get; init; }
+    public string? DeclaredDatasetContentHash { get; init; }
     public required IReadOnlyDictionary<string, string> SourceVersions { get; init; }
     public required IReadOnlyCollection<string> TraceabilityReferences { get; init; }
 }
@@ -38,9 +44,11 @@ public sealed record ExperimentEvidenceBundle(
 public static class ExperimentEvidenceWriter
 {
     public const string SchemaVersion = "experiment-evidence/v1";
+    public const string ProvenanceSchemaVersion = "experiment-evidence/v2";
+    public const string DatasetProvenanceSchemaVersion = "experiment-evidence/v3";
+    public const string WindowProvenanceSchemaVersion = "experiment-evidence/v4";
     public const string ManifestSchemaVersion = "experiment-evidence-manifest/v1";
     private static readonly Encoding Utf8 = new UTF8Encoding(false);
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.General) { WriteIndented = false };
 
     public static ExperimentEvidenceInput FromWalkForward(
         string experimentId,
@@ -55,6 +63,12 @@ public static class ExperimentEvidenceWriter
         IReadOnlyCollection<string> traceabilityReferences)
     {
         ArgumentNullException.ThrowIfNull(evaluation);
+        decision = Required(decision, nameof(decision));
+        if (decision is "PaperEligible" or "ShadowEligible" or "CanaryEligible")
+        {
+            throw new InvalidOperationException("Eligible evidence is disabled until independent dataset verification and statistical gates are implemented.");
+        }
+
         var summary = evaluation.GetBenchmarkSummary();
         return new ExperimentEvidenceInput
         {
@@ -72,6 +86,11 @@ public static class ExperimentEvidenceWriter
                 ["strategy/walk-forward"] = summary.StrategyNetReturn,
             },
             BenchmarkComparisonFingerprint = summary.Fingerprint,
+            ExecutionTiming = evaluation.ExecutionTiming,
+            EvaluationAssumptionsFingerprint = evaluation.EvaluationAssumptionsFingerprint,
+            ObservedSeriesFingerprint = evaluation.ObservedSeriesFingerprint,
+            ObservedSeriesFingerprintVersion = evaluation.ObservedSeriesFingerprint is null ? null : evaluation.ObservedSeriesFingerprintVersion,
+            DeclaredDatasetContentHash = evaluation.ObservedSeriesFingerprint is null ? null : evaluation.Dataset.ContentHash,
             SourceVersions = sourceVersions,
             TraceabilityReferences = traceabilityReferences,
         };
@@ -160,10 +179,13 @@ public static class ExperimentEvidenceWriter
 
         ArgumentNullException.ThrowIfNull(input.BenchmarkNetReturns);
         if (!input.BenchmarkNetReturns.ContainsKey("NO_TRADE/cash") ||
-            !input.BenchmarkNetReturns.ContainsKey("buy-and-hold"))
+            !input.BenchmarkNetReturns.ContainsKey("buy-and-hold") ||
+            input.BenchmarkNetReturns.Keys.Any(static key => key is not ("NO_TRADE/cash" or "buy-and-hold" or "strategy/walk-forward")))
         {
-            throw new ArgumentException("Both NO_TRADE/cash and buy-and-hold benchmarks are required.", nameof(input));
+            throw new ArgumentException("Evidence must use the supported benchmark labels and include cash and buy-and-hold.", nameof(input));
         }
+
+        ValidateSourceVersions(input.SourceVersions);
 
         var decision = Required(input.Decision, nameof(input.Decision));
         if (!new[] { "Rejected", "Iterate", "PaperEligible", "ShadowEligible", "CanaryEligible" }
@@ -177,46 +199,134 @@ public static class ExperimentEvidenceWriter
             throw new InvalidOperationException("A contaminated holdout cannot produce an eligible decision.");
         }
 
-        var references = ValidateReferences(input.TraceabilityReferences);
-        var canonicalJson = JsonSerializer.Serialize(new
+        if (decision is "PaperEligible" or "ShadowEligible" or "CanaryEligible")
         {
-            schema_version = SchemaVersion,
-            experiment_id = input.ExperimentId,
-            preregistration_sha256 = input.PreregistrationSha256.ToUpperInvariant(),
-            trial_count = input.TrialCount,
-            trial_budget = input.TrialBudget,
-            holdout_access_count = input.HoldoutAccessCount,
-            holdout_contaminated = input.HoldoutContaminated,
-            decision,
-            benchmark_net_returns = input.BenchmarkNetReturns.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
-            benchmark_comparison_fingerprint = input.BenchmarkComparisonFingerprint.ToUpperInvariant(),
-            source_versions = input.SourceVersions.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal),
-        }, JsonOptions);
+            throw new InvalidOperationException("Eligible evidence is disabled until independent dataset verification and statistical gates are implemented.");
+        }
+
+        if ((input.ExecutionTiming is not null || input.EvaluationAssumptionsFingerprint is not null ||
+             input.ObservedSeriesFingerprint is not null || input.DeclaredDatasetContentHash is not null) &&
+            !input.BenchmarkNetReturns.ContainsKey("strategy/walk-forward"))
+        {
+            throw new ArgumentException("Versioned walk-forward evidence must include the strategy return.", nameof(input));
+        }
+
+        if (input.EvaluationAssumptionsFingerprint is not null)
+        {
+            ValidateSha(input.EvaluationAssumptionsFingerprint, nameof(input.EvaluationAssumptionsFingerprint));
+        }
+
+        if ((input.ObservedSeriesFingerprint is null) != (input.DeclaredDatasetContentHash is null))
+        {
+            throw new InvalidOperationException("Observed series and declared dataset hashes must be provided together.");
+        }
+
+        if (input.ObservedSeriesFingerprint is not null)
+        {
+            ValidateSha(input.ObservedSeriesFingerprint, nameof(input.ObservedSeriesFingerprint));
+            ValidateSha(input.DeclaredDatasetContentHash!, nameof(input.DeclaredDatasetContentHash));
+        }
+
+        if (input.ObservedSeriesFingerprintVersion is not null &&
+            (input.ObservedSeriesFingerprint is null || input.ObservedSeriesFingerprintVersion != WalkForwardObservedIdentity.Version))
+        {
+            throw new InvalidOperationException("Observed-series fingerprint version is invalid or missing its hash.");
+        }
+
+        if (input.ExecutionTiming is { } timing && timing is not (BacktestExecutionTiming.NextBarClose or BacktestExecutionTiming.LegacySignalBarClose))
+        {
+            throw new InvalidOperationException("Execution timing is unknown.");
+        }
+
+        var references = ValidateReferences(input.TraceabilityReferences);
+        var hasProvenance = input.ExecutionTiming is not null || input.EvaluationAssumptionsFingerprint is not null;
+        var hasDataProvenance = input.ObservedSeriesFingerprint is not null;
+        var artifactSchema = input.ObservedSeriesFingerprintVersion is not null ? WindowProvenanceSchemaVersion :
+            hasDataProvenance ? DatasetProvenanceSchemaVersion : hasProvenance ? ProvenanceSchemaVersion : SchemaVersion;
+        var canonicalJson = SerializeEvidence(input, artifactSchema, decision, hasProvenance, hasDataProvenance);
         var artifact = new ExperimentEvidenceArtifact(
-            SchemaVersion, input.ExperimentId, decision, canonicalJson,
+            artifactSchema, input.ExperimentId, decision, canonicalJson,
             Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(canonicalJson))));
 
         Directory.CreateDirectory(directory);
         var artifactPath = Path.Combine(directory, input.ExperimentId + ".experiment.json");
         var manifestPath = Path.Combine(directory, input.ExperimentId + ".experiment.manifest.json");
-        var manifestJson = JsonSerializer.Serialize(new
-        {
-            schema_version = ManifestSchemaVersion,
-            experiment_id = input.ExperimentId,
-            artifact_file = Path.GetFileName(artifactPath),
-            artifact_schema_version = artifact.SchemaVersion,
-            artifact_sha256 = artifact.Sha256,
-            decision,
-            generated_at_utc = generatedAtUtc,
-            traceability_references = references,
-            promotion_authorized = false,
-        }, JsonOptions);
+        var manifestJson = SerializeManifest(input.ExperimentId, Path.GetFileName(artifactPath), artifact, decision, generatedAtUtc, references);
         WriteImmutable(artifactPath, canonicalJson);
         WriteImmutable(manifestPath, manifestJson);
         return new(artifact, artifactPath, manifestPath, manifestJson,
             Convert.ToHexString(SHA256.HashData(Utf8.GetBytes(manifestJson))));
+    }
+
+    private static string SerializeEvidence(ExperimentEvidenceInput input, string schema, string decision, bool hasProvenance, bool hasDataProvenance)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("schema_version", schema);
+            writer.WriteString("experiment_id", input.ExperimentId);
+            writer.WriteString("preregistration_sha256", input.PreregistrationSha256.ToUpperInvariant());
+            writer.WriteNumber("trial_count", input.TrialCount);
+            writer.WriteNumber("trial_budget", input.TrialBudget);
+            writer.WriteNumber("holdout_access_count", input.HoldoutAccessCount);
+            writer.WriteBoolean("holdout_contaminated", input.HoldoutContaminated);
+            writer.WriteString("decision", decision);
+            writer.WriteStartObject("benchmark_net_returns");
+            foreach (var pair in input.BenchmarkNetReturns.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+            {
+                writer.WriteNumber(pair.Key, pair.Value);
+            }
+            writer.WriteEndObject();
+            writer.WriteString("benchmark_comparison_fingerprint", input.BenchmarkComparisonFingerprint.ToUpperInvariant());
+            if (hasProvenance || hasDataProvenance)
+            {
+                writer.WriteString("execution_timing", input.ExecutionTiming?.ToString());
+                writer.WriteString("evaluation_assumptions_fingerprint", input.EvaluationAssumptionsFingerprint?.ToUpperInvariant());
+            }
+            if (hasDataProvenance)
+            {
+                writer.WriteString("observed_series_fingerprint", input.ObservedSeriesFingerprint!.ToUpperInvariant());
+                writer.WriteString("declared_dataset_content_hash", input.DeclaredDatasetContentHash!.ToUpperInvariant());
+                if (input.ObservedSeriesFingerprintVersion is not null)
+                {
+                    writer.WriteString("observed_series_fingerprint_version", input.ObservedSeriesFingerprintVersion);
+                }
+            }
+            writer.WriteStartObject("source_versions");
+            foreach (var pair in input.SourceVersions.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+            {
+                writer.WriteString(pair.Key, pair.Value);
+            }
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        }
+
+        return Utf8.GetString(buffer.WrittenSpan);
+    }
+
+    private static string SerializeManifest(string experimentId, string artifactFile, ExperimentEvidenceArtifact artifact,
+        string decision, DateTimeOffset generatedAtUtc, IReadOnlyList<string> references)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("schema_version", ManifestSchemaVersion);
+            writer.WriteString("experiment_id", experimentId);
+            writer.WriteString("artifact_file", artifactFile);
+            writer.WriteString("artifact_schema_version", artifact.SchemaVersion);
+            writer.WriteString("artifact_sha256", artifact.Sha256);
+            writer.WriteString("decision", decision);
+            writer.WriteString("generated_at_utc", generatedAtUtc);
+            writer.WriteStartArray("traceability_references");
+            foreach (var reference in references) writer.WriteStringValue(reference);
+            writer.WriteEndArray();
+            writer.WriteBoolean("promotion_authorized", false);
+            writer.WriteEndObject();
+        }
+
+        return Utf8.GetString(buffer.WrittenSpan);
     }
 
     private static string[] ValidateReferences(IReadOnlyCollection<string> references)
@@ -232,30 +342,73 @@ public static class ExperimentEvidenceWriter
         return normalized;
     }
 
+    private static void ValidateSourceVersions(IReadOnlyDictionary<string, string> versions)
+    {
+        ArgumentNullException.ThrowIfNull(versions);
+        if (versions.Count > 16)
+        {
+            throw new ArgumentException("Too many source-version entries.", nameof(versions));
+        }
+
+        foreach (var pair in versions)
+        {
+            if (pair.Key is not ("dataset" or "dataset_version" or "code_commit" or "dependency_lock" or "strategy" or "git" or "commit" or "model" or "sdk" or "runtime" or "engine" or "exchange" or "algorithm" or "fees") ||
+                string.IsNullOrWhiteSpace(pair.Value) || pair.Value.Length > 128 || LooksSensitive(pair.Value) ||
+                pair.Value.Any(static character => !char.IsAsciiLetterOrDigit(character) && character is not ('.' or '-' or '_' or '/' or '+')) ||
+                (pair.Key == "code_commit" && !(pair.Value.Length is 40 or 64 && pair.Value.All(Uri.IsHexDigit))) ||
+                (pair.Key == "dependency_lock" && !(pair.Value.Length == 64 && pair.Value.All(Uri.IsHexDigit))) ||
+                !(pair.Value.Contains('.', StringComparison.Ordinal) || pair.Value.Contains("/v", StringComparison.OrdinalIgnoreCase) ||
+                  (pair.Value.Length is 40 or 64 && pair.Value.All(Uri.IsHexDigit)) ||
+                  (pair.Value.Length > 1 && (pair.Value[0] is 'v' or 'V') && pair.Value[1..].All(char.IsAsciiDigit))))
+            {
+                throw new ArgumentException("Source versions must use supported keys and bounded version or fingerprint metadata.", nameof(versions));
+            }
+        }
+    }
+
     private static void WriteImmutable(string path, string content)
     {
         var bytes = Utf8.GetBytes(content);
+        if (new FileInfo(path).LinkTarget is not null)
+        {
+            throw new IOException("Evidence destination must not be a symbolic link.");
+        }
+
         if (File.Exists(path))
         {
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+            {
+                var mode = File.GetUnixFileMode(path);
+                var disallowed = UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
+                if ((mode & UnixFileMode.UserRead) == 0 || (mode & disallowed) != 0)
+                {
+                    throw new UnauthorizedAccessException("Existing evidence permissions are not suitable for safe replay.");
+                }
+            }
+
             if (!File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
             {
                 throw new IOException($"Evidence file already exists with different content: {path}");
             }
 
-            RestrictPermissions(path);
             return;
         }
 
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
-            using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            var fileOptions = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None };
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+            {
+                fileOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+            }
+            using (var stream = new FileStream(temporary, fileOptions))
             {
                 stream.Write(bytes);
                 stream.Flush(flushToDisk: true);
             }
 
-            RestrictPermissions(temporary);
             File.Move(temporary, path);
         }
         finally
@@ -297,11 +450,4 @@ public static class ExperimentEvidenceWriter
         }
     }
 
-    private static void RestrictPermissions(string path)
-    {
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-    }
 }

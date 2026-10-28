@@ -202,7 +202,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
                             break;
                         }
 
-                        var parsed = ParseMessage(enumerator.Current.Span, timeProvider.GetUtcNow());
+                        var parsed = ParseMessage(enumerator.Current, timeProvider.GetUtcNow());
                         if (parsed is null)
                         {
                             continue;
@@ -332,7 +332,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             throw new BinanceUserDataStreamProtocolException("WebSocket API closed before subscription acknowledgement.");
         }
 
-        using var document = JsonDocument.Parse(enumerator.Current.ToArray());
+        using var document = JsonDocument.Parse(enumerator.Current);
         var root = document.RootElement;
         if (!root.TryGetProperty("id", out var responseId) ||
             !string.Equals(responseId.GetString(), requestId.ToString(), StringComparison.OrdinalIgnoreCase))
@@ -352,11 +352,11 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             : null;
     }
 
-    private static BinanceUserDataEvent? ParseMessage(ReadOnlySpan<byte> payload, DateTimeOffset receivedAtUtc)
+    private static BinanceUserDataEvent? ParseMessage(ReadOnlyMemory<byte> payload, DateTimeOffset receivedAtUtc)
     {
         try
         {
-            using var document = JsonDocument.Parse(payload.ToArray());
+            using var document = JsonDocument.Parse(payload);
             var root = document.RootElement;
             if (!root.TryGetProperty("event", out var eventRoot))
             {
@@ -373,7 +373,7 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
                 return new BinanceUserDataStreamControlEvent(receivedAtUtc, eventTime, eventType, subscriptionId);
             }
 
-            return BinanceUserDataParser.TryParse(payload, receivedAtUtc);
+            return BinanceUserDataParser.TryParse(root, receivedAtUtc);
         }
         catch (Exception exception) when (exception is JsonException or FormatException or OverflowException)
         {

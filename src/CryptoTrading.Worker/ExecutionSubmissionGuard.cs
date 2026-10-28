@@ -260,6 +260,10 @@ internal sealed class ExecutionSubmissionGuard(
         {
             throw new ExecutionDispatchBlockedException("PRE_SUBMIT_ACCOUNTING_OR_LOSS_BREAKER");
         }
+        if (command.Side == OrderSide.Sell && (!accounting.HasPositionBasis || accounting.PositionQuantity < command.Quantity.Value))
+        {
+            throw new ExecutionDispatchBlockedException("PRE_SUBMIT_INSUFFICIENT_TRACKED_INVENTORY");
+        }
         if (!measuredRisk.IsComplete || ticker.ObservedAtUtc > evaluatedAt ||
             evaluatedAt - ticker.ObservedAtUtc > policy.Policy.MaxMarketDataAge ||
             currentNotional > command.AuthorizedNotional || currentNotional > measuredRisk.AvailableLiquidityNotional ||

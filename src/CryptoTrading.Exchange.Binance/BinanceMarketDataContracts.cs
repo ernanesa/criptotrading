@@ -58,6 +58,19 @@ public abstract record BinanceMarketDataEvent(
     long EventTime,
     DateTimeOffset ReceivedAt);
 
+public enum BinanceMarketDisconnectReason
+{
+    TransportClosed,
+    ReadFailure,
+    ServerShutdown
+}
+
+public sealed record BinanceMarketStreamDisconnectedEvent(DateTimeOffset ReceivedAt, BinanceMarketDisconnectReason Reason)
+    : BinanceMarketDataEvent(string.Empty, string.Empty, ReceivedAt.ToUnixTimeMilliseconds(), ReceivedAt);
+
+internal sealed record BinanceMarketServerShutdownEvent(string Stream, long EventTime, DateTimeOffset ReceivedAt)
+    : BinanceMarketDataEvent(Stream, string.Empty, EventTime, ReceivedAt);
+
 public sealed record BinanceBookTickerStreamEvent(
     string Stream,
     string Symbol,
@@ -130,34 +143,31 @@ public sealed record BinanceOrderBookSnapshot(
 
 internal static class BinanceMarketDataParser
 {
-    public static BinanceMarketDataEvent? TryParse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAt)
+    public static BinanceMarketDataEvent? TryParse(ReadOnlyMemory<byte> payload, DateTimeOffset receivedAt)
     {
         try
         {
             return Parse(payload, receivedAt);
         }
-        catch (JsonException)
-        {
-            return null;
-        }
-        catch (FormatException)
-        {
-            return null;
-        }
-        catch (KeyNotFoundException)
-        {
-            return null;
-        }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (exception is JsonException or FormatException or KeyNotFoundException or InvalidOperationException or OverflowException)
         {
             return null;
         }
     }
 
-    public static BinanceMarketDataEvent Parse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAt)
+    public static BinanceMarketDataEvent? TryParse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAt)
     {
-        using var document = JsonDocument.Parse(payload.ToArray());
+        return TryParse((ReadOnlyMemory<byte>)payload.ToArray(), receivedAt);
+    }
+
+    public static BinanceMarketDataEvent Parse(ReadOnlyMemory<byte> payload, DateTimeOffset receivedAt)
+    {
+        using var document = JsonDocument.Parse(payload);
         var root = document.RootElement;
+        if (root.TryGetProperty("e", out var rawEventType) && rawEventType.GetString() == "serverShutdown")
+        {
+            return new BinanceMarketServerShutdownEvent(string.Empty, root.GetProperty("E").GetInt64(), receivedAt);
+        }
         var stream = root.GetProperty("stream").GetString() ?? throw new JsonException("Missing stream name.");
         var data = root.GetProperty("data");
 
@@ -175,12 +185,18 @@ internal static class BinanceMarketDataParser
 
         return eventType switch
         {
+            "serverShutdown" => new BinanceMarketServerShutdownEvent(stream, data.GetProperty("E").GetInt64(), receivedAt),
             "trade" => ParseTrade(stream, data, receivedAt),
             "aggTrade" => ParseAggTrade(stream, data, receivedAt),
             "kline" => ParseKline(stream, data, receivedAt),
             "depthUpdate" => ParseDepthUpdate(stream, data, receivedAt),
             _ => throw new JsonException($"Unsupported Binance market event '{eventType}'.")
         };
+    }
+
+    public static BinanceMarketDataEvent Parse(ReadOnlySpan<byte> payload, DateTimeOffset receivedAt)
+    {
+        return Parse((ReadOnlyMemory<byte>)payload.ToArray(), receivedAt);
     }
 
     private static BinanceBookTickerStreamEvent ParseBookTicker(string stream, JsonElement data, DateTimeOffset receivedAt, long updateId)

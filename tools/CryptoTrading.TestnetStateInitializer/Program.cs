@@ -974,7 +974,7 @@ static async Task<int> BootstrapTestnetAutonomyAsync(IConfiguration configuratio
 
     var now = DateTimeOffset.UtcNow;
     var activePolicy = await store.GetActiveRiskPolicyAsync(now).ConfigureAwait(false);
-    if (activePolicy is null || !string.Equals(activePolicy.Policy.Version, "v3-multiasset-r100-testnet", StringComparison.Ordinal))
+    if (activePolicy is null)
     {
         var riskPolicy = new RiskPolicy(
             version: "v3-multiasset-r100-testnet",
@@ -1076,13 +1076,54 @@ static async Task<int> BootstrapTestnetAutonomyAsync(IConfiguration configuratio
         await store.RecordKnownTradeAsync(trade.Id, symbol).ConfigureAwait(false);
     }
 
+    var btcTotal = exchangeTotals.GetValueOrDefault("BTC", 0m);
+    using var marketHttp = new HttpClient
+    {
+        BaseAddress = new Uri(restBaseUrl.EndsWith('/', StringComparison.Ordinal) ? restBaseUrl : restBaseUrl + "/"),
+        Timeout = TimeSpan.FromSeconds(15)
+    };
+    marketHttp.DefaultRequestHeaders.UserAgent.ParseAdd("CryptoTrading/testnet-bootstrap-market");
+    var marketClient = new BinanceSpotMarketClient(marketHttp);
+    var ticker = await marketClient.GetBookTickerAsync(symbol).ConfigureAwait(false);
+    var midPrice = ticker is not null && ticker.BidPrice > 0m && ticker.AskPrice > 0m
+        ? (ticker.BidPrice + ticker.AskPrice) / 2m
+        : 80000m;
+    var costQuote = btcTotal * midPrice;
+
+    await using (var conn = new Npgsql.NpgsqlConnection(connectionString))
+    {
+        await conn.OpenAsync().ConfigureAwait(false);
+        await using var cmd = new Npgsql.NpgsqlCommand(
+            """
+            INSERT INTO trading.position_cost_basis (symbol, base_asset, quote_asset, quantity, cost_quote)
+            VALUES (@symbol, @base_asset, @quote_asset, @quantity, @cost_quote)
+            ON CONFLICT (symbol) DO UPDATE SET
+                quantity = EXCLUDED.quantity,
+                cost_quote = EXCLUDED.cost_quote,
+                updated_at = transaction_timestamp();
+            """, conn);
+        cmd.Parameters.AddWithValue("symbol", symbol);
+        cmd.Parameters.AddWithValue("base_asset", "BTC");
+        cmd.Parameters.AddWithValue("quote_asset", "USDT");
+        cmd.Parameters.AddWithValue("quantity", btcTotal);
+        cmd.Parameters.AddWithValue("cost_quote", costQuote);
+        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
+
     Console.WriteLine(JsonSerializer.Serialize(new
     {
         status = "PASS",
         activeRiskPolicy = activePolicy.Policy.Version,
         exchangeAssetsCount = exchangeTotals.Count,
         adjustedAssetsCount = postings.Count / 2,
-        knownTradesCount = myTrades.Count
+        knownTradesCount = myTrades.Count,
+        reconciledPosition = new
+        {
+            symbol,
+            quantity = btcTotal,
+            costQuote,
+            midPrice
+        }
     }));
     return 0;
 }

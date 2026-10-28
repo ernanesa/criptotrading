@@ -1352,10 +1352,43 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             !MatchesPostgresNumeric(facts.Price, candidate.Price.Value) ||
             !MatchesPostgresNumeric(facts.Commission, candidate.Commission.Amount) ||
             !string.Equals(facts.CommissionAsset, candidate.Commission.Asset.Value, StringComparison.Ordinal) ||
+            !string.Equals(facts.ClientOrderId, candidate.ClientOrderId, StringComparison.Ordinal) ||
             facts.OccurredAtUtc.ToUniversalTime().Ticks / 10 != candidate.OccurredAtUtc.ToUniversalTime().Ticks / 10)
         {
             throw new InvalidOperationException("Execution identity is already associated with different persisted facts.");
         }
+    }
+
+    internal static ExecutionFeeComparison? RestorePersistedFeeComparison(
+        string? status, decimal? expected, decimal? actual, decimal? deviation, string? reason,
+        string? valuationSource, DateTimeOffset? valuationAt)
+    {
+        if (status is null) return null;
+        var parsed = status switch
+        {
+            "NOT_COMPARABLE" => ExecutionFeeComparisonStatus.NotComparable,
+            "WITHIN_TOLERANCE" => ExecutionFeeComparisonStatus.WithinTolerance,
+            "DRIFT" => ExecutionFeeComparisonStatus.Drift,
+            _ => throw new InvalidOperationException("Unknown persisted execution fee comparison status.")
+        };
+        if (reason is null || (expected is null && parsed != ExecutionFeeComparisonStatus.NotComparable))
+        {
+            throw new InvalidOperationException("Persisted execution fee comparison evidence is incomplete.");
+        }
+
+        return new(parsed, expected, actual, deviation, reason, valuationSource, valuationAt);
+    }
+
+    internal static ExecutionQualityComparison? RestorePersistedQualityComparison(
+        decimal? fillRatio, decimal? shortfall, long? latency, string? status, string? reason)
+    {
+        if (status is null || reason is null) return null;
+        if (status is not ("COMPARABLE" or "NOT_COMPARABLE"))
+        {
+            throw new InvalidOperationException("Unknown persisted execution quality comparison status.");
+        }
+
+        return new(fillRatio, shortfall, latency, status, reason);
     }
 
     /// <summary>
@@ -1368,28 +1401,11 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
     {
         ArgumentNullException.ThrowIfNull(command);
         var entry = ExecutionAccounting.CreateLedgerEntry(command);
-        var feeComparison = ExecutionFeeDriftEvaluator.Compare(
-            command.FeeEstimate,
-            command.Commission,
-            command.Quantity,
-            command.Price,
-            command.BaseAsset,
-            command.QuoteAsset,
-            command.OccurredAtUtc,
-            command.FeeDriftToleranceBps,
-            command.FeeAssetValuation);
-        var qualityComparison = ExecutionQualityEvaluator.Compare(
-            command.FeeEstimate,
-            command.Side,
-            command.Quantity,
-            command.CumulativeExecutedQuantity,
-            command.Price,
-            command.OccurredAtUtc);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
 
         await using (var existingCommand = new NpgsqlCommand(
-            "SELECT ledger_entry_id, realized_pnl_quote, average_cost_quote, trade_id, order_id, symbol, base_asset, quote_asset, side, quantity, price, commission, commission_asset, occurred_at FROM trading.execution_fills WHERE execution_id = @execution_id;",
+            "SELECT ledger_entry_id, realized_pnl_quote, average_cost_quote, trade_id, order_id, symbol, base_asset, quote_asset, side, quantity, price, commission, commission_asset, occurred_at, client_order_id, expected_commission_quote, actual_commission_quote, fee_deviation_bps, fee_comparison_status, fee_comparison_reason, commission_valuation_source, commission_valuation_at, cumulative_fill_ratio, implementation_shortfall_quote, decision_to_fill_latency_ms, execution_quality_status, execution_quality_reason FROM trading.execution_fills WHERE execution_id = @execution_id;",
             connection, transaction))
         {
             existingCommand.Parameters.Add(Parameter("execution_id", NpgsqlDbType.Varchar, command.ExecutionId));
@@ -1403,7 +1419,17 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                     reader.IsDBNull(3) ? null : reader.GetInt64(3), reader.GetInt64(4), reader.GetString(5),
                     reader.GetString(6), reader.GetString(7), reader.GetString(8), reader.GetDecimal(9),
                     reader.GetDecimal(10), reader.GetDecimal(11), reader.GetString(12),
-                    new DateTimeOffset(reader.GetFieldValue<DateTime>(13).ToUniversalTime()), existingEntryId.Value);
+                    new DateTimeOffset(reader.GetFieldValue<DateTime>(13).ToUniversalTime()), existingEntryId.Value,
+                    reader.IsDBNull(14) ? null : reader.GetString(14));
+                var persistedFee = RestorePersistedFeeComparison(
+                    reader.IsDBNull(18) ? null : reader.GetString(18), reader.IsDBNull(15) ? null : reader.GetDecimal(15),
+                    reader.IsDBNull(16) ? null : reader.GetDecimal(16), reader.IsDBNull(17) ? null : reader.GetDecimal(17),
+                    reader.IsDBNull(19) ? null : reader.GetString(19), reader.IsDBNull(20) ? null : reader.GetString(20),
+                    reader.IsDBNull(21) ? null : new DateTimeOffset(reader.GetFieldValue<DateTime>(21).ToUniversalTime()));
+                var persistedQuality = RestorePersistedQualityComparison(
+                    reader.IsDBNull(22) ? null : reader.GetDecimal(22), reader.IsDBNull(23) ? null : reader.GetDecimal(23),
+                    reader.IsDBNull(24) ? null : reader.GetInt64(24), reader.IsDBNull(25) ? null : reader.GetString(25),
+                    reader.IsDBNull(26) ? null : reader.GetString(26));
                 await reader.DisposeAsync().ConfigureAwait(false);
                 ValidateExecutionReplayFacts(facts, command);
                 if (existingEntryId != entry.Id)
@@ -1415,9 +1441,16 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                     ?? throw new InvalidOperationException("Execution record exists without its journal entry.");
                 ValidateExecutionReplayJournal(existingEntry, entry);
                 await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true, feeComparison, qualityComparison);
+                return new(command.ExecutionId, existingEntry, realized, existingAverageCost, true, persistedFee, persistedQuality);
             }
         }
+
+        var feeComparison = ExecutionFeeDriftEvaluator.Compare(
+            command.FeeEstimate, command.Commission, command.Quantity, command.Price, command.BaseAsset,
+            command.QuoteAsset, command.OccurredAtUtc, command.FeeDriftToleranceBps, command.FeeAssetValuation);
+        var qualityComparison = ExecutionQualityEvaluator.Compare(
+            command.FeeEstimate, command.Side, command.Quantity, command.CumulativeExecutedQuantity,
+            command.Price, command.OccurredAtUtc);
 
         decimal currentQuantity = 0m;
         decimal currentCost = 0m;

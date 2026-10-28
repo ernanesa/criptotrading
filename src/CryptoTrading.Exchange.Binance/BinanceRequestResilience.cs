@@ -174,6 +174,70 @@ public sealed class BinanceRequestRetryPolicy
     }
 }
 
+/// <summary>
+/// Process-local gate shared by callers so that a server rate-limit deadline is
+/// honored by concurrent requests, not only by the request that received it.
+/// It cannot coordinate separate processes or clients sharing one IP.
+/// </summary>
+public sealed class BinanceRateLimitGate
+{
+    private long blockedUntilUtcTicks;
+
+    public TimeSpan Remaining(DateTimeOffset now)
+    {
+        var blockedUntil = Interlocked.Read(ref blockedUntilUtcTicks);
+        if (blockedUntil == 0)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var remaining = new DateTimeOffset(blockedUntil, TimeSpan.Zero) - now.ToUniversalTime();
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
+    /// <summary>Extends, never shortens, the current block from a rate-limited response.</summary>
+    public void ObserveResponse(HttpResponseMessage response, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        if (response.StatusCode is not (HttpStatusCode.TooManyRequests or (HttpStatusCode)418))
+        {
+            return;
+        }
+
+        if (BinanceRateLimitHeaders.Parse(response.Headers, now).RetryAfterUtc is not { } retryAfter)
+        {
+            return;
+        }
+
+        var candidate = retryAfter.UtcDateTime.Ticks;
+        long current;
+        do
+        {
+            current = Interlocked.Read(ref blockedUntilUtcTicks);
+            if (candidate <= current)
+            {
+                return;
+            }
+        }
+        while (Interlocked.CompareExchange(ref blockedUntilUtcTicks, candidate, current) != current);
+    }
+
+    public async Task WaitAsync(TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        while (true)
+        {
+            var remaining = Remaining(timeProvider.GetUtcNow());
+            if (remaining <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            await Task.Delay(remaining, timeProvider, cancellationToken).ConfigureAwait(false);
+        }
+    }
+}
+
 public interface IBinanceClockDriftEstimator
 {
     TimeSpan Offset { get; }

@@ -90,9 +90,15 @@ internal static class WorkerExecutionRegistration
                 clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>());
         });
         _ = services.AddSingleton<IBinanceSpotOrderClient>(serviceProvider =>
-            new BinancePreTradeValidatedOrderClient(
+        {
+            var account = serviceProvider.GetRequiredService<IBinanceSpotAccountClient>();
+            return new BinancePreTradeValidatedOrderClient(
                 serviceProvider.GetRequiredService<BinanceSpotOrderClient>(),
-                serviceProvider.GetRequiredService<IBinanceSymbolTradingRulesProvider>()));
+                serviceProvider.GetRequiredService<IBinanceSymbolTradingRulesProvider>(),
+                account as IBinanceAccountFiltersProvider,
+                account as IBinanceAccountTradingStateProvider,
+                serviceProvider.GetRequiredService<IBinanceSpotMarketClient>() as IBinanceReferencePriceProvider);
+        });
 
         return services;
     }

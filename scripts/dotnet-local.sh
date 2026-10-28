@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-dotnet_root="$repo_root/.tools/dotnet"
+dotnet_root="${DOTNET_LOCAL_ROOT:-$repo_root/.tools/dotnet}"
 dotnet_executable="$dotnet_root/dotnet"
 
 if [[ ! -x "$dotnet_executable" ]]; then
