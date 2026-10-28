@@ -1,6 +1,8 @@
 using System.Globalization;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using CryptoTrading.Backtesting.Strategies;
 
 namespace CryptoTrading.Backtesting;
@@ -65,7 +67,14 @@ public sealed record OutOfSampleWindowResult(
     decimal TotalSlippageCost,
     int TradeCount,
     int PeriodCount,
-    BenchmarkComparison Benchmark);
+    BenchmarkComparison Benchmark)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? EndPositionOpen { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ObservedWindowFingerprint { get; init; }
+}
 
 public sealed record WalkForwardBenchmarkSummary(
     decimal StrategyNetReturn,
@@ -82,8 +91,57 @@ public sealed record WalkForwardEvaluationResult(
     string StrategyConfigurationFingerprint,
     IReadOnlyList<OutOfSampleWindowResult> Windows)
 {
-    public WalkForwardBenchmarkSummary GetBenchmarkSummary() =>
-        BenchmarkComparisonEvaluator.AggregateOutOfSample(Windows);
+    public BacktestExecutionTiming ExecutionTiming { get; init; } = BacktestExecutionTiming.LegacySignalBarClose;
+    public string? EvaluationAssumptionsFingerprint { get; init; }
+    public string? ObservedSeriesFingerprint { get; init; }
+    public string? ObservedSeriesFingerprintVersion { get; init; }
+
+    public WalkForwardBenchmarkSummary GetBenchmarkSummary()
+    {
+        if (ExecutionTiming is not (BacktestExecutionTiming.NextBarClose or BacktestExecutionTiming.LegacySignalBarClose))
+        {
+            throw new InvalidOperationException("Execution timing is unknown.");
+        }
+
+        if ((ExecutionTiming == BacktestExecutionTiming.NextBarClose &&
+             (ObservedSeriesFingerprint is null || ObservedSeriesFingerprintVersion is null)) ||
+            (ObservedSeriesFingerprint is null && ObservedSeriesFingerprintVersion is not null))
+        {
+            throw new InvalidOperationException("Causal evaluation is missing window identity metadata.");
+        }
+
+        if (ObservedSeriesFingerprint is not null &&
+            (ObservedSeriesFingerprintVersion != WalkForwardObservedIdentity.Version ||
+             !string.Equals(ObservedSeriesFingerprint, WalkForwardObservedIdentity.CalculateWindowSet(
+                 Windows, StrategyId, StrategyVersion, StrategyConfigurationFingerprint, EvaluationAssumptionsFingerprint), StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException("Observed-series identity does not match the recorded evaluation windows.");
+        }
+
+        if ((ExecutionTiming == BacktestExecutionTiming.LegacySignalBarClose && Windows.Any(static window => window.EndPositionOpen.HasValue)) ||
+            (ExecutionTiming == BacktestExecutionTiming.NextBarClose &&
+             (EvaluationAssumptionsFingerprint is null || Windows.Any(static window => !window.EndPositionOpen.HasValue))))
+        {
+            throw new InvalidOperationException("Execution timing is inconsistent with the recorded window evidence.");
+        }
+
+        var summary = ExecutionTiming == BacktestExecutionTiming.LegacySignalBarClose
+            ? BenchmarkComparisonEvaluator.AggregateOutOfSampleLegacy(Windows)
+            : BenchmarkComparisonEvaluator.AggregateOutOfSample(Windows);
+        if (EvaluationAssumptionsFingerprint is null) return summary;
+
+        var endStates = string.Join(',', Windows.Select(static window => window.EndPositionOpen switch
+        {
+            true => "open",
+            false => "closed",
+            null => "unknown"
+        }));
+        var canonical = ObservedSeriesFingerprint is null
+            ? string.Join('\n', "walk-forward-evidence-v2", summary.Fingerprint, EvaluationAssumptionsFingerprint, endStates)
+            : string.Join('\n', "walk-forward-evidence-v3", summary.Fingerprint, EvaluationAssumptionsFingerprint,
+                Dataset.ContentHash, ObservedSeriesFingerprint, endStates);
+        return summary with { Fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical))) };
+    }
 }
 
 /// <summary>
@@ -110,24 +168,40 @@ public static class WalkForwardEvaluator
         }
 
         var results = new List<OutOfSampleWindowResult>(windows.Count);
+        var assumptionsFingerprint = TrendFollowingBacktestEvaluator.CalculateEvaluationAssumptionsFingerprint(
+            parameters, options, options.ExecutionTiming == BacktestExecutionTiming.LegacySignalBarClose
+                ? "walk-forward-legacy-continuous-v1" : "walk-forward-warmup-only-v2");
         foreach (var window in windows)
         {
+            _ = window.Split;
             var endExclusive = checked(window.OutOfSampleStartIndex + window.OutOfSampleLength);
             if (window.InSampleStartIndex + window.InSampleLength < 0 || endExclusive > bars.Count)
             {
                 throw new ArgumentException("Walk-forward window is outside the dataset.", nameof(windows));
             }
 
-            // Include the training range so EMA state is warmed up, but score only OOS bars.
-            var prefix = bars.Take(endExclusive).ToArray();
-            var evaluation = TrendFollowingBacktestEvaluator.Evaluate(prefix, parameters, options);
+            var legacy = options.ExecutionTiming == BacktestExecutionTiming.LegacySignalBarClose;
+            if (!legacy && window.OutOfSampleStartIndex != checked(window.InSampleStartIndex + window.InSampleLength))
+            {
+                throw new ArgumentException("Next-bar walk-forward evaluation requires adjacent training and OOS windows.", nameof(windows));
+            }
+
+            // Preserve the old continuous simulation only when explicitly requested for reproduction.
+            // In the causal mode training warms indicators, not the portfolio.
+            var seriesStart = legacy ? 0 : window.InSampleStartIndex;
+            var oosStart = window.OutOfSampleStartIndex - seriesStart;
+            var prefix = bars.Skip(seriesStart).Take(endExclusive - seriesStart).ToArray();
+            var observedWindowFingerprint = WalkForwardObservedIdentity.CalculateWindow(window, seriesStart, endExclusive, prefix);
+            var evaluation = legacy
+                ? TrendFollowingBacktestEvaluator.Evaluate(prefix, parameters, options)
+                : TrendFollowingBacktestEvaluator.EvaluateWindow(prefix, parameters, options, oosStart);
             var oosPoints = evaluation.EquityCurve
-                .Skip(window.OutOfSampleStartIndex)
+                .Skip(oosStart)
                 .Take(window.OutOfSampleLength)
                 .ToArray();
-            var startingEquity = window.OutOfSampleStartIndex == 0
+            var startingEquity = oosStart == 0
                 ? options.InitialCapital
-                : evaluation.EquityCurve[window.OutOfSampleStartIndex - 1].Equity;
+                : evaluation.EquityCurve[oosStart - 1].Equity;
             var finalEquity = oosPoints[^1].Equity;
             var peak = startingEquity;
             var maximumDrawdown = 0m;
@@ -138,7 +212,7 @@ public static class WalkForwardEvaluator
             }
 
             var trades = evaluation.Trades
-                .Where(trade => trade.BarIndex >= window.OutOfSampleStartIndex && trade.BarIndex < endExclusive)
+                .Where(trade => trade.BarIndex >= oosStart && trade.BarIndex < prefix.Length)
                 .ToArray();
             var netReturn = startingEquity == 0m ? 0m : finalEquity / startingEquity - 1m;
             var oosBars = bars
@@ -155,19 +229,28 @@ public static class WalkForwardEvaluator
                 trades.Sum(trade => trade.SlippageCost),
                 trades.Length,
                 oosPoints.Length,
-                BenchmarkComparisonEvaluator.CompareOutOfSample(
-                    $"{parameters.StrategyId}/{parameters.Version}",
+                BenchmarkComparisonEvaluator.CompareOutOfSampleWithTiming(
+                    BenchmarkComparisonEvaluator.FormatStrategyName(parameters.StrategyId, parameters.Version, options.ExecutionTiming),
                     startingEquity,
                     finalEquity,
                     netReturn,
                     maximumDrawdown,
                     oosPoints.Length,
                     oosBars,
-                    benchmarkEntryPrice: window.OutOfSampleStartIndex == 0
-                        ? oosBars[0].ClosePrice.Value
-                        : bars[window.OutOfSampleStartIndex - 1].ClosePrice.Value,
+                    benchmarkEntryPrice: legacy && window.OutOfSampleStartIndex > 0
+                        ? bars[window.OutOfSampleStartIndex - 1].ClosePrice.Value
+                        : oosBars[0].ClosePrice.Value,
                     feeRate: parameters.FeeRate,
-                    slippageRate: parameters.SlippageRate)));
+                    halfSpreadRate: 0m,
+                    slippageRate: parameters.SlippageRate,
+                    entryConvention: legacy ? "prior-close-entry" : "first-oos-close-entry",
+                    markOpenAtEnd: !legacy,
+                    strategyConfigurationFingerprint: parameters.ConfigurationFingerprint,
+                    evaluationAssumptionsFingerprint: assumptionsFingerprint))
+            {
+                EndPositionOpen = legacy ? null : oosPoints[^1].InPosition,
+                ObservedWindowFingerprint = observedWindowFingerprint
+            });
         }
 
         return new WalkForwardEvaluationResult(
@@ -175,6 +258,62 @@ public static class WalkForwardEvaluator
             parameters.StrategyId,
             parameters.Version,
             parameters.ConfigurationFingerprint,
-            results);
+            results)
+        {
+            ExecutionTiming = options.ExecutionTiming,
+            EvaluationAssumptionsFingerprint = assumptionsFingerprint,
+            ObservedSeriesFingerprint = WalkForwardObservedIdentity.CalculateWindowSet(
+                results, parameters.StrategyId, parameters.Version, parameters.ConfigurationFingerprint, assumptionsFingerprint),
+            ObservedSeriesFingerprintVersion = WalkForwardObservedIdentity.Version
+        };
+    }
+}
+
+internal static class WalkForwardObservedIdentity
+{
+    internal const string Version = "walk-forward-window-set-v4";
+
+    internal static string CalculateWindow(WalkForwardWindow window, int seriesStart, int endExclusive, IReadOnlyList<CloseBar> bars)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture,
+            $"walk-forward-consumed-window-v2|{window.WindowNumber}|{seriesStart}|{window.OutOfSampleStartIndex}|{endExclusive}\n")));
+        foreach (var bar in bars)
+        {
+            hash.AppendData(Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture,
+                $"{bar.Symbol.Value}|{bar.CloseTimeUtc.UtcDateTime.Ticks}|{bar.ClosePrice.Value:G29}\n")));
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    internal static string CalculateWindowSet(IReadOnlyList<OutOfSampleWindowResult> windows,
+        string strategyId, string strategyVersion, string strategyFingerprint, string? assumptionsFingerprint)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(Encoding.UTF8.GetBytes(Version + "\n"));
+        AppendField(hash, strategyId);
+        AppendField(hash, strategyVersion);
+        AppendField(hash, strategyFingerprint);
+        AppendField(hash, assumptionsFingerprint ?? throw new InvalidOperationException("Evaluation assumptions fingerprint is missing."));
+        foreach (var item in windows)
+        {
+            if (string.IsNullOrWhiteSpace(item.ObservedWindowFingerprint))
+            {
+                throw new InvalidOperationException("Window is missing its observed-series fingerprint.");
+            }
+            var endState = item.EndPositionOpen switch { true => "open", false => "closed", null => "unknown" };
+            hash.AppendData(Encoding.UTF8.GetBytes(string.Create(CultureInfo.InvariantCulture,
+                $"{item.Window.WindowNumber}|{item.Window.InSampleStartIndex}|{item.Window.InSampleLength}|{item.Window.OutOfSampleStartIndex}|{item.Window.OutOfSampleLength}|{item.ObservedWindowFingerprint}|{item.StartingEquity:G29}|{item.FinalEquity:G29}|{item.NetReturn:G29}|{item.MaximumDrawdown:G29}|{item.TotalFees:G29}|{item.TotalSlippageCost:G29}|{item.TradeCount}|{item.PeriodCount}|{endState}|{item.Benchmark.Fingerprint}\n")));
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static void AppendField(IncrementalHash hash, string value)
+    {
+        var bytes = new UTF8Encoding(false, true).GetBytes(value);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+        hash.AppendData(length);
+        hash.AppendData(bytes);
     }
 }

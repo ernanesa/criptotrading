@@ -25,12 +25,117 @@ public sealed class BinanceLocalOrderBookTests
         Assert.Equal(BinanceOrderBookApplyDisposition.SnapshotApplied, book.ApplySnapshot(Snapshot(100)).Disposition);
 
         var first = book.ApplyDelta(Delta(99, 101));
-        var second = book.ApplyDelta(Delta(102, 102, price: 101));
+        var second = book.ApplyDelta(Delta(102, 102, price: 100.5m));
 
         Assert.Equal(BinanceOrderBookApplyDisposition.DeltaApplied, first.Disposition);
         Assert.Equal(BinanceOrderBookApplyDisposition.DeltaApplied, second.Disposition);
         Assert.Equal(102, book.LastUpdateId);
-        Assert.Equal([101m, 100m], book.Bids.Select(level => level.Price).ToArray());
+        Assert.Equal([100.5m, 100m], book.Bids.Select(level => level.Price).ToArray());
+    }
+
+    [Fact]
+    public void SnapshotDoesNotProvideDepthSignalsUntilFirstDeltaBridgesIt()
+    {
+        var book = NewBookAt(100);
+
+        Assert.Empty(book.Bids);
+        Assert.Empty(book.Asks);
+        Assert.Null(book.CalculateTopDepthImbalance());
+        Assert.Null(book.CalculateTopDepthLiquidityNotional());
+
+        Assert.Equal(BinanceOrderBookApplyDisposition.DeltaApplied, book.ApplyDelta(Delta(100, 101)).Disposition);
+        Assert.NotNull(book.CalculateTopDepthImbalance());
+        Assert.NotNull(book.CalculateTopDepthLiquidityNotional());
+    }
+
+    [Fact]
+    public void DisconnectInvalidatesBridgedBookUntilNewSnapshotAndBridge()
+    {
+        var book = NewBookAt(100);
+        Assert.Equal(BinanceOrderBookApplyDisposition.DeltaApplied, book.ApplyDelta(Delta(100, 101)).Disposition);
+        Assert.NotNull(book.CalculateTopDepthLiquidityNotional());
+
+        book.InvalidateForStreamDisconnect();
+
+        Assert.Equal(BinanceOrderBookStatus.Invalid, book.Status);
+        Assert.Null(book.CalculateTopDepthLiquidityNotional());
+        Assert.Equal(BinanceOrderBookApplyDisposition.ResyncRequired, book.ApplyDelta(Delta(102, 102)).Disposition);
+        Assert.Equal(BinanceOrderBookApplyDisposition.SnapshotApplied, book.ApplySnapshot(Snapshot(200)).Disposition);
+        Assert.Null(book.CalculateTopDepthLiquidityNotional());
+        Assert.Equal(BinanceOrderBookApplyDisposition.DeltaApplied, book.ApplyDelta(Delta(200, 201)).Disposition);
+        Assert.NotNull(book.CalculateTopDepthLiquidityNotional());
+    }
+
+    [Theory]
+    [InlineData("empty-bids")]
+    [InlineData("empty-asks")]
+    [InlineData("zero-bid-quantity")]
+    [InlineData("zero-ask-quantity")]
+    [InlineData("duplicate-bids")]
+    [InlineData("duplicate-asks")]
+    [InlineData("locked")]
+    [InlineData("crossed")]
+    public void InvalidSnapshotCannotReplaceOrExposePreviouslyBridgedBook(string scenario)
+    {
+        var book = NewBookAt(100);
+        Assert.Equal(BinanceOrderBookApplyDisposition.DeltaApplied, book.ApplyDelta(Delta(100, 101)).Disposition);
+        BinanceOrderBookLevel[] bids = scenario switch
+        {
+            "empty-bids" => [],
+            "zero-bid-quantity" => [Level(100m, 0m)],
+            "duplicate-bids" => [Level(100m, 1m), Level(100m, 2m)],
+            "locked" => [Level(101m, 1m)],
+            "crossed" => [Level(102m, 1m)],
+            _ => [Level(100m, 1m)]
+        };
+        BinanceOrderBookLevel[] asks = scenario switch
+        {
+            "empty-asks" => [],
+            "zero-ask-quantity" => [Level(101m, 0m)],
+            "duplicate-asks" => [Level(101m, 1m), Level(101m, 2m)],
+            _ => [Level(101m, 1m)]
+        };
+
+        var result = book.ApplySnapshot(new BinanceOrderBookSnapshot("BTCUSDT", 200, bids, asks));
+
+        Assert.Equal(BinanceOrderBookApplyDisposition.InvalidQuarantined, result.Disposition);
+        Assert.Equal(BinanceOrderBookStatus.Invalid, book.Status);
+        Assert.True(book.ResyncRequired);
+        Assert.Equal(101, book.LastUpdateId);
+        Assert.Empty(book.Bids);
+        Assert.Empty(book.Asks);
+        Assert.Null(book.CalculateTopDepthImbalance());
+        Assert.Null(book.CalculateTopDepthLiquidityNotional());
+    }
+
+    [Theory]
+    [InlineData("locked")]
+    [InlineData("crossed")]
+    [InlineData("empty-bids")]
+    [InlineData("empty-asks")]
+    public void DeltaCannotExposeEmptyOrCrossedBook(string scenario)
+    {
+        var book = NewBookAt(100);
+        var bids = scenario switch
+        {
+            "locked" => new[] { new BinanceOrderBookLevel(101m, 1m) },
+            "crossed" => [new BinanceOrderBookLevel(102m, 1m)],
+            "empty-bids" => [new BinanceOrderBookLevel(100m, 0m)],
+            _ => Array.Empty<BinanceOrderBookLevel>()
+        };
+        var asks = scenario == "empty-asks" ? new[] { new BinanceOrderBookLevel(101m, 0m) } : [];
+        var delta = new BinanceDepthUpdateEvent("btcusdt@depth", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, 101, 101, null, bids, asks);
+
+        var result = book.ApplyDelta(delta);
+
+        Assert.Equal(BinanceOrderBookApplyDisposition.InvalidQuarantined, result.Disposition);
+        Assert.Equal(BinanceOrderBookInvalidReason.InvalidBookState, result.InvalidReason);
+        Assert.Equal(BinanceOrderBookStatus.Invalid, book.Status);
+        Assert.Equal(100, book.LastUpdateId);
+        Assert.Empty(book.Bids);
+        Assert.Empty(book.Asks);
+        Assert.Null(book.CalculateTopDepthImbalance());
+        Assert.Null(book.CalculateTopDepthLiquidityNotional());
     }
 
     [Fact]
@@ -84,6 +189,7 @@ public sealed class BinanceLocalOrderBookTests
             10,
             [Level(99), Level(100), Level(101)],
             [Level(102), Level(103), Level(104)]));
+        book.ApplyDelta(new BinanceDepthUpdateEvent("btcusdt@depth", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, 11, 11, null, [], []));
 
         Assert.Equal([101m, 100m], book.Bids.Select(level => level.Price).ToArray());
         Assert.Equal([102m, 103m], book.Asks.Select(level => level.Price).ToArray());
@@ -134,6 +240,7 @@ public sealed class BinanceLocalOrderBookTests
             10,
             [new BinanceOrderBookLevel(100m, 3m), new BinanceOrderBookLevel(99m, 1m)],
             [new BinanceOrderBookLevel(101m, 1m), new BinanceOrderBookLevel(102m, 1m)]));
+        book.ApplyDelta(new BinanceDepthUpdateEvent("btcusdt@depth@100ms", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, 11, 11, null, [], []));
 
         // Top 5 depth: Bids = 4, Asks = 2 => (4 - 2) / 6 = 0.3333
         Assert.Equal(0.3333m, book.CalculateTopDepthImbalance(5));
@@ -160,7 +267,8 @@ public sealed class BinanceLocalOrderBookTests
                 new BinanceSymbolFilter("LOT_SIZE", MinQty: "0.00010", MaxQty: "100.00000", StepSize: "0.00010"),
                 new BinanceSymbolFilter("MARKET_LOT_SIZE", MinQty: "0.00100", MaxQty: "10.00000", StepSize: "0.00100"),
                 new BinanceSymbolFilter("MIN_NOTIONAL", MinNotional: "5.00"),
-            ]);
+            ],
+            OrderTypes: ["LIMIT", "MARKET"]);
 
         var rules = BinanceSymbolTradingRulesParser.Parse(symbolInfo);
         Assert.Equal(0.00100m, rules.MarketMinimumQuantity);
@@ -284,7 +392,7 @@ public sealed class BinanceLocalOrderBookTests
     private static BinanceDepthUpdateEvent Delta(long first, long final, decimal price = 100) =>
         new("btcusdt@depth@100ms", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, first, final, null, [Level(price)], []);
 
-    private static BinanceOrderBookLevel Level(decimal price) => new(price, 1m);
+    private static BinanceOrderBookLevel Level(decimal price, decimal quantity = 1m) => new(price, quantity);
 
     private sealed class DepthTransport(string payload) : IBinanceWebSocketTransport
     {

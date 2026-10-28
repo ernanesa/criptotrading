@@ -22,7 +22,6 @@ public sealed record PerformancePeriodMetrics(
 
     public PerformanceSnapshotAvailability SnapshotAvailability { get; init; } = PerformanceSnapshotAvailability.MissingBaselineSnapshot;
 
-    public decimal? RealisticNetProfitQuote { get; init; }
 
     public decimal? AverageReturnBps { get; init; }
 
@@ -80,7 +79,6 @@ public sealed record AggregatedPortfolioPerformanceMetrics(
 
     public bool FeesAreComplete => UnvaluedFeeAmounts.Count == 0;
 
-    public decimal? RealisticNetPnlQuote { get; init; }
 
     public decimal? AverageReturnBps { get; init; }
 

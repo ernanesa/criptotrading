@@ -50,8 +50,10 @@ internal sealed class AutonomyCycleHostedService(
     IStrategyRegimePerformanceStore? durablePerformances = null,
     IBinanceSpotMarketDataClient? marketDataStreamClient = null,
     CryptoTrading.Observability.TradingAlertDispatcher? alertDispatcher = null,
-    IOutboxWakeupSignal? outboxWakeupSignal = null) : BackgroundService
+    IOutboxWakeupSignal? outboxWakeupSignal = null,
+    TimeProvider? timeProvider = null) : BackgroundService
 {
+    private readonly TimeProvider valuationTimeProvider = timeProvider ?? TimeProvider.System;
     private static readonly string[] QuoteAssets = ["USDT", "USDC", "FDUSD", "BUSD", "TUSD", "BTC", "ETH", "BNB", "EUR", "TRY"];
     private static readonly string[] CanaryBasketSymbols = ["SUIUSDT", "ARBUSDT", "TIAUSDT", "AVAXUSDT", "SOLUSDT"];
     private readonly System.Threading.Channels.Channel<DateTimeOffset> barCloseSignalChannel =
@@ -67,6 +69,7 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, decimal> temporalOfiBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, decimal> tradeAggressionDeltaBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BinanceLocalOrderBook> localOrderBooks = new(StringComparer.OrdinalIgnoreCase);
+    private long marketStreamEpoch;
     private readonly ConcurrentDictionary<string, List<BinanceSpotKline>> klineCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastKlineFetchUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> positionOriginatingStrategy = new(StringComparer.OrdinalIgnoreCase);
@@ -81,6 +84,7 @@ internal sealed class AutonomyCycleHostedService(
     private DateTimeOffset? safeModeEnteredAtUtc;
     private DateTimeOffset? lastProlongedSafeModeAlertAtUtc;
     internal ConcurrentDictionary<string, BinanceBookTicker> StreamBookTickers => streamBookTickers;
+    internal ConcurrentDictionary<string, BinanceLocalOrderBook> LocalOrderBooks => localOrderBooks;
     internal ConcurrentDictionary<string, List<BinanceSpotKline>> KlineCache => klineCache;
     internal ConcurrentDictionary<string, DynamicExitThresholds> DynamicExitThresholdsBySymbol => dynamicExitThresholdsBySymbol;
 
@@ -269,7 +273,7 @@ internal sealed class AutonomyCycleHostedService(
         }
     }
 
-    private async Task ConsumeMarketDataStreamAsync(WorkerRuntimeOptions runtime, CancellationToken stoppingToken)
+    internal async Task ConsumeMarketDataStreamAsync(WorkerRuntimeOptions runtime, CancellationToken stoppingToken)
     {
         var symbols = runtime.ResolveAutonomySymbols();
         var subscriptions = new List<BinanceMarketSubscription>(symbols.Count * 4);
@@ -287,7 +291,11 @@ internal sealed class AutonomyCycleHostedService(
             {
                 await foreach (var marketEvent in marketDataStreamClient!.ReadAsync(subscriptions, stoppingToken).ConfigureAwait(false))
                 {
-                    if (marketEvent is BinanceKlineEvent kline)
+                    if (marketEvent is BinanceMarketStreamDisconnectedEvent)
+                    {
+                        InvalidateMarketStreamState();
+                    }
+                    else if (marketEvent is BinanceKlineEvent kline)
                     {
                         var openTimeUtc = DateTimeOffset.FromUnixTimeMilliseconds(kline.OpenTime);
                         var closeTimeUtc = DateTimeOffset.FromUnixTimeMilliseconds(kline.CloseTime);
@@ -413,6 +421,11 @@ internal sealed class AutonomyCycleHostedService(
                         }
                     }
                 }
+
+                if (!stoppingToken.IsCancellationRequested)
+                {
+                    InvalidateMarketStreamState();
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -420,8 +433,26 @@ internal sealed class AutonomyCycleHostedService(
             }
             catch (Exception ex)
             {
+                InvalidateMarketStreamState();
                 AutonomyCycleLog.StreamDisconnected(logger, ex);
                 await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private void InvalidateMarketStreamState()
+    {
+        Interlocked.Increment(ref marketStreamEpoch);
+        streamBookTickers.Clear();
+        previousBookTickers.Clear();
+        temporalOfiBySymbol.Clear();
+        tradeAggressionDeltaBySymbol.Clear();
+        klineCache.Clear();
+        foreach (var book in localOrderBooks.Values)
+        {
+            lock (book)
+            {
+                book.InvalidateForStreamDisconnect();
             }
         }
     }
@@ -754,6 +785,7 @@ internal sealed class AutonomyCycleHostedService(
         decimal totalOtherUnrealizedPnlQuote = 0m;
         var allOtherPositionsHaveBasis = true;
         var unvaluedOtherPosition = false;
+        var usedOtherTickers = new List<(string Symbol, BinanceBookTicker Ticker)>();
         foreach (var otherSymbol in runtime.ResolveAutonomySymbols())
         {
             if (string.Equals(otherSymbol, symbol, StringComparison.OrdinalIgnoreCase))
@@ -773,18 +805,20 @@ internal sealed class AutonomyCycleHostedService(
             {
                 decimal? otherMid = null;
                 if (streamBookTickers.TryGetValue(otherSymbol, out var otherTicker) &&
-                    PortfolioTickerValidation.IsValid(otherTicker, otherSymbol, DateTimeOffset.UtcNow, policyDocument.Policy.MaxMarketDataAge))
+                    PortfolioTickerValidation.IsValid(otherTicker, otherSymbol, valuationTimeProvider.GetUtcNow(), policyDocument.Policy.MaxMarketDataAge))
                 {
                     otherMid = (otherTicker.BidPrice + otherTicker.AskPrice) / 2m;
+                    usedOtherTickers.Add((otherSymbol, otherTicker));
                 }
                 else
                 {
                     try
                     {
                         var restTicker = await marketClient.GetBookTickerAsync(otherSymbol, cancellationToken).ConfigureAwait(false);
-                        if (PortfolioTickerValidation.IsValid(restTicker, otherSymbol, DateTimeOffset.UtcNow, policyDocument.Policy.MaxMarketDataAge))
+                        if (PortfolioTickerValidation.IsValid(restTicker, otherSymbol, valuationTimeProvider.GetUtcNow(), policyDocument.Policy.MaxMarketDataAge))
                         {
                             otherMid = (restTicker.BidPrice + restTicker.AskPrice) / 2m;
+                            usedOtherTickers.Add((otherSymbol, restTicker));
                         }
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -819,10 +853,13 @@ internal sealed class AutonomyCycleHostedService(
             }
         }
 
+        var riskValuationAt = valuationTimeProvider.GetUtcNow();
+        unvaluedOtherPosition |= usedOtherTickers.Any(item =>
+            !PortfolioTickerValidation.IsValid(item.Ticker, item.Symbol, riskValuationAt, policyDocument.Policy.MaxMarketDataAge));
         decimal? currentEquityNotional = (unsupportedAssetBalance || unvaluedOtherPosition)
             ? null
             : totalQuoteBalance + (baseQuantity * latest.ClosePrice.Value) + totalOtherPositionsNotional;
-        var dayStartUtc = new DateTimeOffset(now.UtcDateTime.Date, TimeSpan.Zero);
+        var dayStartUtc = new DateTimeOffset(riskValuationAt.UtcDateTime.Date, TimeSpan.Zero);
         // Unlike the decision checkpoint, the equity scope must survive
         // strategy-version changes; otherwise a new strategy could reset the
         // historical drawdown protection after only one baseline observation.
@@ -833,12 +870,11 @@ internal sealed class AutonomyCycleHostedService(
             quoteAsset,
             dayStartUtc,
             currentEquityNotional,
-            now,
+            riskValuationAt,
             cancellationToken).ConfigureAwait(false);
         BinanceBookTicker bookTicker;
         if (streamBookTickers.TryGetValue(symbol, out var cachedTicker) &&
-            cachedTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
-            DateTimeOffset.UtcNow - cachedTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+            PortfolioTickerValidation.IsValid(cachedTicker, symbol, valuationTimeProvider.GetUtcNow(), policyDocument.Policy.MaxMarketDataAge))
         {
             bookTicker = cachedTicker;
         }
@@ -856,9 +892,14 @@ internal sealed class AutonomyCycleHostedService(
                 return;
             }
         }
+        var navValuationAt = valuationTimeProvider.GetUtcNow();
+        if (!PortfolioTickerValidation.IsValid(bookTicker, symbol, navValuationAt, policyDocument.Policy.MaxMarketDataAge))
+        {
+            AutonomyCycleLog.MarketDataRejected(logger, symbol, "PRIMARY_BOOK_TICKER_INVALID_OR_STALE");
+            return;
+        }
         if (navSnapshots is not null && !unsupportedAssetBalance && !unvaluedOtherPosition &&
-            bookTicker.ObservedAtUtc <= DateTimeOffset.UtcNow &&
-            DateTimeOffset.UtcNow - bookTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
+            usedOtherTickers.All(item => PortfolioTickerValidation.IsValid(item.Ticker, item.Symbol, navValuationAt, policyDocument.Policy.MaxMarketDataAge)))
         {
             var valuationPrice = (bookTicker.BidPrice + bookTicker.AskPrice) / 2m;
             var consolidatedNavQuote = totalQuoteBalance + (baseQuantity * valuationPrice) + totalOtherPositionsNotional;
@@ -871,7 +912,7 @@ internal sealed class AutonomyCycleHostedService(
             try
             {
                 await navSnapshots.RecordNavSnapshotAsync(new PortfolioNavSnapshot(
-                    symbol, quoteAsset.Value, bookTicker.ObservedAtUtc,
+                    symbol, quoteAsset.Value, navValuationAt,
                     consolidatedNavQuote, consolidatedUnrealized,
                     null, "account-snapshot+observed-book-mid"), cancellationToken).ConfigureAwait(false);
             }
@@ -880,7 +921,7 @@ internal sealed class AutonomyCycleHostedService(
                 // Valuation telemetry must never stop trading or push the system into SafeMode.
                 AutonomyCycleLog.TelemetryWriteFailed(logger, "nav_snapshot", ex.GetType().Name);
             }
-            AutonomyCycleLog.Valuation(logger, symbol, bookTicker.ObservedAtUtc,
+            AutonomyCycleLog.Valuation(logger, symbol, navValuationAt,
                 consolidatedNavQuote, consolidatedUnrealized);
         }
         BinanceSymbolTradingRules? rules = null;
@@ -910,12 +951,16 @@ internal sealed class AutonomyCycleHostedService(
         {
             try
             {
+                var snapshotEpoch = Volatile.Read(ref marketStreamEpoch);
                 var snapshot = await marketClient.GetOrderBookSnapshotAsync(symbol, 20, cancellationToken).ConfigureAwait(false);
                 if (snapshot.Bids.Count > 0 && snapshot.Asks.Count > 0)
                 {
                     lock (localBook)
                     {
-                        localBook.ApplySnapshot(snapshot);
+                        if (snapshotEpoch == Volatile.Read(ref marketStreamEpoch))
+                        {
+                            localBook.ApplySnapshot(snapshot);
+                        }
                     }
                 }
             }
@@ -953,10 +998,18 @@ internal sealed class AutonomyCycleHostedService(
         var positionBasisConsistent = baseQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
             : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - baseQuantity) <= 0.00000001m;
-        var riskContextComplete = positionBasisConsistent && accounting.RiskContextComplete;
+        var decisionValuationAt = valuationTimeProvider.GetUtcNow();
+        if (!PortfolioTickerValidation.IsValid(bookTicker, symbol, decisionValuationAt, policyDocument.Policy.MaxMarketDataAge))
+        {
+            AutonomyCycleLog.MarketDataRejected(logger, symbol, "PRIMARY_BOOK_TICKER_INVALID_OR_STALE");
+            return;
+        }
+        var secondaryValuationsFresh = !unsupportedAssetBalance && !unvaluedOtherPosition &&
+            usedOtherTickers.All(item => PortfolioTickerValidation.IsValid(item.Ticker, item.Symbol, decisionValuationAt, policyDocument.Policy.MaxMarketDataAge));
+        var riskContextComplete = positionBasisConsistent && accounting.RiskContextComplete && secondaryValuationsFresh;
         var riskContextReason = !positionBasisConsistent
             ? "POSITION_BASIS_DRIFT"
-            : accounting.RiskContextUnavailableReason;
+            : !secondaryValuationsFresh ? "PORTFOLIO_VALUATION_STALE_OR_INCOMPLETE" : accounting.RiskContextUnavailableReason;
         var portfolio = new PortfolioSnapshot(
             new Dictionary<Asset, Money>
             {
@@ -1512,7 +1565,7 @@ internal sealed class AutonomyCycleHostedService(
             Status: "TRADING",
             MinimumPrice: >= 0m,
             MaximumPrice: >= 0m,
-            PriceTickSize: > 0m,
+            PriceTickSize: >= 0m, // 0 disables the tick rule per Binance filters.md
             MinimumQuantity: > 0m,
             MaximumQuantity: >= 0m,
             QuantityStepSize: > 0m,

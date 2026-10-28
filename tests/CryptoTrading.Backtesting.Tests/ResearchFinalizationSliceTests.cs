@@ -248,6 +248,25 @@ public sealed class ResearchFinalizationSliceTests
         Assert.Equal(StrategyExecutionOutcome.NoTrade, result.Outcome);
     }
 
+    [Theory]
+    [InlineData(StrategyExecutionAction.BuyBaseQuantity)]
+    [InlineData(StrategyExecutionAction.SellBaseQuantity)]
+    public void F08QuantizedFillMustRemainInsideObservedBar(StrategyExecutionAction action)
+    {
+        var model = new ConservativeResearchExecutionModel(
+            new ResearchExchangeFilters(0.01m, 0.001m, 0.001m, 100m, 5m),
+            halfSpreadRate: 0m, slippageRate: 0m);
+        var bars = new[]
+        {
+            new ResearchBar(BtcUsdt, Start, Start.AddHours(1), 100.005m, 100.005m, 100.005m, 100.005m, 1_000m),
+            new ResearchBar(BtcUsdt, Start.AddHours(1), Start.AddHours(2), 100.005m, 100.005m, 100.005m, 100.005m, 1_000m)
+        };
+        var result = model.SimulateFill(new ConservativeExecutionOrder(0, action, 1m), bars, 10_000m, 10m);
+
+        Assert.False(result.IsFilled);
+        Assert.Equal(StrategyExecutionOutcome.NoTrade, result.Outcome);
+    }
+
     // ==========================================
     // F09: Dynamic Costs & R$ 100 Budget Capacity Gate
     // ==========================================

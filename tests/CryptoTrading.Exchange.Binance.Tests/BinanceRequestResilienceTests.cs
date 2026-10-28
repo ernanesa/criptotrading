@@ -17,6 +17,52 @@ public sealed class BinanceRequestResilienceTests
         Assert.Equal(TimeSpan.FromSeconds(30), policy.GetDelay(0, TimeSpan.FromSeconds(30)));
     }
 
+    [Fact]
+    public void RateLimitGateSharesServerDeadlineAcrossCallers()
+    {
+        var gate = new BinanceRateLimitGate();
+        var now = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.TryAddWithoutValidation("Retry-After", "30");
+
+        gate.ObserveResponse(response, now);
+
+        Assert.Equal(TimeSpan.FromSeconds(30), gate.Remaining(now));
+        Assert.Equal(TimeSpan.FromSeconds(29), gate.Remaining(now.AddSeconds(1)));
+        Assert.Equal(TimeSpan.Zero, gate.Remaining(now.AddSeconds(30)));
+    }
+
+    [Fact]
+    public void RateLimitGateNeverShortensAnExistingBlock()
+    {
+        var gate = new BinanceRateLimitGate();
+        var now = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+        using var longBlock = new HttpResponseMessage((HttpStatusCode)418);
+        longBlock.Headers.TryAddWithoutValidation("Retry-After", "120");
+        using var shortBlock = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        shortBlock.Headers.TryAddWithoutValidation("Retry-After", "5");
+
+        gate.ObserveResponse(longBlock, now);
+        gate.ObserveResponse(shortBlock, now);
+
+        Assert.Equal(TimeSpan.FromSeconds(120), gate.Remaining(now));
+    }
+
+    [Fact]
+    public async Task RateLimitGateIgnoresSuccessAndResponsesWithoutDeadline()
+    {
+        var gate = new BinanceRateLimitGate();
+        var now = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
+        using var success = new HttpResponseMessage(HttpStatusCode.OK);
+        using var withoutHeader = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+
+        gate.ObserveResponse(success, now);
+        gate.ObserveResponse(withoutHeader, now);
+
+        Assert.Equal(TimeSpan.Zero, gate.Remaining(now));
+        await gate.WaitAsync(TimeProvider.System, TestContext.Current.CancellationToken);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData((HttpStatusCode)418)]
@@ -126,6 +172,43 @@ public sealed class BinanceRequestResilienceTests
         Assert.Equal(42, result.OrderId);
         Assert.Single(requests);
         Assert.Equal("/api/v3/order", requests[0].RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task RateLimitedSubmitDoesNotRepeatPost()
+    {
+        var now = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FixedTimeProvider(now);
+        var clock = new BinanceClockDriftEstimator(timeProvider);
+        clock.Observe(now.ToUnixTimeMilliseconds(), now.AddMilliseconds(-20), now);
+        var requests = new List<HttpMethod>();
+        using var handler = new DelegatingCallbackHandler(request =>
+        {
+            requests.Add(request.Method);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                RequestMessage = request,
+                Content = new StringContent("{\"code\":-1003,\"msg\":\"rate limited\"}")
+            };
+            response.Headers.TryAddWithoutValidation("Retry-After", "30");
+            return response;
+        });
+        using var httpClient = new HttpClient(handler);
+        var client = new BinanceSpotOrderClient(httpClient, new BinanceSpotOrderClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret",
+            EnableOrderExecution = true,
+            ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
+        }, timeProvider, clock);
+
+        var error = await Assert.ThrowsAsync<BinanceOrderSubmissionAmbiguousException>(() => client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-rate-limit", 100.50m),
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("ct-rate-limit", error.ClientOrderId);
+        Assert.Equal([HttpMethod.Post], requests);
     }
 
     private sealed class DelegatingCallbackHandler(Func<HttpRequestMessage, HttpResponseMessage> callback) : HttpMessageHandler

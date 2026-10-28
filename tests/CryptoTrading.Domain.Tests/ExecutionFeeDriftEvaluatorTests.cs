@@ -71,6 +71,17 @@ public sealed class ExecutionFeeDriftEvaluatorTests
         Assert.Equal(ExecutionFeeComparisonStatus.NotComparable, result.Status);
     }
 
+    [Fact]
+    public void MissingEstimateLeavesExpectedFeeUnknown()
+    {
+        var result = ExecutionFeeDriftEvaluator.Compare(
+            null, new Money(.1m, Quote), new Quantity(1m), new Price(100m), Base, Quote, Now);
+
+        Assert.Equal(ExecutionFeeComparisonStatus.NotComparable, result.Status);
+        Assert.Null(result.ExpectedQuote);
+        Assert.Equal("FEE_ESTIMATE_UNAVAILABLE", result.Reason);
+    }
+
     private static ExecutionFeeEstimate Estimate(decimal rate) => new(
         rate, "ABC123", "binance:commission", Now.AddMinutes(-1), Now.AddMinutes(14));
 }

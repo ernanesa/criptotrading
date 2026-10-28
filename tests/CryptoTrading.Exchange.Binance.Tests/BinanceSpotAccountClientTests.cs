@@ -62,6 +62,125 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [Fact]
+    public async Task AccountFiltersRequestIsSignedReadOnlyAndParsesDocumentedShape()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/myFilters", "{\"exchangeFilters\":[{\"filterType\":\"EXCHANGE_MAX_NUM_ORDERS\",\"maxNumOrders\":1000}],\"symbolFilters\":[{\"filterType\":\"PRICE_FILTER\",\"minPrice\":\"0.00000100\",\"maxPrice\":\"100000.00000000\",\"tickSize\":\"0.00000100\"}],\"assetFilters\":[{\"filterType\":\"MAX_ASSET\",\"limit\":\"100.00000000\",\"asset\":\"BNB\"}]}")
+        );
+        var client = CreateClient(handler);
+
+        var filters = await client.GetAccountFiltersAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(1000, Assert.Single(filters.ExchangeFilters!).MaxNumOrders);
+        Assert.Equal("100.00000000", Assert.Single(filters.AssetFilters!).Limit);
+        Assert.Equal("BNB", filters.AssetFilters![0].Asset);
+        Assert.Equal(FixedNow, filters.ObservedAtUtc);
+        Assert.Equal(2, handler.Requests.Count);
+        var request = handler.Requests[1];
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("/api/v3/myFilters", request.RequestUri!.AbsolutePath);
+        Assert.Contains("symbol=BTCUSDT", request.RequestUri.Query, StringComparison.Ordinal);
+        Assert.Contains("signature=", request.RequestUri.Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("test-api-secret", request.RequestUri!.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AccountFiltersResponseWithStringLimitIsNotTreatedAsMissing()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/myFilters", "{\"exchangeFilters\":[],\"symbolFilters\":[],\"assetFilters\":[{\"filterType\":\"MAX_ASSET\",\"limit\":\"0.50000000\",\"asset\":\"BTC\"}]}")
+        );
+        var client = CreateClient(handler);
+
+        var filters = await client.GetAccountFiltersAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
+        var violations = BinanceAccountFilterEvaluator.Evaluate(
+            filters, "BTC", "USDT", BinanceSpotOrderType.Limit, 0.75m, 100m, 0);
+
+        Assert.Contains(violations, item => item.Code == "MAX_ASSET_EXCEEDED");
+    }
+
+    [Fact]
+    public async Task AccountFiltersAreCachedWithinTtlAndRefetchedAfterExpiry()
+    {
+        var clock = new MutableTimeProvider(FixedNow);
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/myFilters", "{\"exchangeFilters\":[],\"symbolFilters\":[],\"assetFilters\":[]}"),
+            ("v3/myFilters", "{\"exchangeFilters\":[],\"symbolFilters\":[],\"assetFilters\":[]}")
+        );
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var options = new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret",
+            AccountFiltersCacheDuration = TimeSpan.FromMinutes(5),
+            // Keep the clock observation from the first call so this test isolates
+            // cache expiry instead of tripping the drift guard.
+            ClockSyncCacheDuration = TimeSpan.FromHours(1)
+        };
+        var client = new BinanceSpotAccountClient(httpClient, options, timeProvider: clock);
+
+        var first = await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
+        var second = await client.GetAccountFiltersAsync("btcusdt", TestContext.Current.CancellationToken);
+
+        // Second call is served from cache, including for a differently cased symbol.
+        Assert.Equal(1, handler.Requests.Count(x => x.RequestUri!.AbsolutePath == "/api/v3/myFilters"));
+        Assert.Equal(first.ObservedAtUtc, second.ObservedAtUtc);
+
+        clock.Advance(TimeSpan.FromMinutes(6));
+        var third = await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.Requests.Count(x => x.RequestUri!.AbsolutePath == "/api/v3/myFilters"));
+        Assert.True(third.ObservedAtUtc > second.ObservedAtUtc);
+    }
+
+    [Fact]
+    public async Task AccountFiltersCacheCanBeDisabled()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/myFilters", "{\"exchangeFilters\":[],\"symbolFilters\":[],\"assetFilters\":[]}"),
+            ("v3/myFilters", "{\"exchangeFilters\":[],\"symbolFilters\":[],\"assetFilters\":[]}")
+        );
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var options = new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret",
+            AccountFiltersCacheDuration = TimeSpan.Zero
+        };
+        var client = new BinanceSpotAccountClient(httpClient, options, timeProvider: new FixedTimeProvider(FixedNow));
+
+        await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
+        await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.Requests.Count(x => x.RequestUri!.AbsolutePath == "/api/v3/myFilters"));
+    }
+
+    [Fact]
+    public async Task TradingStateCombinesOrderCountPositionAndTradePermission()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":false,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"BTC\",\"free\":\"1.5\",\"locked\":\"0.5\"}]}"),
+            ("v3/openOrders", "[{\"symbol\":\"BTCUSDT\",\"orderId\":1,\"clientOrderId\":\"c1\",\"price\":\"100\",\"origQty\":\"0.4\",\"executedQty\":\"0.1\",\"cummulativeQuoteQty\":\"10\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"BUY\"},{\"symbol\":\"ETHUSDT\",\"orderId\":2,\"clientOrderId\":\"c2\",\"price\":\"100\",\"origQty\":\"1\",\"executedQty\":\"0\",\"cummulativeQuoteQty\":\"0\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"SELL\"}]")
+        );
+        var client = CreateClient(handler);
+
+        var state = await client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken);
+
+        Assert.False(state.CanTrade);
+        Assert.Equal(2, state.OpenOrderCount);
+        Assert.Equal(1, state.SymbolOpenOrderCount);
+        // free 1.5 + locked 0.5 + open BUY remainder 0.3
+        Assert.Equal(2.3m, state.BasePositionQuantity);
+    }
+
+    [Fact]
     public async Task CommissionResponseWithMissingComponentFailsClosed()
     {
         using var handler = new RecordingHandler(
@@ -284,6 +403,8 @@ public sealed class BinanceSpotAccountClientTests
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test handler owns the HttpClient lifetime for the duration of each test.")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
+        Justification = "The returned client owns the HttpClient for the duration of the test.")]
     private static BinanceSpotAccountClient CreateClient(RecordingHandler handler, bool allowTestnetWithdrawCapability = false)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
@@ -303,6 +424,13 @@ public sealed class BinanceSpotAccountClientTests
     {
         var signature = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(query));
         return Convert.ToHexString(signature).ToLowerInvariant();
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset current) : TimeProvider
+    {
+        private DateTimeOffset now = current;
+        public override DateTimeOffset GetUtcNow() => now;
+        public void Advance(TimeSpan amount) => now += amount;
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset current) : TimeProvider

@@ -53,8 +53,8 @@ fechadas da estratégia e aplica as seguintes hipóteses explícitas:
 
 - long-only, usando todo o caixa disponível na entrada e liquidando toda a
   posição na saída;
-- fill no fechamento do candle que gerou o sinal, com slippage adverso e fee
-  aplicados por lado;
+- por padrão, fill no fechamento do **candle seguinte** ao sinal, com slippage
+  adverso e fee por lado; sinal no último candle não é preenchido;
 - posição marcada a mercado pelo fechamento de cada barra;
 - turnover é a soma do notional de referência (preço de fechamento vezes
   quantidade) de cada fill, e `TurnoverRatio` divide esse valor pelo capital
@@ -67,12 +67,54 @@ fechadas da estratégia e aplica as seguintes hipóteses explícitas:
 - taxas e slippage são reportados separadamente para impedir que um retorno
   líquido seja confundido com retorno bruto.
 
+O fechamento seguinte é um proxy causal de pesquisa, não uma abertura observada
+nem garantia de execução. A hipótese anterior de fill no próprio fechamento do
+sinal está **superseded** para novas avaliações: `LegacySignalBarClose` permanece
+como opção explícita para reproduzir o timing histórico não causal. A
+hipótese é registrada no resultado e no fingerprint de benchmark. Consulte
+[`TrendFollowingBacktest.cs`](../src/CryptoTrading.Backtesting/TrendFollowingBacktest.cs)
+para o contrato atual.
+
+O modo legado não garante reprodução binária integral das métricas históricas:
+o drawdown do benchmark liquidado foi corrigido para incluir custos de saída.
+Para recuperar fingerprints e relatórios antigos exatamente, use o commit e os
+artefatos originais, sem reclassificá-los como evidência causal.
+
 O fill no fechamento é uma aproximação deliberadamente limitada: não modela
 spread, latência, partial fills, rejeições, limites da exchange, OHLCV intra-bar
 ou impacto de mercado. O resultado serve para verificar invariantes e comparar
 hipóteses reproduzíveis, não para justificar rentabilidade ou promoção.
 
+`EvaluationAssumptionsFingerprint` identifica versão de avaliação, parâmetros,
+capital, anualização, taxa livre de risco e hipótese de execução. Não é hash do
+dataset nem das janelas. Cada janela tem um hash dos símbolos, timestamps e
+fechamentos consumidos; a identidade do conjunto também vincula fronteiras e
+resultados, impedindo que uma seleção posterior reutilize o hash original.
+O dataset completo tem um hash **declarado**, não verificado nessa rotina; a
+vinculação não prova a origem do arquivo nem os demais campos OHLCV. A emissão
+de rótulos de elegibilidade pelo writer fica bloqueada até haver verificação
+independente do dataset e gates estatísticos.
+Resultados históricos sem os novos campos são identificados como timing legado
+e fingerprint ausente. Nenhum desses hashes autoriza promoção.
+
 ### OOS, walk-forward e sensibilidade
+
+Na hipótese causal, cada janela usa somente o intervalo declarado de treino
+para aquecer indicadores e inicia o OOS em caixa, sem executar trades durante
+o aquecimento. Um sinal no último candle de treino pode preencher no primeiro
+candle OOS; um sinal no último candle OOS não usa preços posteriores. Por ora,
+janelas com intervalo entre treino e OOS são rejeitadas: a semântica de embargo
+e atualização dos indicadores nesse intervalo ainda precisa ser definida. O modo
+legado reproduz a simulação contínua histórica e não deve ser interpretado
+como OOS isolado.
+
+Para o modo causal, buy-and-hold entra no primeiro fechamento OOS, sujeito aos
+mesmos custos de entrada, e é marcado no fechamento final sem cobrar uma saída
+que não ocorreu. O estado aberto/fechado ao final de cada janela é registrado.
+A composição de janelas independentes é rejeitada se uma janela anterior
+terminou com posição aberta ou estado desconhecido: reiniciar em caixa sem
+modelar liquidação e custos produziria um resultado agregado enganoso. Os
+resultados por janela continuam disponíveis para análise, sem promoção implícita.
 
 `WalkForwardPlan.Create` apenas produz janelas de treino e teste fora da amostra
 com índices explícitos; ele não ajusta parâmetros nem seleciona o melhor

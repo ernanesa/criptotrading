@@ -279,8 +279,48 @@ public sealed class ExecutionSubmissionGuardTests
         await using var supervisor = await ReadySupervisorAsync(); var (buy, message) = FreshCommand();
         var command = buy with { Side = OrderSide.Sell };
         var account = new GuardAccountClient { BitcoinFree = "0", BitcoinLocked = "1" };
-        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => ReadyGuard(supervisor, new GuardMarketClient(), account).ValidateFinalAsync(command, message, TestContext.Current.CancellationToken));
+        var riskContexts = new GuardRiskContextStore(defaultPositionQuantity: 1m);
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() => ReadyGuard(supervisor, new GuardMarketClient(), account, riskContexts: riskContexts).ValidateFinalAsync(command, message, TestContext.Current.CancellationToken));
         Assert.Equal("FINAL_INSUFFICIENT_FREE_BASE_BALANCE", exception.Message);
+    }
+    [Fact]
+    public async Task GuardBlocksSellWhenTrackedInventoryIsInsufficient()
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (buy, message) = FreshCommand();
+        var command = buy with { Side = OrderSide.Sell };
+        var account = new GuardAccountClient { BitcoinFree = "1" };
+        var riskContexts = new GuardRiskContextStore(defaultPositionQuantity: 0m, hasPositionBasis: true);
+        var guard = ReadyGuard(supervisor, new GuardMarketClient(), account, riskContexts: riskContexts);
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            guard.ValidateAsync(command, message, TestContext.Current.CancellationToken));
+        Assert.Equal("PRE_SUBMIT_INSUFFICIENT_TRACKED_INVENTORY", exception.Message);
+    }
+    [Fact]
+    public async Task GuardBlocksSellWhenTrackedPositionHasNoBasis()
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (buy, message) = FreshCommand();
+        var command = buy with { Side = OrderSide.Sell };
+        var account = new GuardAccountClient { BitcoinFree = "1" };
+        var riskContexts = new GuardRiskContextStore(defaultPositionQuantity: 1m, hasPositionBasis: false);
+        var guard = ReadyGuard(supervisor, new GuardMarketClient(), account, riskContexts: riskContexts);
+        var exception = await Assert.ThrowsAsync<ExecutionDispatchBlockedException>(() =>
+            guard.ValidateAsync(command, message, TestContext.Current.CancellationToken));
+        Assert.Equal("PRE_SUBMIT_INSUFFICIENT_TRACKED_INVENTORY", exception.Message);
+    }
+    [Fact]
+    public async Task GuardAcceptsSellWhenTrackedInventoryAndFreeBalanceAreSufficient()
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (buy, message) = FreshCommand();
+        var command = buy with { Side = OrderSide.Sell };
+        var account = new GuardAccountClient { BitcoinFree = "1" };
+        var riskContexts = new GuardRiskContextStore(defaultPositionQuantity: 1m, hasPositionBasis: true);
+        var guard = ReadyGuard(supervisor, new GuardMarketClient(), account, riskContexts: riskContexts);
+
+        await guard.ValidateAsync(command, message, TestContext.Current.CancellationToken);
+        await guard.ValidateFinalAsync(command, message, TestContext.Current.CancellationToken);
     }
     private static async Task<RuntimeSupervisor> ReadySupervisorAsync()
     {
@@ -289,8 +329,15 @@ public sealed class ExecutionSubmissionGuardTests
         await supervisor.MarkAccountStreamAsync(true, "test", cancellationToken); await supervisor.MarkWarmupAsync(true, "test", cancellationToken);
         return supervisor;
     }
-    private static ExecutionSubmissionGuard ReadyGuard(RuntimeSupervisor supervisor, GuardMarketClient market, GuardAccountClient account, WorkerRuntimeOptions? runtime = null, GuardPolicyStore? policies = null, TimeProvider? timeProvider = null) =>
-     new(new InMemoryOperationalControl(new RejectReset()), supervisor, policies ?? new GuardPolicyStore(timeProvider), new GuardRiskContextStore(), new GuardOpenOrderStore(), new GuardSubmissionStore(), market, account, Options.Create(runtime ?? new WorkerRuntimeOptions()), NullLogger<ExecutionSubmissionGuard>.Instance, timeProvider);
+    private static ExecutionSubmissionGuard ReadyGuard(
+        RuntimeSupervisor supervisor,
+        GuardMarketClient market,
+        GuardAccountClient account,
+        WorkerRuntimeOptions? runtime = null,
+        GuardPolicyStore? policies = null,
+        TimeProvider? timeProvider = null,
+        GuardRiskContextStore? riskContexts = null) =>
+        new(new InMemoryOperationalControl(new RejectReset()), supervisor, policies ?? new GuardPolicyStore(timeProvider), riskContexts ?? new GuardRiskContextStore(), new GuardOpenOrderStore(), new GuardSubmissionStore(), market, account, Options.Create(runtime ?? new WorkerRuntimeOptions()), NullLogger<ExecutionSubmissionGuard>.Instance, timeProvider);
     private static (SubmitOrderCommand Command, LeasedOutboxMessage Message) FreshCommand(TimeProvider? timeProvider = null)
     {
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow(); var correlation = CorrelationId.New(); var idempotency = IdempotencyKey.New();
@@ -383,10 +430,14 @@ public sealed class ExecutionSubmissionGuardTests
         public Task<RiskPolicyDocument> ApproveRiskPolicyAsync(string policyVersion, string approvalId, string approver, DateTimeOffset approvedAtUtc, CancellationToken cancellationToken = default) => Task.FromResult(document);
         public Task<RiskPolicyDocument> ActivateRiskPolicyAsync(string policyVersion, DateTimeOffset activatedAtUtc, CancellationToken cancellationToken = default) => Task.FromResult(document);
     }
-    private sealed class GuardRiskContextStore : IAutonomyRiskContextStore
+    private sealed class GuardRiskContextStore(decimal defaultPositionQuantity = 0m, bool hasPositionBasis = true) : IAutonomyRiskContextStore
     {
-        public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) => Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, DateTimeOffset.UtcNow, 1000m, 1000m, 0m, true, true));
-        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) => Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, valuationAtUtc, currentEquityNotional, 1000m, 0m, true, currentEquityNotional.HasValue));
+        public decimal PositionQuantity { get; set; } = defaultPositionQuantity;
+        public bool HasPositionBasis { get; set; } = hasPositionBasis;
+        public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, PositionQuantity, HasPositionBasis, DateTimeOffset.UtcNow, 1000m, 1000m, 0m, true, true));
+        public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, PositionQuantity, HasPositionBasis, valuationAtUtc, currentEquityNotional, 1000m, 0m, true, currentEquityNotional.HasValue));
     }
     private sealed class GuardOpenOrderStore : ILocalOpenOrderStore
     {

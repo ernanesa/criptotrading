@@ -46,6 +46,7 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
             var transport = transportFactory();
             var connected = false;
             var receivedValidEvent = false;
+            var disconnectReason = BinanceMarketDisconnectReason.TransportClosed;
             try
             {
                 try
@@ -57,13 +58,19 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
                 {
                     yield break;
                 }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    disconnectReason = BinanceMarketDisconnectReason.ReadFailure;
+                }
                 catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
                 {
                     // Reconnect below with bounded exponential backoff.
+                    disconnectReason = BinanceMarketDisconnectReason.ReadFailure;
                 }
                 catch (IOException) when (!cancellationToken.IsCancellationRequested)
                 {
                     // Reconnect below with bounded exponential backoff.
+                    disconnectReason = BinanceMarketDisconnectReason.ReadFailure;
                 }
 
                 if (connected)
@@ -88,20 +95,29 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
                             {
                                 // A transport-side cancellation (for example a session watchdog)
                                 // is a reconnectable failure, not a caller shutdown.
+                                disconnectReason = BinanceMarketDisconnectReason.ReadFailure;
                                 break;
                             }
                             catch (WebSocketException) when (!cancellationToken.IsCancellationRequested)
                             {
                                 // Reconnect after an established socket fails while reading.
+                                disconnectReason = BinanceMarketDisconnectReason.ReadFailure;
                                 break;
                             }
                             catch (IOException) when (!cancellationToken.IsCancellationRequested)
                             {
                                 // Reconnect after a receive/read I/O failure.
+                                disconnectReason = BinanceMarketDisconnectReason.ReadFailure;
                                 break;
                             }
 
-                            var parsed = BinanceMarketDataParser.TryParse(item.Span, timeProvider.GetUtcNow());
+                            var parsed = BinanceMarketDataParser.TryParse(item, timeProvider.GetUtcNow());
+                            if (parsed is BinanceMarketServerShutdownEvent)
+                            {
+                                // Close this session and reconnect using the existing bounded backoff.
+                                disconnectReason = BinanceMarketDisconnectReason.ServerShutdown;
+                                break;
+                            }
                             if (parsed is null)
                             {
                                 // One bad event must not tear down a healthy feed, but it must remain observable.
@@ -114,11 +130,20 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
                             receivedValidEvent = true;
                             yield return parsed;
                         }
+
+                        if (!cancellationToken.IsCancellationRequested)
+                        {
+                            yield return new BinanceMarketStreamDisconnectedEvent(timeProvider.GetUtcNow(), disconnectReason);
+                        }
                     }
                     finally
                     {
                         await enumerator.DisposeAsync().ConfigureAwait(false);
                     }
+                }
+                else if (!cancellationToken.IsCancellationRequested)
+                {
+                    yield return new BinanceMarketStreamDisconnectedEvent(timeProvider.GetUtcNow(), disconnectReason);
                 }
             }
             finally

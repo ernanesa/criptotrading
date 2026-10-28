@@ -26,7 +26,8 @@ public enum BinanceOrderBookInvalidReason
     SequenceGap,
     InvalidLevel,
     SymbolMismatch,
-    CapacityExceeded
+    CapacityExceeded,
+    InvalidBookState
 }
 
 public sealed record BinanceOrderBookApplyResult(
@@ -36,6 +37,7 @@ public sealed record BinanceOrderBookApplyResult(
     BinanceOrderBookInvalidReason? InvalidReason = null)
 {
     public bool ResyncRequired => Status is BinanceOrderBookStatus.Invalid;
+
 }
 
 public sealed record BinanceOrderBookQuarantineEntry(
@@ -84,14 +86,23 @@ public sealed class BinanceLocalOrderBook
 
     public bool ResyncRequired => Status is BinanceOrderBookStatus.Invalid;
 
+    /// <summary>True only after a valid snapshot has been bridged by a contiguous stream delta.</summary>
+    public bool IsSynchronized => Status is BinanceOrderBookStatus.Healthy && hasAppliedDelta;
+
+    public void InvalidateForStreamDisconnect()
+    {
+        Status = BinanceOrderBookStatus.Invalid;
+        hasAppliedDelta = false;
+    }
+
     public long? LastUpdateId { get; private set; }
 
-    public IReadOnlyList<BinanceOrderBookLevel> Bids =>
+    public IReadOnlyList<BinanceOrderBookLevel> Bids => !IsSynchronized ? [] :
         bids.OrderByDescending(pair => pair.Key)
             .Select(pair => new BinanceOrderBookLevel(pair.Key, pair.Value))
             .ToArray();
 
-    public IReadOnlyList<BinanceOrderBookLevel> Asks =>
+    public IReadOnlyList<BinanceOrderBookLevel> Asks => !IsSynchronized ? [] :
         asks.OrderBy(pair => pair.Key)
             .Select(pair => new BinanceOrderBookLevel(pair.Key, pair.Value))
             .ToArray();
@@ -104,7 +115,7 @@ public sealed class BinanceLocalOrderBook
     /// </summary>
     public decimal? CalculateTopDepthImbalance(int levels = 5)
     {
-        if (Status is not BinanceOrderBookStatus.Healthy || levels <= 0 || bids.Count == 0 || asks.Count == 0)
+        if (Status is not BinanceOrderBookStatus.Healthy || !hasAppliedDelta || levels <= 0 || bids.Count == 0 || asks.Count == 0)
         {
             return null;
         }
@@ -122,7 +133,7 @@ public sealed class BinanceLocalOrderBook
     /// </summary>
     public decimal? CalculateTopDepthLiquidityNotional(int levels = 5)
     {
-        if (Status is not BinanceOrderBookStatus.Healthy || levels <= 0 || bids.Count == 0 || asks.Count == 0)
+        if (Status is not BinanceOrderBookStatus.Healthy || !hasAppliedDelta || levels <= 0 || bids.Count == 0 || asks.Count == 0)
         {
             return null;
         }
@@ -218,6 +229,11 @@ public sealed class BinanceLocalOrderBook
 
         ApplyLevels(update.Bids, bids);
         ApplyLevels(update.Asks, asks);
+        if (!HasValidSpread(bids, asks))
+        {
+            return Invalidate(BinanceOrderBookApplyDisposition.InvalidQuarantined, BinanceOrderBookInvalidReason.InvalidBookState,
+                update.FirstUpdateId, update.FinalUpdateId, current);
+        }
         LastUpdateId = update.FinalUpdateId;
         hasAppliedDelta = true;
         Status = BinanceOrderBookStatus.Healthy;
@@ -265,14 +281,29 @@ public sealed class BinanceLocalOrderBook
             return false;
         }
 
+        if (!HasValidSpread(nextBids, nextAsks))
+        {
+            return false;
+        }
+
         Prune(nextBids, isBid: true);
         Prune(nextAsks, isBid: false);
         return true;
     }
 
+    private static bool HasValidSpread(Dictionary<decimal, decimal> bidLevels, Dictionary<decimal, decimal> askLevels)
+    {
+        if (bidLevels.Count == 0 || askLevels.Count == 0) return false;
+        var bestBid = decimal.MinValue;
+        var bestAsk = decimal.MaxValue;
+        foreach (var price in bidLevels.Keys) bestBid = Math.Max(bestBid, price);
+        foreach (var price in askLevels.Keys) bestAsk = Math.Min(bestAsk, price);
+        return bestBid < bestAsk;
+    }
+
     private static bool TryLoadSnapshotSide(IReadOnlyList<BinanceOrderBookLevel> levels, Dictionary<decimal, decimal> destination)
     {
-        if (!TryValidateLevels(levels))
+        if (!TryValidateLevels(levels) || levels.Any(static level => level.Quantity == 0m))
         {
             return false;
         }

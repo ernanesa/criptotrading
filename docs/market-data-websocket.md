@@ -40,11 +40,16 @@ authenticate, submit orders, or fetch a snapshot by itself.
 The synchronization contract is:
 
 1. Fetch a REST depth snapshot and call `ApplySnapshot`.
-2. Buffer WebSocket `depthUpdate` events while the snapshot is being fetched.
+2. Buffer WebSocket `depthUpdate` events while the snapshot is being fetched,
+   as required by the [Binance synchronization procedure](https://github.com/binance/binance-spot-api-docs/blob/master/web-socket-streams.md#how-to-manage-a-local-order-book-correctly).
+   **Not implemented in the current Worker:** it discards deltas while the
+   book is invalid, which can require repeated resynchronization.
 3. Apply the first buffered event only when it bridges `lastUpdateId + 1`
    (`U <= lastUpdateId + 1 <= u`).
-4. Require every following event to be contiguous (`U == previous u`). When
-   Binance sends `pu`, it must also equal the local last update ID.
+4. The current implementation requires every following event to be contiguous
+   (`U == previous u + 1`). When `pu` is present after the initial bridge, it
+   must also equal the local last update ID. This is stricter than the official
+   procedure for overlapping updates and can trigger conservative resyncs.
 5. If a gap, overlap/out-of-order event, invalid level, or symbol mismatch is
    detected, the book becomes `Invalid`, the event is quarantined, and
    `ResyncRequired` remains true until a fresh snapshot is applied.
@@ -53,6 +58,12 @@ The synchronization contract is:
 the best bid and ask levels, while `quarantineCapacity` bounds diagnostic
 records. Duplicate events (`u <= lastUpdateId`) are quarantined without
 invalidating an otherwise healthy book; they never mutate the projection.
+`Healthy` immediately after a snapshot does not establish a bridge: consumers
+must require `IsSynchronized`. Until then, and after invalidation, `Bids`,
+`Asks` and depth-derived signals are unavailable. The Worker invalidates
+cached market state when the adapter reports a stream disconnection; a complete
+buffered reconstruction and the treatment of decisions already in flight remain
+unverified.
 
 ```csharp
 var book = new BinanceLocalOrderBook("BTCUSDT", maxLevels: 1000);

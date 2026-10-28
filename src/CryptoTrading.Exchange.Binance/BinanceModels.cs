@@ -49,7 +49,8 @@ public sealed record BinanceBookTicker(
 public sealed record BinanceExchangeInfo(
     [property: JsonPropertyName("timezone")] string Timezone,
     [property: JsonPropertyName("serverTime")] long ServerTime,
-    [property: JsonPropertyName("symbols")] IReadOnlyList<BinanceSymbolInfo> Symbols);
+    [property: JsonPropertyName("symbols")] IReadOnlyList<BinanceSymbolInfo> Symbols,
+    [property: JsonPropertyName("exchangeFilters")] IReadOnlyList<BinanceExchangeFilter>? ExchangeFilters = null);
 
 public sealed record BinanceSymbolInfo(
     [property: JsonPropertyName("symbol")] string Symbol,
@@ -58,7 +59,8 @@ public sealed record BinanceSymbolInfo(
     [property: JsonPropertyName("quoteAsset")] string QuoteAsset,
     [property: JsonPropertyName("baseAssetPrecision")] int BaseAssetPrecision,
     [property: JsonPropertyName("quoteAssetPrecision")] int QuoteAssetPrecision,
-    [property: JsonPropertyName("filters")] IReadOnlyList<BinanceSymbolFilter>? Filters = null);
+    [property: JsonPropertyName("filters")] IReadOnlyList<BinanceSymbolFilter>? Filters = null,
+    [property: JsonPropertyName("orderTypes")] IReadOnlyList<string>? OrderTypes = null);
 
 /// <summary>
 /// The filter payload is intentionally represented as strings. Binance sends decimal
@@ -76,4 +78,63 @@ public sealed record BinanceSymbolFilter(
     [property: JsonPropertyName("minNotional")] string? MinNotional = null,
     [property: JsonPropertyName("maxNotional")] string? MaxNotional = null,
     [property: JsonPropertyName("applyToMarket")] bool? ApplyToMarket = null,
-    [property: JsonPropertyName("avgPriceMins")] int? AveragePriceMinutes = null);
+    [property: JsonPropertyName("avgPriceMins")] int? AveragePriceMinutes = null,
+    [property: JsonPropertyName("multiplierUp")] string? MultiplierUp = null,
+    [property: JsonPropertyName("multiplierDown")] string? MultiplierDown = null,
+    [property: JsonPropertyName("bidMultiplierUp")] string? BidMultiplierUp = null,
+    [property: JsonPropertyName("bidMultiplierDown")] string? BidMultiplierDown = null,
+    [property: JsonPropertyName("askMultiplierUp")] string? AskMultiplierUp = null,
+    [property: JsonPropertyName("askMultiplierDown")] string? AskMultiplierDown = null,
+    [property: JsonPropertyName("maxPosition")] string? MaxPosition = null,
+    [property: JsonPropertyName("maxNumOrders")] long? MaxNumOrders = null);
+
+/// <summary>
+/// Reference price for a symbol (<c>GET /api/v3/referencePrice</c>, weight 2).
+/// <see cref="Price"/> is null when the venue has no reference price set; the
+/// call is rejected when no reference price was ever set.
+/// </summary>
+public sealed record BinanceReferencePrice(
+    [property: JsonPropertyName("symbol")] string Symbol,
+    [property: JsonPropertyName("referencePrice")] string? ReferencePrice,
+    [property: JsonPropertyName("timestamp")] long Timestamp);
+
+/// <summary>
+/// Exchange-wide filter advertised at the root of <c>exchangeInfo</c>.
+/// Numeric limits are kept as raw JSON so validation can decide exactly what
+/// it supports instead of silently receiving a default for an unknown shape.
+/// See https://github.com/binance/binance-spot-api-docs/blob/master/filters.md#exchange-filters
+/// </summary>
+public sealed record BinanceExchangeFilter(
+    [property: JsonPropertyName("filterType")] string FilterType,
+    [property: JsonPropertyName("maxNumOrders")] long? MaxNumOrders = null,
+    [property: JsonPropertyName("maxNumAlgoOrders")] long? MaxNumAlgoOrders = null);
+
+/// <summary>
+/// Account-specific filters returned by <c>GET /api/v3/myFilters</c> (USER_DATA,
+/// weight 40). This is the only endpoint that reports whether an account has
+/// <c>MAX_ASSET</c> filters applied.
+/// See https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md#query-relevant-filters-user_data
+/// </summary>
+public sealed record BinanceAccountFilters(
+    [property: JsonPropertyName("exchangeFilters")] IReadOnlyList<BinanceExchangeFilter>? ExchangeFilters,
+    [property: JsonPropertyName("symbolFilters")] IReadOnlyList<BinanceSymbolFilter>? SymbolFilters,
+    [property: JsonPropertyName("assetFilters")] IReadOnlyList<BinanceAssetFilter>? AssetFilters,
+    DateTimeOffset ObservedAtUtc)
+{
+    /// <summary>True when every advertised filter is one this adapter can reason about.</summary>
+    public bool HasOnlyKnownFilterTypes =>
+        (ExchangeFilters ?? []).All(static filter =>
+            filter.FilterType is "EXCHANGE_MAX_NUM_ORDERS" or "EXCHANGE_MAX_NUM_ALGO_ORDERS") &&
+        (AssetFilters ?? []).All(static filter => filter.FilterType is "MAX_ASSET");
+}
+
+/// <summary>
+/// Per-asset order limit. <c>asset</c> is the asset whose amount is compared with
+/// <c>limit</c>; equality with the account's base or quote asset determines the
+/// unit of the comparison. Binance sends <c>limit</c> as a JSON string, so it is
+/// preserved verbatim and parsed with invariant culture to avoid precision loss.
+/// </summary>
+public sealed record BinanceAssetFilter(
+    [property: JsonPropertyName("filterType")] string FilterType,
+    [property: JsonPropertyName("asset")] string? Asset = null,
+    [property: JsonPropertyName("limit")] string? Limit = null);

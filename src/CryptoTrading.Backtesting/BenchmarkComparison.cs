@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CryptoTrading.Backtesting.Strategies;
 
 namespace CryptoTrading.Backtesting;
@@ -18,7 +19,17 @@ public sealed record BenchmarkResult(
     decimal? ReferenceExitPrice = null,
     decimal FeeRate = 0m,
     decimal HalfSpreadRate = 0m,
-    decimal SlippageRate = 0m);
+    decimal SlippageRate = 0m)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MarkedOpenAtEnd { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? StrategyConfigurationFingerprint { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvaluationAssumptionsFingerprint { get; init; }
+}
 
 public sealed record BenchmarkComparison(
     BenchmarkResult Strategy,
@@ -36,6 +47,29 @@ public sealed record BenchmarkComparison(
 public static class BenchmarkComparisonEvaluator
 {
     public static WalkForwardBenchmarkSummary AggregateOutOfSample(
+        IReadOnlyList<OutOfSampleWindowResult> windows)
+    {
+        ArgumentNullException.ThrowIfNull(windows);
+        if (windows.Take(Math.Max(0, windows.Count - 1)).Any(static window => window.EndPositionOpen != false))
+        {
+            throw new InvalidOperationException("Independent OOS windows cannot be compounded when an earlier ending position is open or unknown.");
+        }
+
+        foreach (var window in windows)
+        {
+            var strategy = window.Benchmark.Strategy;
+            if (window.StartingEquity != strategy.InitialCapital || window.FinalEquity != strategy.FinalEquity ||
+                window.NetReturn != strategy.NetReturn || window.MaximumDrawdown != strategy.MaximumDrawdown ||
+                window.PeriodCount != strategy.PeriodCount)
+            {
+                throw new InvalidOperationException("Window metrics do not match their recorded benchmark.");
+            }
+        }
+
+        return AggregateOutOfSampleLegacy(windows);
+    }
+
+    internal static WalkForwardBenchmarkSummary AggregateOutOfSampleLegacy(
         IReadOnlyList<OutOfSampleWindowResult> windows)
     {
         ArgumentNullException.ThrowIfNull(windows);
@@ -59,23 +93,20 @@ public static class BenchmarkComparisonEvaluator
             throw new ArgumentException("At least one OOS window is required.", nameof(windows));
         }
 
+        foreach (var window in windows)
+        {
+            ValidateComparison(window.Benchmark);
+        }
+
         var strategyReturn = Compound(windows.Select(static window => window.NetReturn));
         var noTradeReturn = Compound(windows.Select(static window => window.Benchmark.NoTradeCash.NetReturn));
         ValidateContiguousWindows(windows);
         var buyHoldReturn = CalculateContinuousBuyAndHoldReturn(
             windows[0].Benchmark.BuyAndHold,
             windows[^1].Benchmark.BuyAndHold);
-        var payload = JsonSerializer.Serialize(new
-        {
-            windows = windows.Select(static window => new
-            {
-                window = window.Window,
-                benchmark = window.Benchmark.Fingerprint,
-            }),
-            strategy_return = strategyReturn,
-            no_trade_return = noTradeReturn,
-            buy_hold_return = buyHoldReturn,
-        });
+        var payload = JsonSerializer.Serialize(new BenchmarkAggregateFingerprintPayload(
+            windows.Select(static window => new BenchmarkWindowFingerprintPayload(window.Window, window.Benchmark.Fingerprint)).ToArray(),
+            strategyReturn, noTradeReturn, buyHoldReturn), BenchmarkFingerprintJsonContext.Default.BenchmarkAggregateFingerprintPayload);
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
         return new(
             strategyReturn,
@@ -97,7 +128,26 @@ public static class BenchmarkComparisonEvaluator
         decimal? benchmarkEntryPrice = null,
         decimal feeRate = 0m,
         decimal halfSpreadRate = 0m,
-        decimal slippageRate = 0m)
+        decimal slippageRate = 0m) => CompareOutOfSampleWithTiming(strategyName, initialCapital, finalEquity,
+            strategyNetReturn, strategyMaximumDrawdown, periodCount, bars, benchmarkEntryPrice, feeRate,
+            halfSpreadRate, slippageRate, "prior-close-entry", false, null, null);
+
+    internal static BenchmarkComparison CompareOutOfSampleWithTiming(
+        string strategyName,
+        decimal initialCapital,
+        decimal finalEquity,
+        decimal strategyNetReturn,
+        decimal strategyMaximumDrawdown,
+        int periodCount,
+        IReadOnlyList<CloseBar> bars,
+        decimal? benchmarkEntryPrice,
+        decimal feeRate,
+        decimal halfSpreadRate,
+        decimal slippageRate,
+        string entryConvention,
+        bool markOpenAtEnd,
+        string? strategyConfigurationFingerprint,
+        string? evaluationAssumptionsFingerprint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(strategyName);
         ArgumentNullException.ThrowIfNull(bars);
@@ -115,7 +165,11 @@ public static class BenchmarkComparisonEvaluator
             strategyNetReturn,
             strategyMaximumDrawdown,
             periodCount,
-            "strategy-evaluator-costs-included");
+            "strategy-evaluator-costs-included")
+        {
+            StrategyConfigurationFingerprint = strategyConfigurationFingerprint,
+            EvaluationAssumptionsFingerprint = evaluationAssumptionsFingerprint
+        };
         var noTrade = new BenchmarkResult(
             "NO_TRADE/cash",
             initialCapital,
@@ -134,10 +188,11 @@ public static class BenchmarkComparisonEvaluator
         var adverseRate = halfSpreadRate + slippageRate;
         var entryPrice = entryReferencePrice * (1m + adverseRate);
         var quantity = initialCapital / (entryPrice * (1m + feeRate));
-        var exitPrice = lastPrice * (1m - adverseRate);
+        var exitPrice = markOpenAtEnd ? lastPrice : lastPrice * (1m - adverseRate);
         var exitNotional = quantity * exitPrice;
-        var buyHoldFinal = exitNotional * (1m - feeRate);
-        var maxDrawdown = CalculateBuyAndHoldDrawdown(bars, initialCapital, entryReferencePrice, quantity);
+        var buyHoldFinal = markOpenAtEnd ? exitNotional : exitNotional * (1m - feeRate);
+        var maxDrawdown = CalculateBuyAndHoldDrawdown(bars, initialCapital, entryReferencePrice, quantity,
+            markOpenAtEnd ? null : buyHoldFinal);
         var buyHold = new BenchmarkResult(
             "buy-and-hold",
             initialCapital,
@@ -145,14 +200,15 @@ public static class BenchmarkComparisonEvaluator
             buyHoldFinal / initialCapital - 1m,
             maxDrawdown,
             periodCount,
-            $"prior-close-entry; fee={feeRate.ToString("0.00%", CultureInfo.InvariantCulture)}; " +
+            $"{entryConvention}{(markOpenAtEnd ? "; mark-open" : string.Empty)}; fee={feeRate.ToString("0.00%", CultureInfo.InvariantCulture)}; " +
             $"half-spread={halfSpreadRate.ToString("0.00%", CultureInfo.InvariantCulture)}; " +
             $"slippage={slippageRate.ToString("0.00%", CultureInfo.InvariantCulture)}",
             entryReferencePrice,
             lastPrice,
             feeRate,
             halfSpreadRate,
-            slippageRate);
+            slippageRate)
+        { MarkedOpenAtEnd = markOpenAtEnd };
         return CreateComparison(strategy, noTrade, buyHold);
     }
 
@@ -164,6 +220,13 @@ public static class BenchmarkComparisonEvaluator
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(options);
+        if (strategy.ExecutionTiming != options.ExecutionTiming ||
+            strategy.Metrics.InitialCapital != options.InitialCapital ||
+            strategy.Metrics.PeriodsPerYear != options.PeriodsPerYear ||
+            strategy.Metrics.AnnualRiskFreeRate != options.AnnualRiskFreeRate)
+        {
+            throw new ArgumentException("Benchmark options must match the strategy evaluation assumptions.", nameof(options));
+        }
         if (bars.Count == 0 || strategy.EquityCurve.Count != bars.Count)
         {
             throw new ArgumentException("Benchmark comparison requires one equity point per bar.", nameof(bars));
@@ -174,6 +237,11 @@ public static class BenchmarkComparisonEvaluator
             if (strategy.EquityCurve[index].CloseTimeUtc != bars[index].CloseTimeUtc)
             {
                 throw new InvalidOperationException("Strategy and benchmark timelines do not match.");
+            }
+
+            if (bars[index].ClosePrice.Value != strategy.EquityCurve[index].ReferencePrice)
+            {
+                throw new ArgumentException("Benchmark prices must match the evaluated strategy prices.", nameof(bars));
             }
 
             if (bars[index].ClosePrice.Value <= 0m)
@@ -192,27 +260,48 @@ public static class BenchmarkComparisonEvaluator
             buyHoldFinal / options.InitialCapital - 1m, maxDrawdown, bars.Count, "entry-at-first-close-no-costs",
             firstPrice, lastPrice);
         var strategyResult = new BenchmarkResult(
-            strategy.StrategyId + "/" + strategy.StrategyVersion,
+            FormatStrategyName(strategy.StrategyId, strategy.StrategyVersion, strategy.ExecutionTiming),
             strategy.Metrics.InitialCapital,
             strategy.Metrics.FinalEquity,
             strategy.Metrics.NetReturn,
             strategy.Metrics.MaximumDrawdown,
             strategy.Metrics.PeriodCount,
-            "strategy-evaluator-costs-included");
+            "strategy-evaluator-costs-included")
+        {
+            StrategyConfigurationFingerprint = strategy.EvaluationAssumptionsFingerprint is null ? null : strategy.StrategyConfigurationFingerprint,
+            EvaluationAssumptionsFingerprint = strategy.EvaluationAssumptionsFingerprint
+        };
         return CreateComparison(strategyResult, noTrade, buyHold);
     }
+
+    internal static string FormatStrategyName(string strategyId, string version, BacktestExecutionTiming timing) =>
+        timing == BacktestExecutionTiming.LegacySignalBarClose
+            ? strategyId + "/" + version
+            : strategyId + "/" + version + "|execution:next-bar-close-v1";
 
     private static BenchmarkComparison CreateComparison(
         BenchmarkResult strategy,
         BenchmarkResult noTrade,
         BenchmarkResult buyHold)
     {
-        var fingerprintPayload = JsonSerializer.Serialize(new { strategy, no_trade = noTrade, buy_hold = buyHold });
+        var fingerprintPayload = JsonSerializer.Serialize(new BenchmarkFingerprintPayload(strategy, noTrade, buyHold),
+            BenchmarkFingerprintJsonContext.Default.BenchmarkFingerprintPayload);
         var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintPayload)));
         return new(strategy, noTrade, buyHold,
             strategy.NetReturn > noTrade.NetReturn,
             strategy.NetReturn > buyHold.NetReturn,
             fingerprint);
+    }
+
+    private static void ValidateComparison(BenchmarkComparison comparison)
+    {
+        ArgumentNullException.ThrowIfNull(comparison);
+        var expected = CreateComparison(comparison.Strategy, comparison.NoTradeCash, comparison.BuyAndHold);
+        if (!string.Equals(expected.Fingerprint, comparison.Fingerprint, StringComparison.Ordinal) ||
+            expected.BeatsNoTradeCash != comparison.BeatsNoTradeCash || expected.BeatsBuyAndHold != comparison.BeatsBuyAndHold)
+        {
+            throw new InvalidOperationException("Benchmark comparison does not match its recorded fingerprint.");
+        }
     }
 
     private static decimal Compound(IEnumerable<decimal> returns)
@@ -287,7 +376,8 @@ public static class BenchmarkComparisonEvaluator
             firstWindow.InitialCapital <= 0m ||
             firstWindow.FeeRate != lastWindow.FeeRate ||
             firstWindow.HalfSpreadRate != lastWindow.HalfSpreadRate ||
-            firstWindow.SlippageRate != lastWindow.SlippageRate)
+            firstWindow.SlippageRate != lastWindow.SlippageRate ||
+            firstWindow.MarkedOpenAtEnd != lastWindow.MarkedOpenAtEnd)
         {
             throw new InvalidOperationException("Continuous buy-and-hold aggregation requires matching endpoint and cost metadata.");
         }
@@ -295,8 +385,8 @@ public static class BenchmarkComparisonEvaluator
         var adverseRate = firstWindow.HalfSpreadRate + firstWindow.SlippageRate;
         var entryPrice = entryReferencePrice * (1m + adverseRate);
         var quantity = firstWindow.InitialCapital / (entryPrice * (1m + firstWindow.FeeRate));
-        var exitPrice = exitReferencePrice * (1m - adverseRate);
-        var finalEquity = quantity * exitPrice * (1m - firstWindow.FeeRate);
+        var exitPrice = lastWindow.MarkedOpenAtEnd ? exitReferencePrice : exitReferencePrice * (1m - adverseRate);
+        var finalEquity = lastWindow.MarkedOpenAtEnd ? quantity * exitPrice : quantity * exitPrice * (1m - firstWindow.FeeRate);
         return (finalEquity / firstWindow.InitialCapital) - 1m;
     }
 
@@ -304,7 +394,8 @@ public static class BenchmarkComparisonEvaluator
         IReadOnlyList<CloseBar> bars,
         decimal initialCapital,
         decimal entryReferencePrice,
-        decimal quantity)
+        decimal quantity,
+        decimal? liquidationEquity)
     {
         var peak = initialCapital;
         var maximumDrawdown = 1m - ((quantity * entryReferencePrice) / peak);
@@ -313,6 +404,11 @@ public static class BenchmarkComparisonEvaluator
             var equity = quantity * bar.ClosePrice.Value;
             peak = Math.Max(peak, equity);
             maximumDrawdown = Math.Max(maximumDrawdown, peak == 0m ? 0m : 1m - equity / peak);
+        }
+
+        if (liquidationEquity is { } finalEquity)
+        {
+            maximumDrawdown = Math.Max(maximumDrawdown, peak == 0m ? 0m : 1m - finalEquity / peak);
         }
 
         return maximumDrawdown;

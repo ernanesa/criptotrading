@@ -20,9 +20,15 @@ bash scripts/dotnet-local.sh build CryptoTrading.slnx --no-restore
 bash scripts/dotnet-local.sh test CryptoTrading.slnx --no-restore
 ```
 
-O SDK instalado é `11.0.100-rc.1.26425.128`; o build registra a mensagem de
+O SDK requerido é `11.0.100-rc.3.26522.148`; o build registra a mensagem de
 preview esperada. A atualização para GA deve ser um commit isolado que atualize
 `global.json`, valide dependências e remova a condição preview.
+
+O launcher usa `.tools/dotnet/` por padrão. Para manter uma instalação RC1
+existente sem sobrescrevê-la, instale o RC3 em um diretório separado e informe
+`DOTNET_LOCAL_ROOT` apontando para esse diretório ao chamar o launcher. O caminho
+de validação em `/tmp/kilo` é temporário e não deve ser tratado como instalação
+permanente.
 
 ## Smoke checks sem credenciais
 

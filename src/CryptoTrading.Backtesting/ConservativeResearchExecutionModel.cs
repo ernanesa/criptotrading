@@ -244,6 +244,11 @@ public sealed class ConservativeResearchExecutionModel
 
         executedPrice = Filters.QuantizePrice(executedPrice);
 
+        if (executedPrice < bar.LowPrice.Value || executedPrice > bar.HighPrice.Value)
+        {
+            return Unfilled(order.SubmissionBarIndex, executionBarIndex, "Quantized execution price lies outside the observed bar.");
+        }
+
         if (order.LimitPrice is { } orderLimit &&
             ((isBuy && executedPrice > orderLimit) || (isSell && executedPrice < orderLimit)))
         {

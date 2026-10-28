@@ -12,4 +12,5 @@ internal sealed record ExecutionReplayFacts(
     decimal Commission,
     string CommissionAsset,
     DateTimeOffset OccurredAtUtc,
-    Guid LedgerEntryId);
+    Guid LedgerEntryId,
+    string? ClientOrderId = null);

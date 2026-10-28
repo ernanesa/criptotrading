@@ -5,7 +5,7 @@ using Microsoft.Extensions.Options;
 
 namespace CryptoTrading.Exchange.Binance;
 
-public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
+public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinanceReferencePriceProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient httpClient;
@@ -284,6 +284,25 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient
         }
 
         return GetAsync<BinanceExchangeInfo>(endpoint, cancellationToken);
+    }
+
+    /// <summary>
+    /// Queries <c>GET /api/v3/referencePrice</c> (weight 2, public). Returns null
+    /// when the payload carries no reference price, and propagates the venue
+    /// error when no reference price was ever set for the symbol.
+    /// </summary>
+    public async Task<decimal?> GetReferencePriceAsync(
+        string symbol,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedSymbol = NormalizeSymbol(symbol);
+        var response = await GetAsync<BinanceReferencePrice>(
+            $"v3/referencePrice?symbol={Uri.EscapeDataString(normalizedSymbol)}",
+            cancellationToken).ConfigureAwait(false);
+
+        return decimal.TryParse(response.ReferencePrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var price) && price > 0m
+            ? price
+            : null;
     }
 
     public async Task<BinanceSymbolTradingRules> GetTradingRulesAsync(

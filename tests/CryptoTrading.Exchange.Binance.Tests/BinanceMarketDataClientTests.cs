@@ -116,7 +116,101 @@ public sealed class BinanceMarketDataClientTests
 
         await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
         Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(BinanceMarketDisconnectReason.ReadFailure, Assert.IsType<BinanceMarketStreamDisconnectedEvent>(enumerator.Current).Reason);
+        Assert.True(await enumerator.MoveNextAsync());
         Assert.Equal(43, Assert.IsType<BinanceTradeEvent>(enumerator.Current).TradeId);
+    }
+
+    [Theory]
+    [InlineData("{\"e\":\"serverShutdown\",\"E\":1770123456789}")]
+    [InlineData("{\"stream\":\"!serverShutdown\",\"data\":{\"e\":\"serverShutdown\",\"E\":1770123456789}}")]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns both test transports.")]
+    public async Task ReadAsyncReconnectsOnServerShutdownWithoutConsumingOldSession(string shutdown)
+    {
+        const string oldTrade = "{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"t\":1,\"p\":\"100.50\",\"q\":\"0.010\",\"m\":true}}";
+        const string newTrade = "{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"t\":43,\"p\":\"101.50\",\"q\":\"0.010\",\"m\":false}}";
+        var first = new FakeTransport(shutdown, oldTrade);
+        var second = new FakeTransport(newTrade);
+        var transports = new Queue<IBinanceWebSocketTransport>([first, second]);
+        var client = new BinanceSpotMarketDataClient(new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+            MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+            MaxReconnectAttempts = 2
+        }, () => transports.Dequeue());
+
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], cancellationToken: TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(BinanceMarketDisconnectReason.ServerShutdown, Assert.IsType<BinanceMarketStreamDisconnectedEvent>(enumerator.Current).Reason);
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(43, Assert.IsType<BinanceTradeEvent>(enumerator.Current).TradeId);
+        Assert.True(second.Connected);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns both test transports.")]
+    public async Task ReadAsyncSignalsCleanClosureBeforeNextSession()
+    {
+        var first = new FakeTransport();
+        var second = new FakeTransport("{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"t\":43,\"p\":\"101.50\",\"q\":\"0.010\",\"m\":false}}");
+        var transports = new Queue<IBinanceWebSocketTransport>([first, second]);
+        var client = new BinanceSpotMarketDataClient(new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+            MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+            MaxReconnectAttempts = 2
+        }, () => transports.Dequeue());
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(BinanceMarketDisconnectReason.TransportClosed, Assert.IsType<BinanceMarketStreamDisconnectedEvent>(enumerator.Current).Reason);
+        Assert.False(second.Connected);
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(43, Assert.IsType<BinanceTradeEvent>(enumerator.Current).TradeId);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns both test transports.")]
+    public async Task TransportCancellationDuringConnectSignalsAndReconnects()
+    {
+        var second = new FakeTransport("{\"stream\":\"btcusdt@trade\",\"data\":{\"e\":\"trade\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"t\":43,\"p\":\"101.50\",\"q\":\"0.010\",\"m\":false}}");
+        var transports = new Queue<IBinanceWebSocketTransport>([new CancelledConnectTransport(), second]);
+        var client = new BinanceSpotMarketDataClient(new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+            MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+            MaxReconnectAttempts = 2
+        }, () => transports.Dequeue());
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(BinanceMarketDisconnectReason.ReadFailure, Assert.IsType<BinanceMarketStreamDisconnectedEvent>(enumerator.Current).Reason);
+        Assert.False(second.Connected);
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.Equal(43, Assert.IsType<BinanceTradeEvent>(enumerator.Current).TradeId);
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns the test transport.")]
+    public async Task CallerCancellationDuringConnectEndsWithoutFailureEventOrReconnect()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var attempts = 0;
+        var client = new BinanceSpotMarketDataClient(new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream")
+        }, () =>
+        {
+            attempts++;
+            return new CancelledConnectTransport(cancellation.Cancel);
+        });
+        await using var enumerator = client.ReadAsync([new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.Trade)], cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+
+        Assert.False(await enumerator.MoveNextAsync());
+        Assert.Equal(1, attempts);
     }
 
     [Fact]
@@ -154,7 +248,47 @@ public sealed class BinanceMarketDataClientTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
+    [Fact]
+    public void TryParseHandlesOverflowExceptionGracefully()
+    {
+        var overflowPayload = Encoding.UTF8.GetBytes(
+            "{\"stream\":\"btcusdt@bookTicker\",\"data\":{\"u\":400900217,\"s\":\"BTCUSDT\",\"b\":\"999999999999999999999999999999999999999999999999999999999999\",\"B\":\"1.5\",\"a\":\"100.0\",\"A\":\"1.0\"}}");
+        var result = BinanceMarketDataParser.TryParse((ReadOnlyMemory<byte>)overflowPayload, DateTimeOffset.UtcNow);
+        Assert.Null(result);
+        var spanResult = BinanceMarketDataParser.TryParse((ReadOnlySpan<byte>)overflowPayload, DateTimeOffset.UtcNow);
+        Assert.Null(spanResult);
+    }
+
+    [Fact]
+    public void ReadOnlyMemoryAndSpanOverloadsProduceEquivalentResults()
+    {
+        var validPayload = Encoding.UTF8.GetBytes(
+            "{\"stream\":\"btcusdt@bookTicker\",\"data\":{\"u\":400900217,\"s\":\"BTCUSDT\",\"b\":\"25350.00\",\"B\":\"1.500\",\"a\":\"25351.00\",\"A\":\"2.000\"}}");
+        var now = DateTimeOffset.UtcNow;
+        var memoryResult = BinanceMarketDataParser.TryParse((ReadOnlyMemory<byte>)validPayload, now);
+        var spanResult = BinanceMarketDataParser.TryParse((ReadOnlySpan<byte>)validPayload, now);
+
+        Assert.NotNull(memoryResult);
+        Assert.NotNull(spanResult);
+        var memTicker = Assert.IsType<BinanceBookTickerStreamEvent>(memoryResult);
+        var spanTicker = Assert.IsType<BinanceBookTickerStreamEvent>(spanResult);
+        Assert.Equal(memTicker.Symbol, spanTicker.Symbol);
+        Assert.Equal(memTicker.BestBidPrice, spanTicker.BestBidPrice);
+        Assert.Equal(memTicker.BestAskPrice, spanTicker.BestAskPrice);
+    }
+
 #pragma warning disable CA1812 // Test transport is instantiated through the interface queue.
+    private sealed class CancelledConnectTransport(Action? onConnect = null) : IBinanceWebSocketTransport
+    {
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken)
+        {
+            onConnect?.Invoke();
+            return Task.FromException(new OperationCanceledException());
+        }
+        public IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class ThrowingTransport(Exception exception) : IBinanceWebSocketTransport
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;

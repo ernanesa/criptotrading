@@ -36,6 +36,14 @@ public sealed class BinanceSpotOrderRequest
         string timeInForce = "GTC")
     {
         Symbol = NormalizeSymbol(symbol);
+        if (side is not (BinanceSpotOrderSide.Buy or BinanceSpotOrderSide.Sell))
+        {
+            throw new ArgumentOutOfRangeException(nameof(side), "Order side is not supported.");
+        }
+        if (type is not (BinanceSpotOrderType.Limit or BinanceSpotOrderType.Market))
+        {
+            throw new ArgumentOutOfRangeException(nameof(type), "Order type is not supported.");
+        }
         Side = side;
         Type = type;
         if (quantity <= 0m)

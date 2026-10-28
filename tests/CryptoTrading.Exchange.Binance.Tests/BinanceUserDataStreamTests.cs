@@ -231,10 +231,12 @@ public sealed class BinanceUserDataStreamTests
         var client = new BinanceUserDataStreamApiClient(
             new BinanceUserDataStreamApiOptions
             {
-                ApiKey = "api-key", ApiSecret = "secret",
+                ApiKey = "api-key",
+                ApiSecret = "secret",
                 ConnectAndSubscribeTimeout = TimeSpan.FromMilliseconds(50),
                 InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
-                MaxReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectAttempts = 3
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectAttempts = 3
             },
             () => Interlocked.Increment(ref attemptCount) == 1 ? first : new ModernFakeTransport());
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -264,7 +266,8 @@ public sealed class BinanceUserDataStreamTests
         var client = new BinanceUserDataStreamApiClient(
             new BinanceUserDataStreamApiOptions
             {
-                ApiKey = "api-key", ApiSecret = "secret",
+                ApiKey = "api-key",
+                ApiSecret = "secret",
                 ConnectAndSubscribeTimeout = TimeSpan.FromSeconds(5)
             },
             () => { Interlocked.Increment(ref attempts); return first; });
@@ -286,6 +289,25 @@ public sealed class BinanceUserDataStreamTests
 
         Assert.False(await move.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken));
         Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public void BinanceUserDataParserMemoryAndSpanOverloadsProduceEquivalentResults()
+    {
+        var json = "{\"e\":\"outboundAccountPosition\",\"E\":1499405638848,\"u\":1499405638848,\"B\":[{\"a\":\"BTC\",\"f\":\"100.0\",\"l\":\"0.0\"}]}";
+        var payload = Encoding.UTF8.GetBytes(json);
+        var now = DateTimeOffset.UtcNow;
+
+        var memoryResult = BinanceUserDataParser.TryParse((ReadOnlyMemory<byte>)payload, now);
+        var spanResult = BinanceUserDataParser.TryParse((ReadOnlySpan<byte>)payload, now);
+
+        Assert.NotNull(memoryResult);
+        Assert.NotNull(spanResult);
+        var memPos = Assert.IsType<BinanceOutboundAccountPositionEvent>(memoryResult);
+        var spanPos = Assert.IsType<BinanceOutboundAccountPositionEvent>(spanResult);
+        Assert.Equal(memPos.Balances.Count, spanPos.Balances.Count);
+        Assert.Equal(memPos.Balances[0].Asset, spanPos.Balances[0].Asset);
+        Assert.Equal(memPos.Balances[0].Free, spanPos.Balances[0].Free);
     }
 
     private sealed class FakeTransport(params string[] payloads) : IBinanceWebSocketTransport, IDisposable

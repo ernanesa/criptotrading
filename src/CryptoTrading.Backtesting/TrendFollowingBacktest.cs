@@ -1,11 +1,32 @@
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using CryptoTrading.Backtesting.Strategies;
 
 namespace CryptoTrading.Backtesting;
+
+/// <summary>Timing assumptions for simulated fills; neither represents an exchange fill guarantee.</summary>
+public enum BacktestExecutionTiming
+{
+    NextBarClose,
+    LegacySignalBarClose
+}
 
 /// <summary>Explicit assumptions for one deterministic trend-following evaluation.</summary>
 public sealed record BacktestEvaluationOptions
 {
     public BacktestEvaluationOptions(decimal initialCapital, int periodsPerYear, decimal annualRiskFreeRate = 0m)
+        : this(initialCapital, periodsPerYear, annualRiskFreeRate, BacktestExecutionTiming.NextBarClose)
+    {
+    }
+
+    public BacktestEvaluationOptions(decimal initialCapital, int periodsPerYear, BacktestExecutionTiming executionTiming)
+        : this(initialCapital, periodsPerYear, 0m, executionTiming)
+    {
+    }
+
+    public BacktestEvaluationOptions(decimal initialCapital, int periodsPerYear, decimal annualRiskFreeRate,
+        BacktestExecutionTiming executionTiming)
     {
         if (initialCapital <= 0m)
         {
@@ -22,9 +43,15 @@ public sealed record BacktestEvaluationOptions
             throw new ArgumentOutOfRangeException(nameof(annualRiskFreeRate), "Annual risk-free rate must be greater than -100%.");
         }
 
+        if (executionTiming is not (BacktestExecutionTiming.NextBarClose or BacktestExecutionTiming.LegacySignalBarClose))
+        {
+            throw new ArgumentOutOfRangeException(nameof(executionTiming));
+        }
+
         InitialCapital = initialCapital;
         PeriodsPerYear = periodsPerYear;
         AnnualRiskFreeRate = annualRiskFreeRate;
+        ExecutionTiming = executionTiming;
     }
 
     public decimal InitialCapital { get; }
@@ -33,6 +60,8 @@ public sealed record BacktestEvaluationOptions
     public int PeriodsPerYear { get; }
 
     public decimal AnnualRiskFreeRate { get; }
+
+    public BacktestExecutionTiming ExecutionTiming { get; }
 
     public static BacktestEvaluationOptions DailyCrypto(decimal initialCapital = 10_000m) =>
         new(initialCapital, periodsPerYear: 365);
@@ -87,23 +116,43 @@ public sealed record BacktestEvaluationResult(
     string StrategyConfigurationFingerprint,
     BacktestMetrics Metrics,
     IReadOnlyList<EquityCurvePoint> EquityCurve,
-    IReadOnlyList<SimulatedTrade> Trades);
+    IReadOnlyList<SimulatedTrade> Trades)
+{
+    public BacktestExecutionTiming ExecutionTiming { get; init; } = BacktestExecutionTiming.LegacySignalBarClose;
+    public string? EvaluationAssumptionsFingerprint { get; init; }
+}
 
 /// <summary>
-/// Bounded long-only evaluator for the baseline strategy. A signal is filled at the same closed-bar
-/// reference price with adverse slippage, as an intentionally explicit approximation until an OHLCV
-/// execution simulator is introduced. It never submits exchange orders.
+/// Bounded long-only evaluator. By default a signal uses the next closed-bar reference price;
+/// the non-causal legacy timing is available only as an explicitly labeled reproducibility option.
+/// Neither timing proves an exchange fill. It never submits exchange orders.
 /// </summary>
 public sealed class TrendFollowingBacktestEvaluator
 {
     public static BacktestEvaluationResult Evaluate(
         IReadOnlyList<CloseBar> bars,
         TrendFollowingParameters parameters,
-        BacktestEvaluationOptions options)
+        BacktestEvaluationOptions options) => EvaluateCore(bars, parameters, options, 0);
+
+    internal static BacktestEvaluationResult EvaluateWindow(
+        IReadOnlyList<CloseBar> bars,
+        TrendFollowingParameters parameters,
+        BacktestEvaluationOptions options,
+        int firstExecutableBar) => EvaluateCore(bars, parameters, options, firstExecutableBar);
+
+    private static BacktestEvaluationResult EvaluateCore(
+        IReadOnlyList<CloseBar> bars,
+        TrendFollowingParameters parameters,
+        BacktestEvaluationOptions options,
+        int firstExecutableBar)
     {
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(parameters);
         ArgumentNullException.ThrowIfNull(options);
+        if (firstExecutableBar < 0 || firstExecutableBar > bars.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstExecutableBar));
+        }
 
         var decisions = new TrendFollowingStrategy(parameters).Evaluate(bars);
         var equityCurve = new List<EquityCurvePoint>(bars.Count);
@@ -121,10 +170,11 @@ public sealed class TrendFollowingBacktestEvaluator
 
         for (var index = 0; index < bars.Count; index++)
         {
-            var decision = decisions[index];
+            var signalIndex = options.ExecutionTiming == BacktestExecutionTiming.NextBarClose ? index - 1 : index;
+            var signal = index < firstExecutableBar || signalIndex < 0 ? TrendFollowingSignal.NoTrade : decisions[signalIndex].Signal;
             var referencePrice = bars[index].ClosePrice.Value;
 
-            if (decision.Signal == TrendFollowingSignal.EnterLong && quantity == 0m)
+            if (signal == TrendFollowingSignal.EnterLong && quantity == 0m)
             {
                 var executedPrice = referencePrice * (1m + parameters.SlippageRate);
                 var quantityToBuy = cash / (executedPrice * (1m + parameters.FeeRate));
@@ -139,7 +189,7 @@ public sealed class TrendFollowingBacktestEvaluator
                 trades.Add(new SimulatedTrade(
                     index,
                     bars[index].CloseTimeUtc,
-                    decision.Signal,
+                    signal,
                     referencePrice,
                     executedPrice,
                     quantityToBuy,
@@ -148,7 +198,7 @@ public sealed class TrendFollowingBacktestEvaluator
                     fee,
                     slippageCost));
             }
-            else if (decision.Signal == TrendFollowingSignal.ExitLong && quantity > 0m)
+            else if (signal == TrendFollowingSignal.ExitLong && quantity > 0m)
             {
                 var quantityToSell = quantity;
                 var executedPrice = referencePrice * (1m - parameters.SlippageRate);
@@ -163,7 +213,7 @@ public sealed class TrendFollowingBacktestEvaluator
                 trades.Add(new SimulatedTrade(
                     index,
                     bars[index].CloseTimeUtc,
-                    decision.Signal,
+                    signal,
                     referencePrice,
                     executedPrice,
                     quantityToSell,
@@ -218,7 +268,27 @@ public sealed class TrendFollowingBacktestEvaluator
             parameters.ConfigurationFingerprint,
             metrics,
             equityCurve,
-            trades);
+            trades)
+        {
+            ExecutionTiming = options.ExecutionTiming,
+            EvaluationAssumptionsFingerprint = CalculateEvaluationAssumptionsFingerprint(parameters, options, "single-series-v1")
+        };
+    }
+
+    internal static string CalculateEvaluationAssumptionsFingerprint(
+        TrendFollowingParameters parameters, BacktestEvaluationOptions options, string scope)
+    {
+        var canonical = string.Join('\n',
+            "trend-evaluation-assumptions-v2",
+            scope,
+            parameters.StrategyId.Length.ToString(CultureInfo.InvariantCulture) + ":" + parameters.StrategyId,
+            parameters.Version.Length.ToString(CultureInfo.InvariantCulture) + ":" + parameters.Version,
+            parameters.ConfigurationFingerprint,
+            options.InitialCapital.ToString("G29", CultureInfo.InvariantCulture),
+            options.PeriodsPerYear.ToString(CultureInfo.InvariantCulture),
+            options.AnnualRiskFreeRate.ToString("G29", CultureInfo.InvariantCulture),
+            options.ExecutionTiming.ToString());
+        return Convert.ToHexString(SHA256.HashData(new UTF8Encoding(false, true).GetBytes(canonical)));
     }
 
     private static double? CalculateSharpe(List<double> returns, BacktestEvaluationOptions options)

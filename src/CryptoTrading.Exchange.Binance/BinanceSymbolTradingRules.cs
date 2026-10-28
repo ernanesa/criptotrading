@@ -16,10 +16,13 @@ public sealed record BinanceSymbolTradingRules(
     decimal QuantityStepSize,
     decimal MinimumNotional,
     decimal MaximumNotional = 0m,
-    IReadOnlyList<BinanceSymbolFilter>? ExchangeFilters = null,
+    IReadOnlyList<BinanceSymbolFilter>? SymbolFilters = null,
     decimal MarketMinimumQuantity = 0m,
     decimal MarketMaximumQuantity = 0m,
-    decimal MarketQuantityStepSize = 0m)
+    decimal MarketQuantityStepSize = 0m,
+    string BaseAsset = "",
+    string QuoteAsset = "",
+    IReadOnlyList<string>? AllowedOrderTypes = null)
 {
     public BinanceOrderValidationResult ValidateMarketOrder(decimal quantity, decimal? referencePrice = null)
     {
@@ -200,7 +203,8 @@ public static class BinanceSymbolTradingRulesParser
             symbol.Status,
             ParseNonNegative(price.MinPrice, "minPrice", symbol.Symbol),
             ParseNonNegative(price.MaxPrice, "maxPrice", symbol.Symbol),
-            ParsePositive(price.TickSize, "tickSize", symbol.Symbol),
+            // PRICE_FILTER disables the tick rule when tickSize is 0.
+            ParseNonNegative(price.TickSize, "tickSize", symbol.Symbol),
             ParsePositive(lot.MinQty, "minQty", symbol.Symbol),
             ParseNonNegative(lot.MaxQty, "maxQty", symbol.Symbol),
             ParsePositive(lot.StepSize, "stepSize", symbol.Symbol),
@@ -209,7 +213,12 @@ public static class BinanceSymbolTradingRulesParser
             filters.ToArray(),
             marketMinQty,
             marketMaxQty,
-            marketStepSize);
+            marketStepSize,
+            symbol.BaseAsset,
+            symbol.QuoteAsset,
+            symbol.OrderTypes is { Count: > 0 }
+                ? symbol.OrderTypes.ToArray()
+                : throw new FormatException($"Symbol '{symbol.Symbol}' is missing orderTypes."));
     }
 
     private static BinanceSymbolFilter RequireSingle(

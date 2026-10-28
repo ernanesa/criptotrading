@@ -6,7 +6,13 @@ set -Eeuo pipefail
 # Binance client, network path, database, or venue order capability.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dotnet_command="dotnet"
-if [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
+if [[ -n "${PAPER_CHAOS_DOTNET_COMMAND:-}" ]]; then
+    if [[ ! -x "$PAPER_CHAOS_DOTNET_COMMAND" ]]; then
+        echo "Configured PAPER_CHAOS_DOTNET_COMMAND is not executable." >&2
+        exit 2
+    fi
+    dotnet_command="$PAPER_CHAOS_DOTNET_COMMAND"
+elif [[ -x "$repo_root/.tools/dotnet/dotnet" ]]; then
     dotnet_command="$repo_root/.tools/dotnet/dotnet"
 elif [[ -n "${DOTNET_ROOT:-}" && -x "$DOTNET_ROOT/dotnet" ]]; then
     dotnet_command="$DOTNET_ROOT/dotnet"
