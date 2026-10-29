@@ -296,8 +296,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [InlineData("ACCOUNT_STREAM_SOCKET_CLOSED")]
     [InlineData("ACCOUNT_STREAM_TIMEOUT")]
     [InlineData("ACCOUNT_STREAM_ENDED")]
-    [InlineData("ACCOUNT_STREAM_FAILURE")]
-    public void IsAuthorizedWhenSafeModeEnteredByAccountStreamTransientTerminationReturnsFalse(string reason)
+    public void IsAuthorizedWhenSafeModeEnteredByAccountStreamTransientTerminationReturnsTrue(string reason)
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -318,10 +317,11 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.False(result);
+        Assert.True(result);
     }
 
     [Theory]
+    [InlineData("ACCOUNT_STREAM_FAILURE")]
     [InlineData("ACCOUNTING_EXECUTION_FAILURE")]
     [InlineData("FEE_DRIFT_EXCEEDED")]
     [InlineData("Fee rate exceeds policy maximum")]

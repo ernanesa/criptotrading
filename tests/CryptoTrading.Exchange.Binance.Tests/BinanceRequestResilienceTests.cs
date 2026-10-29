@@ -3,6 +3,7 @@ using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
 
+[Collection(TelemetryActivityFixture.Name)]
 public sealed class BinanceRequestResilienceTests
 {
     [Fact]

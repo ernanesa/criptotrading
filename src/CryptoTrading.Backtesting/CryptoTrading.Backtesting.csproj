@@ -7,6 +7,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../CryptoTrading.Domain/CryptoTrading.Domain.csproj" />
+    <ProjectReference Include="../CryptoTrading.Exchange.Paper/CryptoTrading.Exchange.Paper.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -17,12 +17,17 @@ namespace CryptoTrading.Exchange.Binance;
 /// Venue-reported permission to trade. False means the account is restricted and
 /// no order should be submitted.
 /// </param>
+/// <param name="IsConsistent">
+/// False when the underlying account and open-orders reads were too far apart in
+/// time to describe one state.
+/// </param>
 public sealed record BinanceAccountTradingState(
     long OpenOrderCount,
     long SymbolOpenOrderCount,
     decimal BasePositionQuantity,
     DateTimeOffset ObservedAtUtc,
-    bool CanTrade);
+    bool CanTrade,
+    bool IsConsistent = true);
 
 /// <summary>
 /// Supplies <see cref="BinanceAccountTradingState"/>. Callers must treat any

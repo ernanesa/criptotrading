@@ -305,6 +305,12 @@ public sealed class PaperExchange : IPaperExchange
             var executionPrice = state.Order.Side == OrderSide.Buy
                 ? referencePrice.Value * (1m + options.SlippageRate.Value)
                 : referencePrice.Value * (1m - options.SlippageRate.Value);
+            if (state.Order.Type == OrderType.Limit && state.Order.LimitPrice is { } limit &&
+                (state.Order.Side == OrderSide.Buy ? executionPrice > limit.Value : executionPrice < limit.Value))
+            {
+                // A limited order cannot execute at a worse price; do not fabricate a fill.
+                continue;
+            }
             var price = new Price(executionPrice);
             var fee = new Money(quantity.Value * price.Value * options.FeeRate.Value, new Asset("USDT"));
             var slippage = Math.Abs(price.Value - referencePrice.Value) * quantity.Value;

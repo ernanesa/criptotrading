@@ -21,6 +21,12 @@ public sealed record ExperimentEvidenceInput
     public string? EvaluationAssumptionsFingerprint { get; init; }
     public string? ObservedSeriesFingerprint { get; init; }
     public string? ObservedSeriesFingerprintVersion { get; init; }
+
+    /// <summary>
+    /// Realized result of a deterministic paper/shadow simulation. It is not
+    /// reconciled account PnL and never authorizes promotion.
+    /// </summary>
+    public PaperRunEvidence? PaperRun { get; init; }
     public string? DeclaredDatasetContentHash { get; init; }
     public required IReadOnlyDictionary<string, string> SourceVersions { get; init; }
     public required IReadOnlyCollection<string> TraceabilityReferences { get; init; }
@@ -41,14 +47,50 @@ public sealed record ExperimentEvidenceBundle(
     string ManifestSha256);
 
 /// <summary>Writes redacted, immutable experiment evidence without promotion side effects.</summary>
+/// <summary>Realized result produced by a deterministic paper/shadow run.</summary>
+public sealed record PaperRunEvidence(
+    decimal RealizedPnlQuote,
+    decimal FeesPaidQuote,
+    decimal OpenQuantity,
+    decimal OpenCostQuote,
+    int ClosedFillCount);
+
 public static class ExperimentEvidenceWriter
 {
     public const string SchemaVersion = "experiment-evidence/v1";
     public const string ProvenanceSchemaVersion = "experiment-evidence/v2";
     public const string DatasetProvenanceSchemaVersion = "experiment-evidence/v3";
     public const string WindowProvenanceSchemaVersion = "experiment-evidence/v4";
+    public const string PaperRunSchemaVersion = "experiment-evidence/v5";
     public const string ManifestSchemaVersion = "experiment-evidence-manifest/v1";
     private static readonly Encoding Utf8 = new UTF8Encoding(false);
+
+    /// <summary>
+    /// Builds evidence from a deterministic paper/shadow replay. Benchmark returns
+    /// are taken from the same evaluation so the bundle stays internally
+    /// consistent; paper results are recorded as simulated, never reconciled.
+    /// </summary>
+    public static ExperimentEvidenceInput FromPaperShadow(
+        string experimentId,
+        string preregistrationSha256,
+        int trialCount,
+        int trialBudget,
+        int holdoutAccessCount,
+        bool holdoutContaminated,
+        string decision,
+        WalkForwardEvaluationResult evaluation,
+        PaperRunEvidence paperRun,
+        IReadOnlyDictionary<string, string> sourceVersions,
+        IReadOnlyCollection<string> traceabilityReferences)
+    {
+        ArgumentNullException.ThrowIfNull(paperRun);
+        return FromWalkForward(
+            experimentId, preregistrationSha256, trialCount, trialBudget, holdoutAccessCount,
+            holdoutContaminated, decision, evaluation, sourceVersions, traceabilityReferences) with
+        {
+            PaperRun = paperRun
+        };
+    }
 
     public static ExperimentEvidenceInput FromWalkForward(
         string experimentId,
@@ -241,7 +283,8 @@ public static class ExperimentEvidenceWriter
         var references = ValidateReferences(input.TraceabilityReferences);
         var hasProvenance = input.ExecutionTiming is not null || input.EvaluationAssumptionsFingerprint is not null;
         var hasDataProvenance = input.ObservedSeriesFingerprint is not null;
-        var artifactSchema = input.ObservedSeriesFingerprintVersion is not null ? WindowProvenanceSchemaVersion :
+        var artifactSchema = input.PaperRun is not null ? PaperRunSchemaVersion :
+            input.ObservedSeriesFingerprintVersion is not null ? WindowProvenanceSchemaVersion :
             hasDataProvenance ? DatasetProvenanceSchemaVersion : hasProvenance ? ProvenanceSchemaVersion : SchemaVersion;
         var canonicalJson = SerializeEvidence(input, artifactSchema, decision, hasProvenance, hasDataProvenance);
         var artifact = new ExperimentEvidenceArtifact(
@@ -293,6 +336,16 @@ public static class ExperimentEvidenceWriter
                     writer.WriteString("observed_series_fingerprint_version", input.ObservedSeriesFingerprintVersion);
                 }
             }
+            if (input.PaperRun is { } paperRun)
+            {
+                writer.WriteNumber("paper_realized_pnl_quote", paperRun.RealizedPnlQuote);
+                writer.WriteNumber("paper_fees_paid_quote", paperRun.FeesPaidQuote);
+                writer.WriteNumber("paper_open_quantity", paperRun.OpenQuantity);
+                writer.WriteNumber("paper_open_cost_quote", paperRun.OpenCostQuote);
+                writer.WriteNumber("paper_closed_fill_count", paperRun.ClosedFillCount);
+                writer.WriteString("paper_status", "SIMULATED_NOT_RECONCILED");
+            }
+
             writer.WriteStartObject("source_versions");
             foreach (var pair in input.SourceVersions.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
             {

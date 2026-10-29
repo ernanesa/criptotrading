@@ -291,7 +291,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
     /// when the payload carries no reference price, and propagates the venue
     /// error when no reference price was ever set for the symbol.
     /// </summary>
-    public async Task<decimal?> GetReferencePriceAsync(
+    public async Task<BinanceReferencePriceEvidence?> GetReferencePriceAsync(
         string symbol,
         CancellationToken cancellationToken = default)
     {
@@ -300,9 +300,15 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
             $"v3/referencePrice?symbol={Uri.EscapeDataString(normalizedSymbol)}",
             cancellationToken).ConfigureAwait(false);
 
-        return decimal.TryParse(response.ReferencePrice, NumberStyles.Number, CultureInfo.InvariantCulture, out var price) && price > 0m
-            ? price
-            : null;
+        if (!decimal.TryParse(response.ReferencePrice, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var price) || price <= 0m)
+        {
+            return null;
+        }
+
+        return new BinanceReferencePriceEvidence(
+            response.Symbol,
+            price,
+            DateTimeOffset.FromUnixTimeMilliseconds(response.Timestamp));
     }
 
     public async Task<BinanceSymbolTradingRules> GetTradingRulesAsync(

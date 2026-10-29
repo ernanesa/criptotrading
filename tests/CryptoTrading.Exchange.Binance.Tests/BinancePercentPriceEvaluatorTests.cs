@@ -118,6 +118,42 @@ public sealed class BinancePercentPriceEvaluatorTests
         Assert.Equal(0, inner.Submits);
     }
 
+    [Theory]
+    [InlineData("mismatched-symbol")]
+    [InlineData("stale")]
+    [InlineData("future")]
+    public async Task BoundaryRejectsReferencePriceWithoutProvenIdentityOrFreshness(string failure)
+    {
+        var now = new DateTimeOffset(2026, 10, 29, 0, 0, 0, TimeSpan.Zero);
+        var evidence = failure switch
+        {
+            "mismatched-symbol" => new BinanceReferencePriceEvidence("ETHUSDT", 100m, now),
+            "stale" => new BinanceReferencePriceEvidence("BTCUSDT", 100m, now.AddMinutes(-5)),
+            _ => new BinanceReferencePriceEvidence("BTCUSDT", 100m, now.AddMinutes(5))
+        };
+        var inner = new CountingOrderClient();
+        var client = new BinancePreTradeValidatedOrderClient(
+            inner, new StubRules(CreateRules()), new StubAccountFilters(), new StubTradingState(),
+            new ConstantReferencePrice(evidence), new FixedClock(now));
+
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(
+            () => client.SubmitAsync(Order(price: 105m), TestContext.Current.CancellationToken));
+
+        Assert.Contains(error.Violations, item => item.Code == "PERCENT_PRICE_REFERENCE_UNAVAILABLE");
+        Assert.Equal(0, inner.Submits);
+    }
+
+    private sealed class ConstantReferencePrice(BinanceReferencePriceEvidence evidence) : IBinanceReferencePriceProvider
+    {
+        public Task<BinanceReferencePriceEvidence?> GetReferencePriceAsync(string symbol, CancellationToken cancellationToken = default) =>
+            Task.FromResult<BinanceReferencePriceEvidence?>(evidence);
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     private static BinanceSpotOrderRequest Order(decimal price) =>
         new("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.1m, "ct-percent", price);
 
@@ -144,7 +180,7 @@ public sealed class BinancePercentPriceEvaluatorTests
     {
         public Task<BinanceAccountFilters> GetAccountFiltersAsync(string symbol, CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceAccountFilters(
-                [new BinanceExchangeFilter("EXCHANGE_MAX_NUM_ORDERS", 1000)], null, null, DateTimeOffset.UnixEpoch));
+                [new BinanceExchangeFilter("EXCHANGE_MAX_NUM_ORDERS", 1000)], [], [], DateTimeOffset.UnixEpoch));
     }
 
     private sealed class StubTradingState : IBinanceAccountTradingStateProvider
@@ -156,7 +192,10 @@ public sealed class BinancePercentPriceEvaluatorTests
 
     private sealed class StubReferencePrice(decimal? price) : IBinanceReferencePriceProvider
     {
-        public Task<decimal?> GetReferencePriceAsync(string symbol, CancellationToken cancellationToken = default) => Task.FromResult(price);
+        public Task<BinanceReferencePriceEvidence?> GetReferencePriceAsync(string symbol, CancellationToken cancellationToken = default) =>
+            Task.FromResult(price is { } value
+                ? new BinanceReferencePriceEvidence(symbol, value, DateTimeOffset.UtcNow)
+                : null);
     }
 
     private sealed class CountingOrderClient : IBinanceSpotOrderClient

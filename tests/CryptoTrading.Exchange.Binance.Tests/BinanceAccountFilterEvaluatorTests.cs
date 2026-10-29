@@ -139,7 +139,7 @@ public sealed class BinanceAccountFilterEvaluatorTests
             Filters(asset: "ETH", limit: 10m), "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0);
         var unknown = BinanceAccountFilterEvaluator.Evaluate(
             new BinanceAccountFilters(
-                [new BinanceExchangeFilter("FUTURE_EXCHANGE_FILTER")], null,
+                [new BinanceExchangeFilter("FUTURE_EXCHANGE_FILTER")], [],
                 [new BinanceAssetFilter("FUTURE_ASSET_FILTER", "BTC", "1")], DateTimeOffset.UnixEpoch),
             "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0);
 
@@ -151,7 +151,7 @@ public sealed class BinanceAccountFilterEvaluatorTests
     public void IncompleteMaxAssetEvidenceFailsClosed()
     {
         var violations = BinanceAccountFilterEvaluator.Evaluate(
-            new BinanceAccountFilters(null, null, [new BinanceAssetFilter("MAX_ASSET", "BTC", null)], DateTimeOffset.UnixEpoch),
+            new BinanceAccountFilters(null, [], [new BinanceAssetFilter("MAX_ASSET", "BTC", null)], DateTimeOffset.UnixEpoch),
             "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0);
 
         Assert.Contains(violations, item => item.Code == "ACCOUNT_FILTERS_UNSUPPORTED");
@@ -227,10 +227,76 @@ public sealed class BinanceAccountFilterEvaluatorTests
         Assert.Contains(violations, item => item.Code == "SYMBOL_ORDER_COUNT_UNAVAILABLE");
     }
 
+    [Fact]
+    public void IncompleteMyFiltersPayloadFailsClosed()
+    {
+        var parsed = JsonSerializer.Deserialize<BinanceAccountFilters>("{}", CaseInsensitiveJson)!;
+        var violations = BinanceAccountFilterEvaluator.Evaluate(
+            parsed with { ObservedAtUtc = DateTimeOffset.UnixEpoch },
+            "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0);
+
+        Assert.Contains(violations, item => item.Code == "ACCOUNT_FILTERS_INCOMPLETE");
+    }
+
+    [Fact]
+    public void ExplicitlyEmptyMyFiltersPayloadIsAcceptedAsNoFilters()
+    {
+        var parsed = JsonSerializer.Deserialize<BinanceAccountFilters>(
+            """{"exchangeFilters":[],"symbolFilters":[],"assetFilters":[]}""", CaseInsensitiveJson)!;
+        var violations = BinanceAccountFilterEvaluator.Evaluate(
+            parsed with { ObservedAtUtc = DateTimeOffset.UnixEpoch },
+            "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0);
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void StricterSymbolLimitFromMyFiltersIsEnforced()
+    {
+        var account = new BinanceAccountFilters(
+            [], [new BinanceSymbolFilter("MAX_NUM_ORDERS", MaxNumOrders: 2)], [new BinanceAssetFilter("MAX_ASSET", "BTC", "1")],
+            DateTimeOffset.UnixEpoch);
+
+        var violations = BinanceAccountFilterEvaluator.Evaluate(
+            account, "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0,
+            symbolOpenOrderCount: 2, maxSymbolOrders: 100,
+            exchangeSymbolFilters: [new BinanceSymbolFilter("MAX_NUM_ORDERS", MaxNumOrders: 100)]);
+
+        Assert.Contains(violations, item => item.Code == "MAX_NUM_ORDERS_EXCEEDED");
+    }
+
+    [Fact]
+    public void SymbolFilterPresentOnlyInMyFiltersIsNotIgnored()
+    {
+        var account = new BinanceAccountFilters(
+            [], [new BinanceSymbolFilter("MAX_NUM_ORDERS", MaxNumOrders: 5)], [new BinanceAssetFilter("MAX_ASSET", "BTC", "1")],
+            DateTimeOffset.UnixEpoch);
+
+        var violations = BinanceAccountFilterEvaluator.Evaluate(
+            account, "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0,
+            symbolOpenOrderCount: 0, maxSymbolOrders: null, exchangeSymbolFilters: []);
+
+        Assert.Contains(violations, item => item.Code == "ACCOUNT_SYMBOL_FILTERS_UNRECONCILED");
+    }
+
+    [Fact]
+    public void DisagreeingSymbolFilterDefinitionsAreNotReconciledSilently()
+    {
+        var account = new BinanceAccountFilters(
+            [], [new BinanceSymbolFilter("PRICE_FILTER", MinPrice: "1", MaxPrice: "10", TickSize: "0.1")],
+            [new BinanceAssetFilter("MAX_ASSET", "BTC", "1")], DateTimeOffset.UnixEpoch);
+
+        var violations = BinanceAccountFilterEvaluator.Evaluate(
+            account, "BTC", "USDT", BinanceSpotOrderType.Limit, 0.01m, 100m, 0,
+            exchangeSymbolFilters: [new BinanceSymbolFilter("PRICE_FILTER", MinPrice: "0.01", MaxPrice: "1000", TickSize: "0.01")]);
+
+        Assert.Contains(violations, item => item.Code == "ACCOUNT_SYMBOL_FILTERS_UNRECONCILED");
+    }
+
     private static BinanceAccountFilters Filters(long maxOrders = 1000, string? asset = null, decimal? limit = null) =>
         new(
             [new BinanceExchangeFilter("EXCHANGE_MAX_NUM_ORDERS", maxOrders)],
-            null,
-            asset is null ? null : [new BinanceAssetFilter("MAX_ASSET", asset, limit?.ToString(System.Globalization.CultureInfo.InvariantCulture))],
+            [],
+            asset is null ? [] : [new BinanceAssetFilter("MAX_ASSET", asset, limit?.ToString(System.Globalization.CultureInfo.InvariantCulture))],
             DateTimeOffset.UnixEpoch);
 }

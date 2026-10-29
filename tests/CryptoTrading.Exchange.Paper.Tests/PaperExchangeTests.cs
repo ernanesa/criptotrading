@@ -40,6 +40,23 @@ public sealed class PaperExchangeTests
         Assert.True(replayed.AlreadyProcessed);
     }
 
+    [Theory]
+    [InlineData(OrderSide.Buy)]
+    [InlineData(OrderSide.Sell)]
+    public void LimitOrderDoesNotFillBeyondItsPriceAfterSlippage(OrderSide side)
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(new PaperExchangeOptions { SlippageRate = new(0.01m) }, new ManualTimeProvider(now));
+        var request = new PaperOrderRequest(new ClientOrderId("limit-slippage"), "BTCUSDT", side, OrderType.Limit, 1m, 100m);
+        exchange.Submit(request, new IdempotencyKey("limit-slippage"));
+        var tick = side == OrderSide.Buy
+            ? new PaperMarketTick("BTCUSDT", 99m, 100m, 99.5m, now)
+            : new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, now);
+
+        Assert.Empty(exchange.Apply(tick));
+        Assert.Equal(OrderStatus.Submitted, exchange.GetOrder(request.ClientOrderId).Status);
+    }
+
     [Fact]
     public void ReplayIsDeterministicForSameTicksAndTimeProvider()
     {
