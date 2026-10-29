@@ -32,6 +32,7 @@ public sealed record ExecutionAccountingCommand
         ArgumentException.ThrowIfNullOrWhiteSpace(executionId);
         if (executionId.Length > 200) throw new ArgumentOutOfRangeException(nameof(executionId));
         ArgumentOutOfRangeException.ThrowIfNegative(orderId);
+        if (side is not (OrderSide.Buy or OrderSide.Sell)) throw new ArgumentOutOfRangeException(nameof(side));
         if (quantity.Value <= 0m) throw new ArgumentOutOfRangeException(nameof(quantity));
         if (occurredAtUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Execution timestamps must be UTC.", nameof(occurredAtUtc));
         if (feeDriftToleranceBps < 0m || feeDriftToleranceBps > 10_000m) throw new ArgumentOutOfRangeException(nameof(feeDriftToleranceBps));
@@ -154,14 +155,43 @@ public static class ExecutionAccounting
             commissionInQuote = checked(command.Commission.Amount * valuation.QuotePerAsset);
         }
 
-        if (command.Side == OrderSide.Buy)
+        return ApplyAverageCostCore(
+            command.Side, command.Quantity.Value, command.Price.Value,
+            commissionInBase, commissionInQuote, currentQuantity, currentCostQuote);
+    }
+
+    /// <summary>
+    /// Average-cost arithmetic without identity, accounts or ledger concerns, so
+    /// simulation paths can reuse exactly the same math as live accounting.
+    /// </summary>
+    public static (decimal Quantity, decimal CostQuote, decimal? RealizedPnlQuote) ApplyAverageCostCore(
+        OrderSide side,
+        decimal quantity,
+        decimal price,
+        decimal commissionInBase,
+        decimal commissionInQuote,
+        decimal currentQuantity,
+        decimal currentCostQuote)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(currentQuantity);
+        ArgumentOutOfRangeException.ThrowIfNegative(currentCostQuote);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(price);
+        if (side is not (OrderSide.Buy or OrderSide.Sell)) throw new ArgumentOutOfRangeException(nameof(side));
+        if (currentQuantity == 0m && currentCostQuote != 0m) throw new InvalidOperationException("Zero inventory cannot carry a cost basis.");
+        var notional = quantity * price;
+
+        if (side == OrderSide.Buy)
         {
-            var received = command.Quantity.Value - commissionInBase;
+            var received = quantity - commissionInBase;
             if (received <= 0m) throw new InvalidOperationException("A buy execution must leave positive base inventory.");
-            return (currentQuantity + received, currentCostQuote + notional + commissionInQuote, null);
+            var nextCost = currentCostQuote + notional + commissionInQuote;
+            if (nextCost < 0m) throw new InvalidOperationException("A buy execution cannot produce negative cost basis.");
+            return (currentQuantity + received, nextCost, null);
         }
 
-        var disposed = command.Quantity.Value + commissionInBase;
+        var disposed = quantity + commissionInBase;
+        if (disposed <= 0m) throw new InvalidOperationException("A sell execution must dispose of positive base inventory.");
         if (disposed > currentQuantity) throw new InvalidOperationException("Sell execution exceeds tracked inventory.");
         var averageCost = currentQuantity == 0m ? 0m : currentCostQuote / currentQuantity;
         var realized = notional - (disposed * averageCost) - commissionInQuote;

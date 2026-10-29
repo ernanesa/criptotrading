@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using CryptoTrading.Backtesting.Strategies;
 
+using CryptoTrading.Exchange.Paper;
+
 namespace CryptoTrading.Backtesting;
 
 /// <summary>One redacted observation emitted by a local Shadow/Paper comparison.</summary>
@@ -41,7 +43,14 @@ public sealed record ShadowRunResult(
     int StaleCount,
     int RecoveryCount,
     decimal DivergenceRate,
-    decimal StaleRate);
+    decimal StaleRate)
+{
+    /// <summary>
+    /// Realized result of the simulated fills, when the caller supplies it. It is
+    /// in-memory simulation evidence, not reconciled account PnL.
+    /// </summary>
+    public PaperPnlSummary? PaperResult { get; init; }
+}
 
 public static class ShadowDriftEvaluator
 {

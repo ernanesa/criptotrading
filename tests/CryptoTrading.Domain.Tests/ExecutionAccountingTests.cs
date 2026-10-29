@@ -50,6 +50,35 @@ public sealed class ExecutionAccountingTests
     }
 
     [Fact]
+    public void AccountingRejectsUnknownOrderSide()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => Command((OrderSide)999, new Money(0m, Usdt)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ExecutionAccounting.ApplyAverageCostCore(
+            (OrderSide)999, 1m, 100m, 0m, 0m, 1m, 100m));
+    }
+
+    [Fact]
+    public void SellCannotCreateInventoryFromAnExcessiveBaseRebate()
+    {
+        Assert.Throws<InvalidOperationException>(() => ExecutionAccounting.ApplyAverageCostCore(
+            OrderSide.Sell, 1m, 100m, -2m, 0m, 1m, 100m));
+    }
+
+    [Fact]
+    public void ZeroInventoryCannotCarryAPositiveCostBasis()
+    {
+        Assert.Throws<InvalidOperationException>(() => ExecutionAccounting.ApplyAverageCostCore(
+            OrderSide.Buy, 1m, 100m, 0m, 0m, 0m, 5m));
+    }
+
+    [Fact]
+    public void BuyCannotProduceNegativeCostBasisFromAnExcessiveRebate()
+    {
+        Assert.Throws<InvalidOperationException>(() => ExecutionAccounting.ApplyAverageCostCore(
+            OrderSide.Buy, 1m, 100m, 0m, -200m, 0m, 0m));
+    }
+
+    [Fact]
     public void SellWithBaseFeeChargesAllDisposedInventoryToRealizedPnl()
     {
         var result = ExecutionAccounting.ApplyAverageCost(

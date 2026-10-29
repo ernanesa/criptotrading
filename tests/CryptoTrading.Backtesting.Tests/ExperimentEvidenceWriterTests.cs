@@ -89,6 +89,63 @@ public sealed class ExperimentEvidenceWriterTests
     }
 
     [Fact]
+    public void PaperRunResultIsRecordedAsSimulatedAndNotReconciled()
+    {
+        using var temporary = new TemporaryDirectory();
+        var input = CreateInput() with
+        {
+            PaperRun = new PaperRunEvidence(9.79m, 0.21m, 0m, 0m, 1)
+        };
+
+        var bundle = ExperimentEvidenceWriter.Write(temporary.Path, input, DateTimeOffset.UtcNow);
+        using var json = JsonDocument.Parse(bundle.Artifact.CanonicalJson);
+        var root = json.RootElement;
+
+        Assert.Equal(ExperimentEvidenceWriter.PaperRunSchemaVersion, bundle.Artifact.SchemaVersion);
+        Assert.Equal(9.79m, root.GetProperty("paper_realized_pnl_quote").GetDecimal());
+        Assert.Equal("SIMULATED_NOT_RECONCILED", root.GetProperty("paper_status").GetString());
+        using var manifest = JsonDocument.Parse(bundle.ManifestJson);
+        Assert.False(manifest.RootElement.GetProperty("promotion_authorized").GetBoolean());
+    }
+
+    [Fact]
+    public void FromPaperShadowWritesBundleThatRecordsSimulatedResult()
+    {
+        var dataset = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var evaluation = WalkForwardEvaluator.Evaluate(dataset.Metadata, dataset.Bars,
+            CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline,
+            new BacktestEvaluationOptions(10_000m, 365),
+            WalkForwardPlan.Create(dataset.Bars.Count, 60, 20, 20).Take(1).ToArray());
+        using var temporary = new TemporaryDirectory();
+
+        var input = ExperimentEvidenceWriter.FromPaperShadow(
+            "shadow-run", PreregistrationHash, 1, 1, 0, false, "Rejected", evaluation,
+            new PaperRunEvidence(12.5m, 0.4m, 0.01m, 100m, 1),
+            new Dictionary<string, string> { ["strategy"] = "trend/1.0.0" }, ["AC-RESEARCH-OOS-01"]);
+        var bundle = ExperimentEvidenceWriter.Write(temporary.Path, input, DateTimeOffset.UtcNow);
+        using var json = JsonDocument.Parse(bundle.Artifact.CanonicalJson);
+
+        Assert.Equal(ExperimentEvidenceWriter.PaperRunSchemaVersion, bundle.Artifact.SchemaVersion);
+        Assert.Equal("Rejected", bundle.Artifact.Decision);
+        Assert.Equal(12.5m, json.RootElement.GetProperty("paper_realized_pnl_quote").GetDecimal());
+        Assert.Equal("SIMULATED_NOT_RECONCILED", json.RootElement.GetProperty("paper_status").GetString());
+    }
+
+    [Fact]
+    public void PaperRunStillCannotProduceEligibleEvidence()
+    {
+        using var temporary = new TemporaryDirectory();
+        var input = CreateInput() with
+        {
+            Decision = "PaperEligible",
+            PaperRun = new PaperRunEvidence(1m, 0m, 0m, 0m, 1)
+        };
+
+        Assert.Throws<InvalidOperationException>(() =>
+            ExperimentEvidenceWriter.Write(temporary.Path, input, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
     public void RejectsUnexpectedEvidenceMetadataBeforeCreatingFiles()
     {
         using var temporary = new TemporaryDirectory();

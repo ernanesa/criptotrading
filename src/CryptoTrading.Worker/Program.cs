@@ -347,6 +347,10 @@ if (builder.Configuration.GetValue("WORKER_ACCOUNT_STREAM_ENABLED", false))
 {
     builder.Services.AddHostedService<AccountStreamHostedService>();
 }
+// The paper exchange only fills when it receives ticks; without this pump a
+// PAPER run would submit orders that stay open forever.
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddHostedService<PaperExecutionHostedService>();
 builder.Services.AddHostedService<OutboxDispatcher>();
 if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) &&
     string.Equals(builder.Configuration["WORKER_EXECUTION_MODE"], "TESTNET", StringComparison.OrdinalIgnoreCase) &&

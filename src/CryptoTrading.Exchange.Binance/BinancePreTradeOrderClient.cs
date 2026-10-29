@@ -13,19 +13,25 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
     private readonly IBinanceAccountFiltersProvider? accountFiltersProvider;
     private readonly IBinanceAccountTradingStateProvider? tradingStateProvider;
     private readonly IBinanceReferencePriceProvider? referencePriceProvider;
+    private readonly TimeProvider referencePriceClock;
+
+    /// <summary>A reference price older than this cannot justify a price band.</summary>
+    private static readonly TimeSpan BinanceReferencePriceMaxAge = TimeSpan.FromMinutes(1);
 
     public BinancePreTradeValidatedOrderClient(
         IBinanceSpotOrderClient inner,
         IBinanceSymbolTradingRulesProvider rulesProvider,
         IBinanceAccountFiltersProvider? accountFiltersProvider = null,
         IBinanceAccountTradingStateProvider? tradingStateProvider = null,
-        IBinanceReferencePriceProvider? referencePriceProvider = null)
+        IBinanceReferencePriceProvider? referencePriceProvider = null,
+        TimeProvider? referencePriceClock = null)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
         this.rulesProvider = rulesProvider ?? throw new ArgumentNullException(nameof(rulesProvider));
         this.accountFiltersProvider = accountFiltersProvider;
         this.tradingStateProvider = tradingStateProvider;
         this.referencePriceProvider = referencePriceProvider;
+        this.referencePriceClock = referencePriceClock ?? TimeProvider.System;
     }
 
     public async Task<BinanceSpotOrderResult> SubmitAsync(
@@ -142,6 +148,12 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
         {
             return [new("ACCOUNT_STATE_UNAVAILABLE", "Account trading state could not be verified.")];
         }
+
+        if (!state.IsConsistent)
+        {
+            return [new("ACCOUNT_STATE_INCONSISTENT",
+                "Account and open-order observations were too far apart to describe one state.")];
+        }
         if (state.CanTrade is false)
         {
             // The venue reports the account as unable to trade; stop before the
@@ -152,7 +164,7 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
         return BinanceAccountFilterEvaluator.Evaluate(
             accountFilters, rules.BaseAsset, rules.QuoteAsset, request.Type,
             request.Quantity, request.Price, state.OpenOrders, request.Side, state.BasePosition,
-            ReadMaxPosition(rules), state.SymbolOrders, ReadMaxSymbolOrders(rules));
+            ReadMaxPosition(rules), state.SymbolOrders, ReadMaxSymbolOrders(rules), rules.SymbolFilters);
     }
 
     /// <summary>
@@ -169,12 +181,12 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
             var state = await tradingStateProvider!
                 .GetTradingStateAsync(request.Symbol, rules.BaseAsset, cancellationToken).ConfigureAwait(false);
             return new TradingStateEvidence(
-                state.OpenOrderCount, state.SymbolOpenOrderCount, state.BasePositionQuantity, state.CanTrade);
+                state.OpenOrderCount, state.SymbolOpenOrderCount, state.BasePositionQuantity, state.CanTrade, state.IsConsistent);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             // Unknown values are reported by the evaluator with specific codes.
-            return new TradingStateEvidence(null, null, null, null);
+            return new TradingStateEvidence(null, null, null, null, false);
         }
     }
 
@@ -182,7 +194,8 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
         long? OpenOrders,
         long? SymbolOrders,
         decimal? BasePosition,
-        bool? CanTrade);
+        bool? CanTrade,
+        bool IsConsistent);
 
     private static decimal? ReadMaxPosition(BinanceSymbolTradingRules rules) =>
         (rules.SymbolFilters ?? [])
@@ -214,6 +227,11 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
         (rules.SymbolFilters ?? []).Any(static filter =>
             filter?.FilterType is "PERCENT_PRICE" or "PERCENT_PRICE_BY_SIDE");
 
+    /// <summary>
+    /// Resolves a reference price that provably belongs to the ordered symbol and
+    /// is not older than the market-data policy. Anything else returns null so the
+    /// percentage-band evaluator fails closed with a specific reason.
+    /// </summary>
     private async Task<decimal?> ResolveReferencePriceAsync(string symbol, CancellationToken cancellationToken)
     {
         if (referencePriceProvider is null)
@@ -221,16 +239,26 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
             return null;
         }
 
+        BinanceReferencePriceEvidence? evidence;
         try
         {
-            return await referencePriceProvider.GetReferencePriceAsync(symbol, cancellationToken).ConfigureAwait(false);
+            evidence = await referencePriceProvider.GetReferencePriceAsync(symbol, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // An unknown reference price cannot verify the band; the evaluator
-            // reports it as a violation below.
             return null;
         }
+
+        if (evidence is null ||
+            !string.Equals(evidence.Symbol, symbol, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var now = referencePriceClock.GetUtcNow();
+        return evidence.VenueTimestampUtc <= now && now - evidence.VenueTimestampUtc <= BinanceReferencePriceMaxAge
+            ? evidence.Price
+            : null;
     }
 
     private static BinanceOrderValidationResult ValidateLimitOrder(

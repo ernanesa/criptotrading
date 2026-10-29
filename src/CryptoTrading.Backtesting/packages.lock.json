@@ -82,6 +82,12 @@
       },
       "cryptotrading.domain": {
         "type": "Project"
+      },
+      "cryptotrading.exchange.paper": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )"
+        }
       }
     }
   }

@@ -25,6 +25,12 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
     private readonly ConcurrentDictionary<string, CachedCommissionEntry> cachedCommissions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BinanceAccountFilters> cachedFilters = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Maximum gap tolerated between the account and open-orders reads. A larger
+    /// gap means a fill could have landed between them, so the pair is unusable.
+    /// </summary>
+    private static readonly TimeSpan MaxAccountObservationSkew = TimeSpan.FromSeconds(1);
+
     private sealed record CachedAccountEntry(BinanceAccountSnapshot Snapshot, DateTimeOffset FetchedAtUtc);
     private sealed record CachedCommissionEntry(BinanceCommissionSnapshot Snapshot, DateTimeOffset FetchedAtUtc);
 
@@ -148,12 +154,20 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
         var normalizedSymbol = NormalizeSymbol(symbol);
         var normalizedBaseAsset = BinanceAssetNormalizer.Normalize(baseAsset, nameof(baseAsset));
 
-        var accountTask = GetAccountAsync(cancellationToken);
-        var ordersTask = GetOpenOrdersAsync(null, cancellationToken);
+        // The two endpoints are independent reads. Their completion timestamps are
+        // recorded so the caller can detect a stale pairing instead of assuming
+        // the result is a single consistent instant.
+        var accountCompletedAt = default(DateTimeOffset);
+        var ordersCompletedAt = default(DateTimeOffset);
+        var accountTask = ReadTrackedAsync(GetAccountAsync(cancellationToken), at => accountCompletedAt = at);
+        var ordersTask = ReadTrackedAsync(GetOpenOrdersAsync(null, cancellationToken), at => ordersCompletedAt = at);
         await Task.WhenAll(accountTask, ordersTask).ConfigureAwait(false);
 
         var account = await accountTask.ConfigureAwait(false);
         var orders = await ordersTask.ConfigureAwait(false);
+        var skew = accountCompletedAt >= ordersCompletedAt
+            ? accountCompletedAt - ordersCompletedAt
+            : ordersCompletedAt - accountCompletedAt;
         var balance = account.Balances.SingleOrDefault(item =>
             string.Equals(BinanceAssetNormalizer.Normalize(item.Asset, "asset"), normalizedBaseAsset, StringComparison.Ordinal))
             ?? throw new JsonException("Base asset balance is unavailable.");
@@ -169,8 +183,18 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
             symbolOrderCount++;
             if (string.Equals(order.Side.Trim(), "BUY", StringComparison.OrdinalIgnoreCase)) position += original - executed;
         }
+        // The older observation bounds evidence age conservatively.
+        var observedAt = accountCompletedAt <= ordersCompletedAt ? accountCompletedAt : ordersCompletedAt;
         return new BinanceAccountTradingState(
-            orders.Count, symbolOrderCount, position, timeProvider.GetUtcNow(), account.CanTrade);
+            orders.Count, symbolOrderCount, position, observedAt, account.CanTrade,
+            skew <= MaxAccountObservationSkew);
+    }
+
+    private async Task<T> ReadTrackedAsync<T>(Task<T> read, Action<DateTimeOffset> recordCompletedAt)
+    {
+        var value = await read.ConfigureAwait(false);
+        recordCompletedAt(timeProvider.GetUtcNow());
+        return value;
     }
 
     private static decimal ParseExact(string? raw)

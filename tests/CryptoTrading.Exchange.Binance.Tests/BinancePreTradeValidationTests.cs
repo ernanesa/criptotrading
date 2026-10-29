@@ -290,8 +290,10 @@ public sealed class BinancePreTradeValidationTests
 
     private sealed class FixedReferencePrice(decimal? price) : IBinanceReferencePriceProvider
     {
-        public Task<decimal?> GetReferencePriceAsync(string symbol, CancellationToken cancellationToken = default) =>
-            Task.FromResult(price);
+        public Task<BinanceReferencePriceEvidence?> GetReferencePriceAsync(string symbol, CancellationToken cancellationToken = default) =>
+            Task.FromResult(price is { } value
+                ? new BinanceReferencePriceEvidence(symbol, value, DateTimeOffset.UtcNow)
+                : null);
     }
 
     [Fact]
@@ -430,6 +432,30 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
+    public async Task InconsistentAccountObservationIsRejected()
+    {
+        var inner = new FakeOrderClient();
+        var client = new BinancePreTradeValidatedOrderClient(
+            inner, new FixedRulesProvider(TradingRules()),
+            new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)),
+            new InconsistentTradingState(), new FixedReferencePrice(100m));
+
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-inconsistent", 1_000m),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains(error.Violations, item => item.Code == "ACCOUNT_STATE_INCONSISTENT");
+        Assert.Equal(0, inner.SubmitCalls);
+    }
+
+    private sealed class InconsistentTradingState : IBinanceAccountTradingStateProvider
+    {
+        public Task<BinanceAccountTradingState> GetTradingStateAsync(
+            string symbol, string baseAsset, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new BinanceAccountTradingState(0, 0, 0m, DateTimeOffset.UnixEpoch, true, IsConsistent: false));
+    }
+
+    [Fact]
     public async Task AccountUnableToTradeIsRejectedBeforeSubmission()
     {
         var inner = new FakeOrderClient();
@@ -508,8 +534,8 @@ public sealed class BinancePreTradeValidationTests
     private static BinanceAccountFilters AccountFilters(long maxOrders, string? asset = null, string? limit = null) =>
         new(
             [new BinanceExchangeFilter("EXCHANGE_MAX_NUM_ORDERS", maxOrders)],
-            null,
-            asset is null ? null : [new BinanceAssetFilter("MAX_ASSET", asset, limit)],
+            [],
+            asset is null ? [] : [new BinanceAssetFilter("MAX_ASSET", asset, limit)],
             DateTimeOffset.UnixEpoch);
 
     private sealed class FixedAccountFiltersProvider(BinanceAccountFilters filters) : IBinanceAccountFiltersProvider

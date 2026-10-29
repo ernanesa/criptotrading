@@ -22,7 +22,8 @@ public static class BinanceAccountFilterEvaluator
         decimal? basePosition = null,
         decimal? maxPosition = null,
         long? symbolOpenOrderCount = null,
-        long? maxSymbolOrders = null)
+        long? maxSymbolOrders = null,
+        IReadOnlyList<BinanceSymbolFilter>? exchangeSymbolFilters = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseAsset);
         ArgumentException.ThrowIfNullOrWhiteSpace(quoteAsset);
@@ -33,6 +34,11 @@ public static class BinanceAccountFilterEvaluator
         }
 
         var violations = new List<BinanceOrderFilterViolation>();
+        if (!accountFilters.IsComplete)
+        {
+            violations.Add(new("ACCOUNT_FILTERS_INCOMPLETE", "myFilters response is missing one or more filter collections."));
+        }
+
         if (!accountFilters.HasOnlyKnownFilterTypes)
         {
             violations.Add(new("ACCOUNT_FILTERS_UNSUPPORTED", "An account filter type cannot be verified by this adapter."));
@@ -120,6 +126,46 @@ public static class BinanceAccountFilterEvaluator
             // The filter targets an asset unrelated to this symbol's base/quote.
             // It cannot be attributed to this order, so it must not be ignored.
             violations.Add(new("MAX_ASSET_ASSET_UNRELATED", "MAX_ASSET references an asset that does not match this symbol."));
+        }
+
+        // myFilters can advertise account-specific symbol filters that are stricter
+        // than exchangeInfo. They must be reconciled, never ignored.
+        var mySymbolFilters = accountFilters.SymbolFilters ?? [];
+        if (mySymbolFilters.Count > 0 && exchangeSymbolFilters is not null)
+        {
+            foreach (var group in mySymbolFilters.GroupBy(static filter => filter.FilterType, StringComparer.Ordinal))
+            {
+                var exchangeGroup = exchangeSymbolFilters.Where(filter =>
+                    string.Equals(filter.FilterType, group.Key, StringComparison.Ordinal)).ToArray();
+                if (exchangeGroup.Length == 0 || !exchangeGroup.SequenceEqual(group))
+                {
+                    violations.Add(new("ACCOUNT_SYMBOL_FILTERS_UNRECONCILED",
+                        "myFilters advertises symbol filters that do not match exchangeInfo."));
+                    break;
+                }
+            }
+
+            // The account-specific MAX_NUM_ORDERS / MAX_POSITION can be stricter than
+            // the exchange-wide values already applied below.
+            var accountMaxSymbolOrders = mySymbolFilters
+                .Where(static filter => filter.FilterType is "MAX_NUM_ORDERS")
+                .Select(static filter => filter.MaxNumOrders)
+                .FirstOrDefault();
+            if (accountMaxSymbolOrders is { } stricter && (maxSymbolOrders is not { } current || stricter < current))
+            {
+                maxSymbolOrders = stricter;
+            }
+
+            var accountMaxPosition = mySymbolFilters
+                .Where(static filter => filter.FilterType is "MAX_POSITION")
+                .Select(static filter => decimal.TryParse(filter.MaxPosition, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
+                    ? value
+                    : (decimal?)null)
+                .FirstOrDefault();
+            if (accountMaxPosition is { } stricterPosition && (maxPosition is not { } currentPosition || stricterPosition < currentPosition))
+            {
+                maxPosition = stricterPosition;
+            }
         }
 
         // MAX_NUM_ORDERS limits open orders per symbol, counting algo orders too.

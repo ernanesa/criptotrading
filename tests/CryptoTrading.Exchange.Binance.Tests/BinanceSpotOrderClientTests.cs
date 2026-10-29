@@ -7,6 +7,7 @@ using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
 
+[Collection(TelemetryActivityFixture.Name)]
 public sealed class BinanceSpotOrderClientTests
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);

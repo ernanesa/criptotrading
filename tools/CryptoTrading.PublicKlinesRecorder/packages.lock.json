@@ -173,6 +173,7 @@
         "type": "Project",
         "dependencies": {
           "CryptoTrading.Domain": "[1.0.0, )",
+          "CryptoTrading.Exchange.Paper": "[1.0.0, )",
           "Microsoft.ML": "[6.0.0-preview.26457.2, )",
           "Microsoft.ML.FastTree": "[6.0.0-preview.26457.2, )",
           "Microsoft.ML.TimeSeries": "[6.0.0-preview.26457.2, )"
@@ -189,6 +190,12 @@
         "dependencies": {
           "CryptoTrading.Configuration": "[1.0.0, )",
           "CryptoTrading.Observability": "[1.0.0, )"
+        }
+      },
+      "cryptotrading.exchange.paper": {
+        "type": "Project",
+        "dependencies": {
+          "CryptoTrading.Domain": "[1.0.0, )"
         }
       },
       "cryptotrading.observability": {

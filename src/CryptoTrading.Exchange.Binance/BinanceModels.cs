@@ -121,6 +121,13 @@ public sealed record BinanceAccountFilters(
     [property: JsonPropertyName("assetFilters")] IReadOnlyList<BinanceAssetFilter>? AssetFilters,
     DateTimeOffset ObservedAtUtc)
 {
+    /// <summary>
+    /// True only when all three collections were present in the payload. A missing
+    /// collection must not be read as "no filters advertised".
+    /// </summary>
+    public bool IsComplete =>
+        ExchangeFilters is not null && SymbolFilters is not null && AssetFilters is not null;
+
     /// <summary>True when every advertised filter is one this adapter can reason about.</summary>
     public bool HasOnlyKnownFilterTypes =>
         (ExchangeFilters ?? []).All(static filter =>

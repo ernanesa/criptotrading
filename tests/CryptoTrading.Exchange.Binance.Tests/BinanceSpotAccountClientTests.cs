@@ -227,6 +227,41 @@ public sealed class BinanceSpotAccountClientTests
         await Assert.ThrowsAsync<JsonException>(() => client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(400)]
+    public async Task TradingStateFlagsObservationSkewAboveThreshold(int skewMilliseconds)
+    {
+        var clock = new MutableTimeProvider(FixedNow);
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"BTC\",\"free\":\"1\",\"locked\":\"0\"}]}"),
+            ("v3/openOrders", "[]")
+        );
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var client = new BinanceSpotAccountClient(httpClient, new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret"
+        }, timeProvider: new SkewingTimeProvider(clock, skewMilliseconds));
+
+        var state = await client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken);
+
+        Assert.Equal(skewMilliseconds <= 1000, state.IsConsistent);
+    }
+
+    private sealed class SkewingTimeProvider(MutableTimeProvider clock, int skewMilliseconds) : TimeProvider
+    {
+        private int reads;
+        public override DateTimeOffset GetUtcNow()
+        {
+            // Advance only on the second and later reads so the two observations
+            // differ by the requested skew.
+            return Interlocked.Increment(ref reads) <= 2 ? clock.GetUtcNow() : clock.GetUtcNow().AddMilliseconds(skewMilliseconds);
+        }
+    }
+
     [Fact]
     public async Task TradingStateRejectsMissingBaseBalance()
     {

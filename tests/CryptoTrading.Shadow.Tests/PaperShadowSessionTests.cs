@@ -8,15 +8,99 @@ namespace CryptoTrading.Shadow.Tests;
 public sealed class PaperShadowSessionTests
 {
     [Fact]
-    public void RunsStrategyThroughPaperAndReportsNoDriftForNoTradeWindow()
+    public void ReplayClockMakesHistoricalBarsProduceDeterministicFills()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var start = new DateTimeOffset(2026, 10, 20, 0, 0, 0, TimeSpan.Zero);
+        var bars = new[]
+        {
+            new CloseBar(symbol, start, 100m),
+            new CloseBar(symbol, start.AddMinutes(1), 90m),
+            new CloseBar(symbol, start.AddMinutes(2), 80m),
+            new CloseBar(symbol, start.AddMinutes(3), 120m),
+            new CloseBar(symbol, start.AddMinutes(4), 60m)
+        };
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+        var replayClock = new AdvancingTimeProvider(start);
+        var paper = new PaperExchange(timeProvider: replayClock);
+
+        var first = new PaperShadowSession(strategy, paper, replayClock: replayClock).Run(bars);
+        var replayClock2 = new AdvancingTimeProvider(start);
+        var paper2 = new PaperExchange(timeProvider: replayClock2);
+        var second = new PaperShadowSession(strategy, paper2, replayClock: replayClock2).Run(bars);
+
+        Assert.NotEmpty(paper.Fills);
+        Assert.NotNull(first.PaperResult);
+        Assert.Equal(first.PaperResult, second.PaperResult);
+    }
+
+    [Fact]
+    public void HistoricalBarsAreRejectedInsteadOfReportingSilentNoFills()
     {
         var symbol = new Symbol("BTCUSDT");
         var bars = new[]
         {
             new CloseBar(symbol, DateTimeOffset.UnixEpoch, 100m),
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(1), 99m),
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(2), 98m),
-            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(3), 97m),
+            new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(1), 90m)
+        };
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            new PaperShadowSession(strategy, new PaperExchange()).Run(bars));
+
+        Assert.Contains("forward-only", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReportsRealizedPaperResultWhenFillsOccur()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        // Paper rejects ticks in the past relative to its clock, so anchor near now.
+        var start = DateTimeOffset.UtcNow.AddSeconds(1);
+        var bars = new[]
+        {
+            new CloseBar(symbol, start, 100m),
+            new CloseBar(symbol, start.AddMinutes(1), 90m),
+            new CloseBar(symbol, start.AddMinutes(2), 80m),
+            new CloseBar(symbol, start.AddMinutes(3), 120m),
+            new CloseBar(symbol, start.AddMinutes(4), 60m)
+        };
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+        var paper = new PaperExchange();
+
+        var result = new PaperShadowSession(strategy, paper).Run(bars);
+
+        Assert.NotEmpty(paper.Fills);
+        Assert.NotNull(result.PaperResult);
+        Assert.True(result.PaperResult!.FeesPaidQuote > 0m);
+        Assert.Equal(paper.Fills.Count(fill => fill.Side == CryptoTrading.Domain.Orders.OrderSide.Sell), result.PaperResult.ClosedFillCount);
+        Assert.False(string.IsNullOrEmpty(result.PaperResult.OpenCostQuote >= 0m ? "ok" : ""));
+    }
+
+    [Fact]
+    public void NoFillsLeavesPaperResultAbsent()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var start = DateTimeOffset.UtcNow.AddSeconds(1);
+        var bars = new[] { new CloseBar(symbol, start, 100m), new CloseBar(symbol, start.AddMinutes(1), 100m) };
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+
+        var result = new PaperShadowSession(strategy, new PaperExchange()).Run(bars);
+
+        Assert.Null(result.PaperResult);
+    }
+
+    [Fact]
+    public void RunsStrategyThroughPaperAndReportsNoDriftForNoTradeWindow()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var start = DateTimeOffset.UtcNow.AddSeconds(1);
+        var bars = new[]
+        {
+            new CloseBar(symbol, start, 100m),
+            new CloseBar(symbol, start.AddMinutes(1), 99m),
+            new CloseBar(symbol, start.AddMinutes(2), 98m),
+            new CloseBar(symbol, start.AddMinutes(3), 97m),
         };
         var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
         var paper = new PaperExchange();
@@ -32,8 +116,9 @@ public sealed class PaperShadowSessionTests
     public void RecordsConfiguredStaleAndRecoveryWindowsWithoutNetwork()
     {
         var symbol = new Symbol("BTCUSDT");
+        var start = DateTimeOffset.UtcNow.AddSeconds(1);
         var bars = Enumerable.Range(0, 4)
-            .Select(index => new CloseBar(symbol, DateTimeOffset.UnixEpoch.AddMinutes(index), 100m - index))
+            .Select(index => new CloseBar(symbol, start.AddMinutes(index), 100m - index))
             .ToArray();
         var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
         var result = new PaperShadowSession(
