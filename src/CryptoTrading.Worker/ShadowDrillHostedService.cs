@@ -14,7 +14,6 @@ namespace CryptoTrading.Worker;
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1812", Justification = "The host creates this hosted service through dependency injection.")]
 internal sealed class ShadowDrillHostedService(
     IOptions<WorkerRuntimeOptions> options,
-    IPaperExchange paper,
     ShadowReportWriter reportWriter,
     TradingAlertDispatcher alertDispatcher,
     ILogger<ShadowDrillHostedService> logger) : IHostedService
@@ -39,7 +38,8 @@ internal sealed class ShadowDrillHostedService(
         };
         var strategy = new TrendFollowingStrategy(
             new TrendFollowingParameters("worker-shadow-drill", "1.0.0", symbol, 2, 3, 0m, 0m));
-        var result = new PaperShadowSession(strategy, paper).Run(bars);
+        // Synthetic prices must never affect the operational paper exchange.
+        var result = new PaperShadowSession(strategy, new PaperExchange()).Run(bars);
         var completedAt = DateTimeOffset.UtcNow;
         var reportPath = await reportWriter.AppendAsync(new ShadowRunReport(
             Guid.NewGuid().ToString("N"),

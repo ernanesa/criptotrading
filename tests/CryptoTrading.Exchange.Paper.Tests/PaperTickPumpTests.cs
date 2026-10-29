@@ -65,6 +65,22 @@ public sealed class PaperTickPumpTests
         Assert.Empty(pump.Fills);
     }
 
+    [Fact]
+    public void FillsIsAStableReadOnlySnapshot()
+    {
+        var now = new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new MutableClock(now));
+        var pump = new PaperTickPump(exchange);
+        Submit(exchange, now);
+        var before = pump.Fills;
+
+        pump.Apply(Tick(now));
+
+        Assert.Empty(before);
+        Assert.Single(pump.Fills);
+        Assert.Throws<NotSupportedException>(() => ((IList<PaperFill>)pump.Fills).Clear());
+    }
+
     private static void Submit(PaperExchange exchange, DateTimeOffset now) =>
         exchange.Submit(
             new PaperOrderRequest(new ClientOrderId("pump-1"), BtcUsdt, OrderSide.Buy, OrderType.Market, new Quantity(0.01m)),
