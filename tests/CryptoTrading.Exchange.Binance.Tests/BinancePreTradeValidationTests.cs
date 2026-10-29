@@ -295,7 +295,7 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
-    public async Task SubmitProceedsOnlyWithConsistentAccountEvidence()
+    public async Task NominalAccountEvidenceDoesNotAuthorizeSubmission()
     {
         var inner = new FakeOrderClient();
         var client = new BinancePreTradeValidatedOrderClient(
@@ -304,11 +304,12 @@ public sealed class BinancePreTradeValidationTests
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000, asset: "BTC", limit: "1")),
             new FixedTradingState(5));
 
-        await client.SubmitAsync(
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-evidence", 1_000m),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken));
 
-        Assert.Equal(1, inner.SubmitCalls);
+        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
+        Assert.Equal(0, inner.SubmitCalls);
     }
 
     [Fact]
@@ -329,6 +330,40 @@ public sealed class BinancePreTradeValidationTests
         Assert.Equal(0, inner.SubmitCalls);
     }
 
+    [Theory]
+    [InlineData(BinanceSpotOrderSide.Buy)]
+    [InlineData(BinanceSpotOrderSide.Sell)]
+    public async Task SubmissionRemainsBlockedUntilAccountAndExchangeEvidenceIsVerified(BinanceSpotOrderSide side)
+    {
+        var inner = new FakeOrderClient();
+        var client = new BinancePreTradeValidatedOrderClient(
+            inner, new FixedRulesProvider(TradingRules()),
+            new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)), new FixedTradingState(0));
+
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", side, BinanceSpotOrderType.Limit, 0.01m, "ct-unverified", 1_000m),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
+        Assert.Equal(0, inner.SubmitCalls);
+    }
+
+    [Fact]
+    public async Task ContainmentStillDelegatesReadAndCancelWithoutSubmitting()
+    {
+        var inner = new FakeOrderClient();
+        var boundary = new BinancePreTradeValidatedOrderClient(inner, new FixedRulesProvider(TradingRules()));
+
+        var observed = await boundary.QueryByClientOrderIdAsync("BTCUSDT", "ct-existing", TestContext.Current.CancellationToken);
+        var cancelled = await boundary.CancelAsync("BTCUSDT", "ct-existing", TestContext.Current.CancellationToken);
+
+        Assert.Equal("NEW", observed.Status);
+        Assert.Equal("CANCELED", cancelled.Status);
+        Assert.Equal(1, inner.QueryCalls);
+        Assert.Equal(1, inner.CancelCalls);
+        Assert.Equal(0, inner.SubmitCalls);
+    }
+
     [Fact]
     public async Task SubmitIsBlockedWhenOrderCountCannotBeRead()
     {
@@ -343,7 +378,36 @@ public sealed class BinancePreTradeValidationTests
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-count", 1_000m),
             TestContext.Current.CancellationToken));
 
-        Assert.Contains(error.Violations, item => item.Code == "ACCOUNT_ORDER_COUNT_UNAVAILABLE");
+        Assert.Contains(error.Violations, item => item.Code == "ACCOUNT_STATE_UNAVAILABLE");
+        Assert.Equal(0, inner.SubmitCalls);
+    }
+
+    [Fact]
+    public async Task EmptyFiltersCannotHideUnavailableAccountState()
+    {
+        var inner = new FakeOrderClient();
+        var empty = new BinanceAccountFilters([], [], [], DateTimeOffset.UnixEpoch);
+        var client = new BinancePreTradeValidatedOrderClient(inner, new FixedRulesProvider(TradingRules()),
+            new FixedAccountFiltersProvider(empty), new ThrowingTradingState());
+
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-no-state", 1_000m),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains(error.Violations, item => item.Code == "ACCOUNT_STATE_UNAVAILABLE");
+        Assert.Equal(0, inner.SubmitCalls);
+    }
+
+    [Fact]
+    public async Task CancellationOfAccountStateIsPropagatedWithoutSubmission()
+    {
+        var inner = new FakeOrderClient();
+        var client = new BinancePreTradeValidatedOrderClient(inner, new FixedRulesProvider(TradingRules()),
+            new FixedAccountFiltersProvider(new BinanceAccountFilters([], [], [], DateTimeOffset.UnixEpoch)), new CancelledTradingState());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-cancelled-state", 1_000m),
+            TestContext.Current.CancellationToken));
         Assert.Equal(0, inner.SubmitCalls);
     }
 
@@ -383,7 +447,7 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
-    public async Task AccountAbleToTradeProceeds()
+    public async Task AccountAbleToTradeDoesNotBypassUnverifiedEvidence()
     {
         var inner = new FakeOrderClient();
         var client = new BinancePreTradeValidatedOrderClient(
@@ -391,11 +455,12 @@ public sealed class BinancePreTradeValidationTests
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)),
             new FixedTradingState(0, canTrade: true), new FixedReferencePrice(100m));
 
-        await client.SubmitAsync(
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-cantrade-ok", 1_000m),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken));
 
-        Assert.Equal(1, inner.SubmitCalls);
+        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
+        Assert.Equal(0, inner.SubmitCalls);
     }
 
     [Fact]
@@ -420,7 +485,7 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
-    public async Task MaxPositionWithinLimitSubmits()
+    public async Task MaxPositionWithinLimitDoesNotBypassUnverifiedEvidence()
     {
         var inner = new FakeOrderClient();
         var rules = TradingRules() with
@@ -432,11 +497,12 @@ public sealed class BinancePreTradeValidationTests
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)),
             new FixedTradingState(0, position: 1m));
 
-        await client.SubmitAsync(
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-position-ok", 1_000m),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken));
 
-        Assert.Equal(1, inner.SubmitCalls);
+        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
+        Assert.Equal(0, inner.SubmitCalls);
     }
 
     private static BinanceAccountFilters AccountFilters(long maxOrders, string? asset = null, string? limit = null) =>
@@ -464,6 +530,13 @@ public sealed class BinancePreTradeValidationTests
         public Task<BinanceAccountTradingState> GetTradingStateAsync(
             string symbol, string baseAsset, CancellationToken cancellationToken = default) =>
             Task.FromException<BinanceAccountTradingState>(new HttpRequestException("offline-count-failure"));
+    }
+
+    private sealed class CancelledTradingState : IBinanceAccountTradingStateProvider
+    {
+        public Task<BinanceAccountTradingState> GetTradingStateAsync(
+            string symbol, string baseAsset, CancellationToken cancellationToken = default) =>
+            Task.FromException<BinanceAccountTradingState>(new OperationCanceledException());
     }
 
     private sealed class FixedRulesProvider(BinanceSymbolTradingRules rules) : IBinanceSymbolTradingRulesProvider
@@ -530,6 +603,8 @@ public sealed class BinancePreTradeValidationTests
     {
         public int SubmitCalls { get; private set; }
         public int ExtendedSubmitCalls { get; private set; }
+        public int QueryCalls { get; private set; }
+        public int CancelCalls { get; private set; }
 
         public Task<BinanceSpotOrderResult> SubmitAsync(BinanceSpotOrderRequest request, CancellationToken cancellationToken = default)
         {
@@ -537,11 +612,17 @@ public sealed class BinancePreTradeValidationTests
             return Task.FromResult(new BinanceSpotOrderResult(1, request.Symbol, request.ClientOrderId, "NEW", request.Price ?? 0m, request.Quantity, 0m, 0));
         }
 
-        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            QueryCalls++;
+            return Task.FromResult(new BinanceSpotOrderResult(1, symbol, clientOrderId, "NEW", 100m, 1m, 0m, 0));
+        }
 
-        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
+        public Task<BinanceSpotOrderResult> CancelAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)
+        {
+            CancelCalls++;
+            return Task.FromResult(new BinanceSpotOrderResult(1, symbol, clientOrderId, "CANCELED", 100m, 1m, 0m, 0));
+        }
 
         public Task<BinanceSpotCancelReplaceResult> CancelReplaceAsync(BinanceSpotCancelReplaceRequest request, CancellationToken cancellationToken = default)
         {

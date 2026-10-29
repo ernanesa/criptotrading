@@ -4,13 +4,27 @@ Documento vivo. Substitui o registro narrativo anterior (R-01…R-24), mantendo 
 
 ## 1. Estado e limites da evidência
 
-- Base local: `c21ff00` + alterações não commitadas. A versão de qualquer processo em execução **não foi identificada**.
+- Base local em 2026-10-29: `e23db02` + alterações desta contenção. A versão de qualquer processo em execução **não foi identificada**.
 - Auditoria parcial; **não** é certificação de produção. Nenhuma ordem foi enviada/cancelada, nenhuma migration aplicada, nenhum HWM ou dado histórico alterado.
 - **Rentabilidade, PnL realizado/não realizado, drawdown, exposição e trades: inconclusivos** — falta reconciliação com dados reais.
 - **Latência p95/p99, CPU, memória, alocações: não medidos.** Build e testes não são benchmark.
 - **Native AOT:** não configurado no projeto (`PublishAot` ausente em `Directory.Build.props`). A tentativa anterior era override exploratório; não é gate do repositório.
 - **Integração PostgreSQL, Binance autenticada e CI remoto: não verificados.**
 - Defaults de código (`PAPER`, `NO_TRADE=true`, R$ 100 nominal, 20 USDT, 1 posição, perda diária R$ 2, drawdown R$ 5) são **constantes**, não a política vigente.
+
+### Correção de afirmações anteriores — 2026-10-29
+
+As afirmações anteriores de que todos os filtros de LIMIT estavam cobertos e que evidência de conta permitia submissão segura estão **superseded**. Revisão estática encontrou respostas incompletas de `myFilters`, filtros de símbolo ignorados, limites malformados e referências de preço sem identidade/frescor suficientemente verificados. Dois testes reproduziram que BUY e SELL chegavam ao cliente interno mesmo com evidência incompleta. A fronteira agora rejeita novas submissões com `PRETRADE_EVIDENCE_UNVERIFIED` após as verificações locais; consulta e cancelamento não foram modificados. **Isso também bloqueia novas saídas LIMIT** por essa fronteira. A versão implantada e a existência de ordens abertas são desconhecidas; não se alterou o processo em execução.
+
+Revisão adicional reproduziu subcontagem de saldo/ordens por identificadores aceitos mas não normalizados, aceitação de lado desconhecido e conversão inexata de `1,000` ou de quantidades fora da precisão decimal. O estado de conta agora normaliza identificadores, exige lado conhecido e saldo-base presente e rejeita números não representáveis exatamente; a bateria Binance passou **196/196**. Isso **não** torna o snapshot atômico nem resolve compras abertas em outros símbolos da mesma base; o resultado não autoriza ordens e a contenção permanece ativa.
+
+O registro DI do Worker deixou de expor `BinanceSpotOrderClient` como serviço concreto; a interface resolve o decorator que bloqueia submissões. Dois testes locais de composição passaram, mas isso não impede construção direta do cliente em outro código nem prova configuração de um processo implantado. Consulta/cancelamento foram exercitados apenas com fake, sem chamada à corretora.
+
+O executor registrava uma reprovação local de pré-trade como se fosse HTTP 400 da Binance. Um teste offline reproduziu a mensagem falsa; o log agora distingue bloqueio local e usa razões limitadas, sem inventar status HTTP. A projeção persistida ainda usa `OrderStatus.Rejected` sem proveniência detalhada; a distinção durável continua pendente.
+
+Para GET autenticado, respostas 418/429 sem `Retry-After` HTTP válido não são repetidas; datas inválidas/negativas são rejeitadas e prazos válidos não são encurtados. Isso não implementa coordenação por IP entre clientes ou processos. Nenhuma medição de rate-limit, latência ou integração real foi realizada.
+
+Em uma limpeza anterior desta sessão, foram removidos 42 relatórios locais de chaos e 12 relatórios de quality, ignorados pelo Git. Sua recuperação não foi verificada; não se deve afirmar que nenhuma evidência foi descartada. Não serão removidos outros dados, relatórios ou históricos como parte de compactação de contexto.
 
 ## 2. Matriz Binance Spot (consulta 2026-10-27/28 UTC)
 
@@ -19,13 +33,13 @@ Fonte: [índice](https://github.com/binance/binance-spot-api-docs), [filters.md]
 | Área | Uso local | Situação |
 |---|---|---|
 | `exchangeInfo` + filtros de símbolo | `BinanceSymbolTradingRulesParser` | Implementado; `tickSize=0` tratado como desabilitado |
-| `MAX_NUM_ORDERS`, `MAX_POSITION` | avaliador de conta | Implementado com contagem/posição reais |
-| `EXCHANGE_MAX_NUM_ORDERS` | `myFilters` | Implementado |
-| `MAX_ASSET` | `myFilters` (limite em string) | Implementado; ordem individual |
-| `PERCENT_PRICE(_BY_SIDE)` | `/api/v3/referencePrice` (peso 2) | Implementado; sem referência → bloqueio |
+| `MAX_NUM_ORDERS`, `MAX_POSITION` | avaliador de conta | Cobertura e identidade/frescor do estado não comprovados; novas submissões bloqueadas |
+| `EXCHANGE_MAX_NUM_ORDERS` | `myFilters` | Cobertura global/estado concorrente não comprovados; novas submissões bloqueadas |
+| `MAX_ASSET` | `myFilters` (limite em string) | Parsing parcial; coleções nulas/desconhecidas não demonstram ausência de filtro |
+| `PERCENT_PRICE(_BY_SIDE)` | `/api/v3/referencePrice` (peso 2) | Símbolo e frescor da referência não são comprovados pela fronteira atual |
 | Filtros inaplicáveis a LIMIT GTC | — | Classificados e ignorados explicitamente |
-| `myFilters` (peso 40) | `BinanceSpotAccountClient` | Implementado com cache TTL 5 min |
-| `Retry-After` (429/418) | `BinanceRateLimitGate` | Implementado no processo; multi-instância não coberto |
+| `myFilters` (peso 40) | `BinanceSpotAccountClient` | Cache desabilitado por padrão após correção; leitura real não verificada |
+| `Retry-After` (429/418) | `BinanceRateLimitGate` | A espera é aplicada por instância de cliente de conta; não há coordenação padrão entre clientes ou processos. Não encurtar o prazo da Binance. |
 | Market stream / `serverShutdown` | `BinanceSpotMarketDataClient` | Evento de desconexão + reconexão |
 | Livro local L2 | `BinanceLocalOrderBook` | Exige snapshot + bridge; invalida em gap/desconexão |
 | User data stream | API assinada (não `listenKey`) | Cancelamento/handshake serializados |
@@ -55,14 +69,14 @@ Cada linha: problema → correção → rollback. Todas têm teste local.
 | R-16 | stream continuava após falha contábil | contenção + erro sanitizado | reverter `AccountStreamHostedService` |
 | R-17 | `BackgroundServiceExceptionBehavior.Ignore` aceito | validação rejeita no startup | reverter `WorkerHostFailureSafety` |
 | R-18 | submissão sem filtros globais/conta | bloqueio `ACCOUNT_EXCHANGE_FILTERS_UNVERIFIED` | reverter fronteira |
-| R-19 | rate limit não compartilhado | `BinanceRateLimitGate` | reverter gate |
-| R-20 | `myFilters` não consultado | provider + avaliador de conta | reverter 4 tipos + wiring |
+| R-19 | rate limit não compartilhado | gate apenas por instância de cliente; coordenação por IP permanece pendente | reverter gate |
+| R-20 | `myFilters` não consultado | provider + avaliador; sua liberação de ordens está **superseded** pela contenção de 2026-10-29 | não reativar sem revisão e testes de contrato |
 | R-21 | `tickSize=0` rejeitado | tratado como desabilitado | reverter parser |
 | R-22 | filtros percentuais bloqueavam tudo | avaliação com `referencePrice` | reverter avaliador |
 | R-23 | `MAX_POSITION` bloqueava compra | posição = free+locked+BUY abertos | reverter estado de conta |
 | R-24 | `MAX_NUM_ORDERS` bloqueava símbolo | contagem por símbolo | reverter campo |
 | R-25 | fronteira pré-trade com 100+ linhas e 3 ramos de erro | extraída em `RefreshRulesAsync`, `ValidateSymbolFiltersAsync`, `ValidateAccountFiltersAsync`, `ReadTradingStateAsync`, `ReadMaxPosition`, `ReadMaxSymbolOrders` | reverter `BinancePreTradeOrderClient` |
-| R-26 | `/myFilters` (peso 40) em toda submissão | cache TTL 5 min, configurável, `ObservedAtUtc` preservado | `AccountFiltersCacheDuration = 0` |
+| R-26 | `/myFilters` (peso 40) em toda submissão | cache de 5 min anterior **superseded**; default agora é zero | não ativar cache para autorização sem política de frescor aprovada |
 | R-27 | `orderTypes` do símbolo não era validado | parser exige o campo; fronteira rejeita tipo não anunciado ou metadado ausente | reverter `BinanceModels`/parser/fronteira |
 | R-28 | `canTrade=false` não bloqueava submissão | estado de conta carrega `CanTrade`; fronteira rejeita com `ACCOUNT_CANNOT_TRADE` | reverter record + fronteira |
 | R-29 | `BinanceSymbolTradingRules.ExchangeFilters` nomeava filtros **de símbolo**, ambíguo após existir `BinanceExchangeInfo.ExchangeFilters` (globais) | renomeado para `SymbolFilters` | renomear de volta |
@@ -90,7 +104,7 @@ Fixtures de teste foram atualizadas para refletir o payload real da venue — a 
 ## 5. Validação atual
 
 - Build Release com .NET 11 RC3: **0 avisos, 0 erros**.
-- Suíte da solução: **~1.169 testes aprovados**, 0 falhas (inclui alterações concorrentes preservadas).
+- Gate completo 2026-10-29 00:56 UTC: **1.205 testes aprovados**, 0 falhas, com a contenção pré-trade ativa. Build Release RC3 sem avisos, formatação aprovada, rastreabilidade aprovada (126 IDs, 0 Done com cadeia completa) e chaos Paper determinístico aprovado (`artifacts/chaos/paper-soak-chaos-20261029T005601Z-1999720.md`). Esses resultados não incluem PostgreSQL de integração, Binance autenticada, Native AOT ou medição de latência.
 - `dotnet format --verify-no-changes`, rastreabilidade (126 IDs, 0 itens Done com cadeia completa) e chaos Paper determinístico: aprovados.
 - **Gate agregado `scripts/test-local-gates.sh`: 11/11 PASS** — readiness, traceability, secret-storage, secret-initializer, binance-readonly-preflight, api-smoke, operational-control, shadow-operational-gate, oos-sensitivity, paper-soak-chaos, ledger-recovery. Evidência: `artifacts/quality/local-gates-20261028T203347Z-1775919.md`.
 - Não executados: testes PostgreSQL de integração, contrato Binance autenticado, Native AOT, benchmarks.
