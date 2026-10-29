@@ -178,6 +178,7 @@ public sealed class PaperExchange : IPaperExchange
     private readonly Dictionary<ClientOrderId, PaperOrderState> orders = [];
     private readonly Dictionary<IdempotencyKey, CommandResult> commands = [];
     private readonly List<PaperFill> fills = [];
+    private readonly Lock sync = new();
     private long fillSequence;
 
     public PaperExchange(PaperExchangeOptions? options = null, TimeProvider? timeProvider = null)
@@ -187,12 +188,37 @@ public sealed class PaperExchange : IPaperExchange
         clock = new TradingClock(timeProvider ?? TimeProvider.System);
     }
 
-    public IReadOnlyCollection<PaperOrderSnapshot> OpenOrders =>
-        orders.Values.Where(order => !IsTerminal(order.Order.Status)).Select(ToSnapshot).ToArray();
+    public IReadOnlyCollection<PaperOrderSnapshot> OpenOrders
+    {
+        get
+        {
+            lock (sync)
+            {
+                return orders.Values.Where(order => !IsTerminal(order.Order.Status)).Select(ToSnapshot).ToArray();
+            }
+        }
+    }
 
-    public IReadOnlyCollection<PaperFill> Fills => fills.AsReadOnly();
+    public IReadOnlyCollection<PaperFill> Fills
+    {
+        get
+        {
+            lock (sync)
+            {
+                return Array.AsReadOnly(fills.ToArray());
+            }
+        }
+    }
 
     public PaperSubmitResult Submit(PaperOrderRequest request, IdempotencyKey idempotencyKey)
+    {
+        lock (sync)
+        {
+            return SubmitCore(request, idempotencyKey);
+        }
+    }
+
+    private PaperSubmitResult SubmitCore(PaperOrderRequest request, IdempotencyKey idempotencyKey)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRequest(request);
@@ -212,7 +238,7 @@ public sealed class PaperExchange : IPaperExchange
             throw new InvalidOperationException($"An order with client ID '{request.ClientOrderId}' already exists.");
         }
 
-        if (OpenOrders.Count >= options.MaxOpenOrders)
+        if (orders.Values.Count(order => !IsTerminal(order.Order.Status)) >= options.MaxOpenOrders)
         {
             throw new InvalidOperationException("The paper exchange open-order bound has been reached.");
         }
@@ -230,6 +256,14 @@ public sealed class PaperExchange : IPaperExchange
     }
 
     public PaperCancelResult Cancel(ClientOrderId clientOrderId, IdempotencyKey idempotencyKey)
+    {
+        lock (sync)
+        {
+            return CancelCore(clientOrderId, idempotencyKey);
+        }
+    }
+
+    private PaperCancelResult CancelCore(ClientOrderId clientOrderId, IdempotencyKey idempotencyKey)
     {
         if (commands.TryGetValue(idempotencyKey, out var previous))
         {
@@ -264,10 +298,21 @@ public sealed class PaperExchange : IPaperExchange
 
     public IReadOnlyList<PaperFill> Apply(PaperMarketTick tick)
     {
+        lock (sync)
+        {
+            return ApplyCore(tick);
+        }
+    }
+
+    private List<PaperFill> ApplyCore(PaperMarketTick tick)
+    {
         ArgumentNullException.ThrowIfNull(tick);
         var created = new List<PaperFill>();
+        var remainingLiquidity = tick.AvailableQuantity?.Value;
 
-        foreach (var state in orders.Values.Where(candidate => candidate.Order.Symbol == tick.Symbol).ToArray())
+        // Stable client-ID priority is a simulation policy, not an exchange queue model.
+        foreach (var state in orders.Values.Where(candidate => candidate.Order.Symbol == tick.Symbol && !IsTerminal(candidate.Order.Status))
+                     .OrderBy(candidate => candidate.Order.ClientOrderId.Value, StringComparer.Ordinal).ToArray())
         {
             if (IsTerminal(state.Order.Status) || state.Remaining.Value <= 0m || !CanFill(state.Order, tick))
             {
@@ -298,8 +343,13 @@ public sealed class PaperExchange : IPaperExchange
                 continue;
             }
 
-            var quantity = tick.AvailableQuantity is { } available
-                ? new Quantity(Math.Min(state.Remaining.Value, available.Value))
+            if (remainingLiquidity is <= 0m)
+            {
+                continue;
+            }
+
+            var quantity = remainingLiquidity is { } available
+                ? new Quantity(Math.Min(state.Remaining.Value, available))
                 : state.Remaining;
             var referencePrice = state.Order.Side == OrderSide.Buy ? tick.Ask : tick.Bid;
             var executionPrice = state.Order.Side == OrderSide.Buy
@@ -331,6 +381,10 @@ public sealed class PaperExchange : IPaperExchange
                 state.Order.Side, quantity, price, fee, slippage, tick.OccurredAtUtc);
             fills.Add(fill);
             created.Add(fill);
+            if (remainingLiquidity is { } remaining)
+            {
+                remainingLiquidity = remaining - quantity.Value;
+            }
         }
 
         if (fills.Count > options.MaxStoredFills)
@@ -353,10 +407,15 @@ public sealed class PaperExchange : IPaperExchange
         return replayed;
     }
 
-    public PaperOrderSnapshot GetOrder(ClientOrderId clientOrderId) =>
-        orders.TryGetValue(clientOrderId, out var state)
-            ? ToSnapshot(state)
-            : throw new KeyNotFoundException($"Paper order '{clientOrderId}' was not found.");
+    public PaperOrderSnapshot GetOrder(ClientOrderId clientOrderId)
+    {
+        lock (sync)
+        {
+            return orders.TryGetValue(clientOrderId, out var state)
+                ? ToSnapshot(state)
+                : throw new KeyNotFoundException($"Paper order '{clientOrderId}' was not found.");
+        }
+    }
 
     private static bool CanFill(Order order, PaperMarketTick tick) => order.Type switch
     {

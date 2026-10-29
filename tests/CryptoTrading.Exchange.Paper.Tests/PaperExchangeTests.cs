@@ -103,6 +103,65 @@ public sealed class PaperExchangeTests
     }
 
     [Fact]
+    public void AvailableTickQuantityIsSharedAcrossEligibleOrders()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(now));
+        exchange.Submit(BuyMarket("first", 1m), new IdempotencyKey("first"));
+        exchange.Submit(BuyMarket("second", 1m), new IdempotencyKey("second"));
+
+        var fills = exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, now, 1.5m));
+
+        Assert.Equal(1.5m, fills.Sum(fill => fill.Quantity.Value));
+        Assert.Equal(2, fills.Count);
+        Assert.Equal(1m, fills[0].Quantity.Value);
+        Assert.Equal(0.5m, fills[1].Quantity.Value);
+    }
+
+    [Fact]
+    public void FillHistoryIsAnImmutableSnapshot()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(now));
+        exchange.Submit(BuyMarket("snapshot", 1m), new IdempotencyKey("snapshot"));
+        var before = exchange.Fills;
+
+        exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, now));
+
+        Assert.Empty(before);
+        Assert.Single(exchange.Fills);
+    }
+
+    [Fact]
+    public void ExhaustedLiquidityDoesNotHideOrderRejection()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(new PaperExchangeOptions { MaxOrderQuantity = 1m }, new ManualTimeProvider(now));
+        exchange.Submit(BuyMarket("a", 1m), new IdempotencyKey("a"));
+        var oversized = BuyMarket("b", 2m);
+        exchange.Submit(oversized, new IdempotencyKey("b"));
+
+        exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, now, 1m));
+
+        Assert.Equal(OrderStatus.Rejected, exchange.GetOrder(oversized.ClientOrderId).Status);
+    }
+
+    [Fact]
+    public void ConcurrentIdenticalSubmissionsCreateOneOrder()
+    {
+        var exchange = new PaperExchange();
+        var request = BuyMarket("concurrent", 1m);
+        var results = new PaperSubmitResult[32];
+
+        Parallel.For(0, results.Length, index =>
+            results[index] = exchange.Submit(request, new IdempotencyKey("concurrent")));
+
+        Assert.Single(exchange.OpenOrders);
+        Assert.Single(results, result => !result.AlreadyProcessed);
+        Assert.All(results, result => Assert.Equal(results[0].Order.ClientOrderId, result.Order.ClientOrderId));
+    }
+
+    [Fact]
     public void SubmissionLatencyDelaysExecutionUntilTheOrderIsEligible()
     {
         var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);

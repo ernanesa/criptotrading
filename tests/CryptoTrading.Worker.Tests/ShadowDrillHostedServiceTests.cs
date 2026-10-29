@@ -2,6 +2,9 @@ using CryptoTrading.Exchange.Paper;
 using CryptoTrading.Backtesting;
 using CryptoTrading.Observability;
 using CryptoTrading.Shadow;
+using CryptoTrading.Domain.Orders;
+using CryptoTrading.Domain.Primitives;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -11,6 +14,31 @@ namespace CryptoTrading.Worker.Tests;
 public sealed class ShadowDrillHostedServiceTests
 {
     [Fact]
+    public async Task DrillDoesNotTouchOperationalPaperExchange()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-shadow-isolation-{Guid.NewGuid():N}");
+        using var writer = new ShadowReportWriter(directory);
+        using var dispatcher = new TradingAlertDispatcher(new InMemoryTradingAlertSink());
+        var paper = new PaperExchange();
+        var request = new PaperOrderRequest(new ClientOrderId("operational"), new Symbol("BTCUSDT"), OrderSide.Buy, OrderType.Market, new Quantity(1m));
+        paper.Submit(request, new IdempotencyKey("operational"));
+        using var provider = new ServiceCollection()
+            .AddSingleton<IPaperExchange>(paper)
+            .AddSingleton(Options.Create(new WorkerRuntimeOptions { ShadowEnabled = true, NoTrade = true }))
+            .AddSingleton(writer)
+            .AddSingleton(dispatcher)
+            .AddSingleton<Microsoft.Extensions.Logging.ILogger<ShadowDrillHostedService>>(NullLogger<ShadowDrillHostedService>.Instance)
+            .BuildServiceProvider();
+        var service = ActivatorUtilities.CreateInstance<ShadowDrillHostedService>(provider);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(OrderStatus.Submitted, paper.GetOrder(request.ClientOrderId).Status);
+        Assert.Empty(paper.Fills);
+        Assert.Single(Directory.GetFiles(directory, "*.jsonl"));
+    }
+
+    [Fact]
     public async Task EnabledDrillWritesRedactedReportAndDoesNotRaiseCleanRunAlert()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"cryptotrading-worker-shadow-{Guid.NewGuid():N}");
@@ -19,7 +47,6 @@ public sealed class ShadowDrillHostedServiceTests
         using var dispatcher = new TradingAlertDispatcher(sink);
         var service = new ShadowDrillHostedService(
             Options.Create(new WorkerRuntimeOptions { ShadowEnabled = true, NoTrade = true, ShadowReportDirectory = directory }),
-            new PaperExchange(),
             writer,
             dispatcher,
             NullLogger<ShadowDrillHostedService>.Instance);
@@ -40,7 +67,6 @@ public sealed class ShadowDrillHostedServiceTests
         using var dispatcher = new TradingAlertDispatcher(sink);
         var service = new ShadowDrillHostedService(
             Options.Create(new WorkerRuntimeOptions { ShadowEnabled = false, ShadowReportDirectory = directory }),
-            new PaperExchange(),
             writer,
             dispatcher,
             NullLogger<ShadowDrillHostedService>.Instance);

@@ -57,7 +57,7 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
             return false;
         }
 
-        if (!string.Equals(authorization.AuthorizedBy, "account-reconciliation", StringComparison.Ordinal) ||
+        if (!string.Equals(authorization.Actor, "account-reconciliation", StringComparison.Ordinal) ||
             !string.Equals(resetCommand.Actor, "account-reconciliation", StringComparison.Ordinal))
         {
             return false;
