@@ -125,14 +125,17 @@ public static class BinanceRateLimitHeaders
         DateTimeOffset? retryAfter = null;
         if (headers.TryGetValues("Retry-After", out var retryValues))
         {
-            var rawRetryAfter = retryValues.FirstOrDefault();
-            if (int.TryParse(rawRetryAfter, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds))
+            var values = retryValues.ToArray();
+            if (values.Length == 1 && RetryConditionHeaderValue.TryParse(values[0], out var parsed))
             {
-                retryAfter = now.AddSeconds(Math.Max(0, seconds));
-            }
-            else if (DateTimeOffset.TryParse(rawRetryAfter, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var retryDate))
-            {
-                retryAfter = retryDate.ToUniversalTime();
+                try
+                {
+                    retryAfter = parsed.Delta is { } delta ? now.Add(delta) : parsed.Date?.ToUniversalTime();
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // An unrepresentable deadline is unusable; never shorten it.
+                }
             }
         }
 
@@ -182,6 +185,7 @@ public sealed class BinanceRequestRetryPolicy
 public sealed class BinanceRateLimitGate
 {
     private long blockedUntilUtcTicks;
+    private int unknownDeadline;
 
     public TimeSpan Remaining(DateTimeOffset now)
     {
@@ -204,8 +208,9 @@ public sealed class BinanceRateLimitGate
             return;
         }
 
-        if (BinanceRateLimitHeaders.Parse(response.Headers, now).RetryAfterUtc is not { } retryAfter)
+        if (BinanceRateLimitHeaders.Parse(response.Headers, now).RetryAfterUtc is not { } retryAfter || retryAfter < now)
         {
+            Interlocked.Exchange(ref unknownDeadline, 1);
             return;
         }
 
@@ -227,6 +232,10 @@ public sealed class BinanceRateLimitGate
         ArgumentNullException.ThrowIfNull(timeProvider);
         while (true)
         {
+            if (Volatile.Read(ref unknownDeadline) != 0)
+            {
+                throw new InvalidOperationException("Rate-limit deadline is unknown; further requests are blocked for this client.");
+            }
             var remaining = Remaining(timeProvider.GetUtcNow());
             if (remaining <= TimeSpan.Zero)
             {

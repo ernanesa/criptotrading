@@ -11,6 +11,12 @@ public sealed class BinanceSpotAccountClientTests
     private static readonly DateTimeOffset FixedNow = new(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
+    public void AccountFilterEvidenceIsNotCachedByDefault()
+    {
+        Assert.Equal(TimeSpan.Zero, new BinanceAuthenticatedClientOptions().AccountFiltersCacheDuration);
+    }
+
+    [Fact]
     public async Task AccountRequestSynchronizesClockAndSignsOnlyTheCanonicalQuery()
     {
         using var handler = new RecordingHandler(
@@ -178,6 +184,59 @@ public sealed class BinanceSpotAccountClientTests
         Assert.Equal(1, state.SymbolOpenOrderCount);
         // free 1.5 + locked 0.5 + open BUY remainder 0.3
         Assert.Equal(2.3m, state.BasePositionQuantity);
+    }
+
+    [Fact]
+    public async Task TradingStateDoesNotSilentlyIgnoreNonCanonicalIdentifiers()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\" btc \",\"free\":\"1.5\",\"locked\":\"0.5\"}]}"),
+            ("v3/openOrders", "[{\"symbol\":\" btcusdt \",\"orderId\":1,\"clientOrderId\":\"c1\",\"price\":\"100\",\"origQty\":\"0.4\",\"executedQty\":\"0.1\",\"cummulativeQuoteQty\":\"10\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\" buy \"}]")
+        );
+        var client = CreateClient(handler);
+
+        var state = await client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, state.SymbolOpenOrderCount);
+        Assert.Equal(2.3m, state.BasePositionQuantity);
+    }
+
+    [Fact]
+    public async Task TradingStateRejectsUnknownOrderSide()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"BTC\",\"free\":\"1\",\"locked\":\"0\"}]}"),
+            ("v3/openOrders", "[{\"symbol\":\"BTCUSDT\",\"orderId\":1,\"clientOrderId\":\"c1\",\"price\":\"100\",\"origQty\":\"0.4\",\"executedQty\":\"0.1\",\"cummulativeQuoteQty\":\"10\",\"status\":\"NEW\",\"time\":1,\"updateTime\":1,\"isWorking\":true,\"type\":\"LIMIT\",\"side\":\"UNKNOWN\"}]")
+        );
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("1,000")]
+    [InlineData("0.00000000000000000000000000001")]
+    public async Task TradingStateRejectsMalformedOrInexactBalanceInsteadOfUsingZero(string free)
+    {
+        var payload = "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"BTC\",\"free\":\"" + free + "\",\"locked\":\"0\"}]}";
+        using var handler = new RecordingHandler(("time", "{\"serverTime\":1789819200000}"), ("v3/account", payload), ("v3/openOrders", "[]"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task TradingStateRejectsMissingBaseBalance()
+    {
+        using var handler = new RecordingHandler(
+            ("time", "{\"serverTime\":1789819200000}"),
+            ("v3/account", "{\"makerCommission\":15,\"takerCommission\":15,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[{\"asset\":\"USDT\",\"free\":\"100\",\"locked\":\"0\"}]}"),
+            ("v3/openOrders", "[]"));
+        var client = CreateClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() => client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken));
     }
 
     [Fact]

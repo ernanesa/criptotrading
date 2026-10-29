@@ -40,12 +40,10 @@ public sealed class BinanceAuthenticatedClientOptions
     public TimeSpan CommissionCacheDuration { get; set; } = TimeSpan.Zero;
 
     /// <summary>
-    /// Optional TTL for reusing GET /api/v3/myFilters per symbol. Account filter
-    /// configuration changes rarely, and a stale decision is still rejected by
-    /// the venue, so a bounded cache saves 40 weight units per submission.
-    /// Defaults to five minutes; zero always fetches fresh.
+    /// Optional TTL for reusing GET /api/v3/myFilters per symbol. Defaults to
+    /// zero: stale account-filter evidence must not be assumed valid for an order.
     /// </summary>
-    public TimeSpan AccountFiltersCacheDuration { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan AccountFiltersCacheDuration { get; set; } = TimeSpan.Zero;
 
     /// <summary>
     /// Allows a Spot Testnet account payload to report <c>canWithdraw=true</c>.

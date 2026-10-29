@@ -167,7 +167,7 @@ public sealed class TestnetOutboxMessageExecutor(
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             TestnetExecutorLog.Rejected(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, rejected.StatusCode);
         }
-        catch (BinancePreTradeValidationException)
+        catch (BinancePreTradeValidationException rejected)
         {
             await projection.TransitionAndProjectAsync(
                 order,
@@ -175,7 +175,12 @@ public sealed class TestnetOutboxMessageExecutor(
                 new IdempotencyKey($"rejected:{message.MessageId:N}"),
                 command.CreatedAtUtc,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
-            TestnetExecutorLog.Rejected(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, System.Net.HttpStatusCode.BadRequest);
+            var reason = rejected.Violations.Any(static violation => violation.Code == "PRETRADE_EVIDENCE_UNVERIFIED")
+                ? "PRETRADE_EVIDENCE_UNVERIFIED"
+                : rejected.Violations.Any(static violation => violation.Code == "ACCOUNT_STATE_UNAVAILABLE")
+                    ? "ACCOUNT_STATE_UNAVAILABLE"
+                    : "PRETRADE_VALIDATION_FAILED";
+            TestnetExecutorLog.LocalPreTradeBlocked(logger, message.MessageId, command.Symbol.Value, command.ClientOrderId.Value, reason);
         }
         catch (BinanceOrderSubmissionAmbiguousException ambiguous)
         {
@@ -399,4 +404,7 @@ internal static partial class TestnetExecutorLog
 
     [LoggerMessage(LogLevel.Warning, "Testnet order command rejected by Binance. MessageId={MessageId} Symbol={Symbol} ClientOrderId={ClientOrderId} StatusCode={StatusCode}")]
     public static partial void Rejected(ILogger logger, Guid messageId, string symbol, string clientOrderId, System.Net.HttpStatusCode? statusCode);
+
+    [LoggerMessage(LogLevel.Warning, "Order blocked locally before submission. MessageId={MessageId} Symbol={Symbol} ClientOrderId={ClientOrderId} Reason={Reason}")]
+    public static partial void LocalPreTradeBlocked(ILogger logger, Guid messageId, string symbol, string clientOrderId, string reason);
 }

@@ -48,7 +48,11 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
             throw new BinancePreTradeValidationException(request.Symbol, accountViolations);
         }
 
-        return await inner.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
+        // The current account, symbol and reference-price evidence is not yet
+        // sufficient to authorize a submission safely. Do not bypass this gate
+        // until the missing contracts and their recovery tests are verified.
+        throw new BinancePreTradeValidationException(request.Symbol,
+            [new("PRETRADE_EVIDENCE_UNVERIFIED", "Account and exchange filter evidence is not sufficiently verified.")]);
     }
 
     /// <summary>
@@ -134,6 +138,10 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
         var accountFilters = await accountFiltersProvider
             .GetAccountFiltersAsync(request.Symbol, cancellationToken).ConfigureAwait(false);
         var state = await ReadTradingStateAsync(rules, request, cancellationToken).ConfigureAwait(false);
+        if (state.CanTrade is null)
+        {
+            return [new("ACCOUNT_STATE_UNAVAILABLE", "Account trading state could not be verified.")];
+        }
         if (state.CanTrade is false)
         {
             // The venue reports the account as unable to trade; stop before the

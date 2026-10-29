@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -134,9 +135,9 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
     /// unavailable count must be treated as unknown, never as zero.
     /// </summary>
     /// <summary>
-    /// Single snapshot for order-count and MAX_POSITION checks. Binance defines
-    /// an account's base position as free + locked balance plus the open BUY
-    /// order quantity, so both reads must describe the same instant.
+    /// Collects inputs for order-count and MAX_POSITION checks. The account and
+    /// open-orders endpoints are read independently and are not an atomic
+    /// snapshot. Their result is diagnostic and cannot authorize a submission.
     /// </summary>
     public async Task<BinanceAccountTradingState> GetTradingStateAsync(
         string symbol,
@@ -145,6 +146,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(baseAsset);
         var normalizedSymbol = NormalizeSymbol(symbol);
+        var normalizedBaseAsset = BinanceAssetNormalizer.Normalize(baseAsset, nameof(baseAsset));
 
         var accountTask = GetAccountAsync(cancellationToken);
         var ordersTask = GetOpenOrdersAsync(null, cancellationToken);
@@ -152,22 +154,51 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
 
         var account = await accountTask.ConfigureAwait(false);
         var orders = await ordersTask.ConfigureAwait(false);
-        var balance = account.Balances
-            .Where(item => string.Equals(item.Asset, baseAsset, StringComparison.Ordinal))
-            .SingleOrDefault();
-
-        var position = (balance is null ? 0m : ParseExact(balance.Free) + ParseExact(balance.Locked)) +
-            orders.Where(order => string.Equals(order.Symbol, normalizedSymbol, StringComparison.Ordinal) &&
-                                  string.Equals(order.Side, "BUY", StringComparison.Ordinal))
-                  .Sum(order => Math.Max(0m, ParseExact(order.OriginalQuantity) - ParseExact(order.ExecutedQuantity)));
-
-        var symbolOrderCount = orders.Count(order => string.Equals(order.Symbol, normalizedSymbol, StringComparison.Ordinal));
+        var balance = account.Balances.SingleOrDefault(item =>
+            string.Equals(BinanceAssetNormalizer.Normalize(item.Asset, "asset"), normalizedBaseAsset, StringComparison.Ordinal))
+            ?? throw new JsonException("Base asset balance is unavailable.");
+        var position = ParseExact(balance.Free) + ParseExact(balance.Locked);
+        var symbolOrderCount = 0;
+        foreach (var order in orders)
+        {
+            var original = ParseExact(order.OriginalQuantity);
+            var executed = ParseExact(order.ExecutedQuantity);
+            if (executed > original) throw new JsonException("Executed quantity exceeds original quantity.");
+            var orderSymbol = BinanceAuthenticatedResponseValidator.NormalizeSymbol(order.Symbol, "symbol");
+            if (!string.Equals(orderSymbol, normalizedSymbol, StringComparison.Ordinal)) continue;
+            symbolOrderCount++;
+            if (string.Equals(order.Side.Trim(), "BUY", StringComparison.OrdinalIgnoreCase)) position += original - executed;
+        }
         return new BinanceAccountTradingState(
             orders.Count, symbolOrderCount, position, timeProvider.GetUtcNow(), account.CanTrade);
     }
 
-    private static decimal ParseExact(string? raw) =>
-        decimal.TryParse(raw, NumberStyles.Number, CultureInfo.InvariantCulture, out var value) ? value : 0m;
+    private static decimal ParseExact(string? raw)
+    {
+        var text = raw?.Trim();
+        if (string.IsNullOrEmpty(text) ||
+            !decimal.TryParse(text, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value) || value < 0m)
+        {
+            throw new JsonException("Account quantity is not a non-negative invariant decimal.");
+        }
+
+        var parts = text.Split('.');
+        if (parts.Length > 2 || parts.Any(static part => part.Any(static character => !char.IsAsciiDigit(character))))
+        {
+            throw new JsonException("Account quantity has an invalid decimal representation.");
+        }
+
+        var integerPart = parts[0].TrimStart('0');
+        if (integerPart.Length == 0) integerPart = "0";
+        var fractionalPart = parts.Length == 2 ? parts[1].TrimEnd('0') : string.Empty;
+        var normalized = fractionalPart.Length == 0 ? integerPart : integerPart + "." + fractionalPart;
+        if (!string.Equals(normalized, value.ToString("0.############################", CultureInfo.InvariantCulture), StringComparison.Ordinal))
+        {
+            throw new JsonException("Account quantity cannot be represented exactly as decimal.");
+        }
+
+        return value;
+    }
 
     public async Task<IReadOnlyList<BinanceTrade>> GetMyTradesAsync(
         string symbol,
@@ -248,9 +279,14 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
 
     public async Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default)
     {
+        await rateLimitGate.WaitAsync(timeProvider, cancellationToken).ConfigureAwait(false);
         var sentAt = timeProvider.GetUtcNow();
         using var response = await httpClient.GetAsync(new Uri("v3/time", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         var receivedAt = timeProvider.GetUtcNow();
+        if (!response.IsSuccessStatusCode)
+        {
+            rateLimitGate.ObserveResponse(response, receivedAt);
+        }
         await EnsureSuccessAsync(response, "v3/time").ConfigureAwait(false);
         var serverTime = await response.Content.ReadFromJsonAsync<BinanceServerTime>(JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? throw new JsonException("Binance returned an empty server-time response.");
@@ -287,13 +323,19 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
             {
                 var observedAt = timeProvider.GetUtcNow();
                 rateLimitGate.ObserveResponse(response, observedAt);
+                var retryAfter = BinanceRateLimitHeaders.Parse(response.Headers, observedAt).RetryAfterUtc;
+                if ((response.StatusCode is HttpStatusCode.TooManyRequests or (HttpStatusCode)418) &&
+                    (retryAfter is null || retryAfter < observedAt))
+                {
+                    throw new BinanceApiException(response.StatusCode, endpoint);
+                }
                 if (!retryPolicy.ShouldRetry(response.StatusCode, attempt))
                 {
                     throw new BinanceApiException(response.StatusCode, endpoint);
                 }
 
                 var delay = retryPolicy.GetDelay(response, attempt, observedAt);
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(delay, timeProvider, cancellationToken).ConfigureAwait(false);
                 continue;
             }
 

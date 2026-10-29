@@ -11,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using CryptoTrading.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -196,6 +197,21 @@ public sealed class WorkerRuntimeTests
         Assert.Equal(1, exchange.SubmitCalls);
         Assert.Equal(0, exchange.QueryCalls);
         Assert.Empty(store.Records);
+    }
+
+    [Fact]
+    public async Task LocalPreTradeBlockIsNotReportedAsBinanceHttpRejection()
+    {
+        var command = NewCommand();
+        var exchange = new PreTradeRejectedClient("PRETRADE_EVIDENCE_UNVERIFIED");
+        var logger = new RecordingTestnetLogger();
+        var executor = CreateTestnetExecutor(exchange, new TestnetAccountClient(), new RecordingOpenOrderStore(), logger);
+
+        await executor.ExecuteAsync(MessageFor(command), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains(logger.Messages, message => message.Contains("PRETRADE_EVIDENCE_UNVERIFIED", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Messages, message => message.Contains("rejected by Binance", StringComparison.Ordinal));
+        Assert.Equal(0, exchange.QueryCalls);
     }
 
     [Fact]
@@ -867,7 +883,8 @@ public sealed class WorkerRuntimeTests
     private static TestnetOutboxMessageExecutor CreateTestnetExecutor(
         IBinanceSpotOrderClient exchange,
         IBinanceSpotAccountClient account,
-        ILocalOpenOrderStore store) => new(
+        ILocalOpenOrderStore store,
+        ILogger<TestnetOutboxMessageExecutor>? logger = null) => new(
             exchange,
             account,
             Options.Create(new WorkerRuntimeOptions
@@ -885,7 +902,7 @@ public sealed class WorkerRuntimeTests
             }),
             Options.Create(new TradingOptions { Binance = new BinanceOptions { AllowedSymbols = "BTCUSDT" } }),
             new OrderProjectionService(store),
-            NullLogger<TestnetOutboxMessageExecutor>.Instance,
+            logger ?? NullLogger<TestnetOutboxMessageExecutor>.Instance,
             submissionGuard: new TestSubmissionGuard(), submissionStore: new TestSubmissionStore());
 
     private static TestnetCancelOutboxMessageExecutor CreateTestnetCancelExecutor(
@@ -1127,7 +1144,16 @@ public sealed class WorkerRuntimeTests
         public Task<BinanceClockSnapshot> SynchronizeClockAsync(CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
-    private sealed class PreTradeRejectedClient : IBinanceSpotOrderClient
+    private sealed class RecordingTestnetLogger : ILogger<TestnetOutboxMessageExecutor>
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Messages.Enqueue(formatter(state, exception));
+    }
+
+    private sealed class PreTradeRejectedClient(string reason = "QUANTITY_STEP_MISMATCH") : IBinanceSpotOrderClient
     {
         public int SubmitCalls { get; private set; }
 
@@ -1138,7 +1164,7 @@ public sealed class WorkerRuntimeTests
             SubmitCalls++;
             throw new BinancePreTradeValidationException(
                 request.Symbol,
-                [new("QUANTITY_STEP_MISMATCH", "Quantity does not align with step size.")]);
+                [new(reason, "Synthetic local rejection.")]);
         }
 
         public Task<BinanceSpotOrderResult> QueryByClientOrderIdAsync(string symbol, string clientOrderId, CancellationToken cancellationToken = default)

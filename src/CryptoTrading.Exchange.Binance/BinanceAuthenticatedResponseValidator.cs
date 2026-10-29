@@ -145,7 +145,11 @@ internal static class BinanceAuthenticatedResponseValidator
 
         RequireText(order.Status, "status");
         RequireText(order.Type, "type");
-        RequireText(order.Side, "side");
+        var side = RequireText(order.Side, "side").ToUpperInvariant();
+        if (side is not ("BUY" or "SELL"))
+        {
+            throw Invalid("side must be BUY or SELL");
+        }
         RequireNonNegative(order.Time, "time");
         RequireNonNegative(order.UpdateTime, "updateTime");
         if (order.TimeInForce is not null)

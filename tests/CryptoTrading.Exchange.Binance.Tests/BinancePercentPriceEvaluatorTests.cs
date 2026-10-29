@@ -66,7 +66,7 @@ public sealed class BinancePercentPriceEvaluatorTests
     }
 
     [Fact]
-    public async Task BoundaryUsesReferencePriceToAdmitOrderInsideBand()
+    public async Task PriceInsideBandDoesNotBypassUnverifiedEvidence()
     {
         var inner = new CountingOrderClient();
         var client = new BinancePreTradeValidatedOrderClient(
@@ -76,9 +76,11 @@ public sealed class BinancePercentPriceEvaluatorTests
             new StubTradingState(),
             new StubReferencePrice(100m));
 
-        await client.SubmitAsync(Order(price: 105m), TestContext.Current.CancellationToken);
+        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() =>
+            client.SubmitAsync(Order(price: 105m), TestContext.Current.CancellationToken));
 
-        Assert.Equal(1, inner.Submits);
+        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
+        Assert.Equal(0, inner.Submits);
     }
 
     [Fact]

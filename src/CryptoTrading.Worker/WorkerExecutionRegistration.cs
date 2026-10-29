@@ -72,8 +72,9 @@ internal static class WorkerExecutionRegistration
             new BinanceSymbolTradingRulesCache(
                 serviceProvider.GetRequiredService<IBinanceSpotMarketClient>(),
                 TimeSpan.FromMinutes(5)));
-        _ = services.AddSingleton<BinanceSpotOrderClient>(serviceProvider =>
+        _ = services.AddSingleton<IBinanceSpotOrderClient>(serviceProvider =>
         {
+            var account = serviceProvider.GetRequiredService<IBinanceSpotAccountClient>();
             var trading = serviceProvider.GetRequiredService<IOptions<TradingOptions>>().Value;
             var orderOptions = new BinanceSpotOrderClientOptions
             {
@@ -84,16 +85,12 @@ internal static class WorkerExecutionRegistration
                 EnableOrderExecution = true,
                 ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
             };
-            return new BinanceSpotOrderClient(
+            var inner = new BinanceSpotOrderClient(
                 serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("BinanceSpotOrder"),
                 orderOptions,
                 clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>());
-        });
-        _ = services.AddSingleton<IBinanceSpotOrderClient>(serviceProvider =>
-        {
-            var account = serviceProvider.GetRequiredService<IBinanceSpotAccountClient>();
             return new BinancePreTradeValidatedOrderClient(
-                serviceProvider.GetRequiredService<BinanceSpotOrderClient>(),
+                inner,
                 serviceProvider.GetRequiredService<IBinanceSymbolTradingRulesProvider>(),
                 account as IBinanceAccountFiltersProvider,
                 account as IBinanceAccountTradingStateProvider,

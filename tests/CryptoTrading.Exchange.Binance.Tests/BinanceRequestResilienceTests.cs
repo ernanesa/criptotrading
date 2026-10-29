@@ -48,19 +48,65 @@ public sealed class BinanceRequestResilienceTests
         Assert.Equal(TimeSpan.FromSeconds(120), gate.Remaining(now));
     }
 
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("2026-01-01")]
+    [InlineData("not-a-date")]
+    [InlineData("1, 3")]
+    public void RetryAfterRejectsNonHttpOrNegativeValues(string raw)
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.TryAddWithoutValidation("Retry-After", raw);
+        var now = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Null(BinanceRateLimitHeaders.Parse(response.Headers, now).RetryAfterUtc);
+    }
+
+    [Fact]
+    public void RetryAfterRejectsMultipleDeadlines()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        response.Headers.TryAddWithoutValidation("Retry-After", ["5", "30"]);
+        var now = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+
+        Assert.Null(BinanceRateLimitHeaders.Parse(response.Headers, now).RetryAfterUtc);
+    }
+
+    [Fact]
+    public void RetryAfterAcceptsValidHttpDateWithoutShorteningIt()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        var now = new DateTimeOffset(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
+        response.Headers.TryAddWithoutValidation("Retry-After", now.AddSeconds(30).ToString("R", System.Globalization.CultureInfo.InvariantCulture));
+
+        Assert.Equal(now.AddSeconds(30), BinanceRateLimitHeaders.Parse(response.Headers, now).RetryAfterUtc);
+    }
+
     [Fact]
     public async Task RateLimitGateIgnoresSuccessAndResponsesWithoutDeadline()
     {
         var gate = new BinanceRateLimitGate();
         var now = new DateTimeOffset(2026, 10, 28, 12, 0, 0, TimeSpan.Zero);
         using var success = new HttpResponseMessage(HttpStatusCode.OK);
-        using var withoutHeader = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
+        using var withoutHeader = new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
 
         gate.ObserveResponse(success, now);
         gate.ObserveResponse(withoutHeader, now);
 
         Assert.Equal(TimeSpan.Zero, gate.Remaining(now));
         await gate.WaitAsync(TimeProvider.System, TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData((HttpStatusCode)418)]
+    public async Task RateLimitGateRejectsFurtherRequestsWhenDeadlineIsUnknown(HttpStatusCode status)
+    {
+        var gate = new BinanceRateLimitGate();
+        using var response = new HttpResponseMessage(status);
+        gate.ObserveResponse(response, DateTimeOffset.UtcNow);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => gate.WaitAsync(TimeProvider.System, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -211,6 +257,145 @@ public sealed class BinanceRequestResilienceTests
         Assert.Equal([HttpMethod.Post], requests);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, null)]
+    [InlineData(HttpStatusCode.TooManyRequests, "not-a-date")]
+    [InlineData(HttpStatusCode.TooManyRequests, "-1")]
+    [InlineData(HttpStatusCode.TooManyRequests, "Sat, 19 Sep 2026 11:59:59 GMT")]
+    [InlineData((HttpStatusCode)418, null)]
+    [InlineData((HttpStatusCode)418, "not-a-date")]
+    [InlineData((HttpStatusCode)418, "-1")]
+    [InlineData((HttpStatusCode)418, "Sat, 19 Sep 2026 11:59:59 GMT")]
+    public async Task SignedReadDoesNotRetryRateLimitWithoutUsableDeadline(HttpStatusCode status, string? retryAfter)
+    {
+        var now = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FixedTimeProvider(now);
+        var clock = new BinanceClockDriftEstimator(timeProvider);
+        clock.Observe(now.ToUnixTimeMilliseconds(), now.AddMilliseconds(-20), now);
+        var requests = 0;
+        using var handler = new DelegatingCallbackHandler(request =>
+        {
+            requests++;
+            var response = new HttpResponseMessage(status) { RequestMessage = request, Content = new StringContent("{}") };
+            if (retryAfter is not null) response.Headers.TryAddWithoutValidation("Retry-After", retryAfter);
+            return response;
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var client = new BinanceSpotAccountClient(httpClient, new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret",
+            ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
+        }, clock, timeProvider, new BinanceRequestRetryPolicy(new BinanceRequestResilienceOptions
+        {
+            MaxRetries = 2,
+            InitialRetryDelay = TimeSpan.FromMilliseconds(1),
+            MaxRetryDelay = TimeSpan.FromMilliseconds(2)
+        }));
+
+        await Assert.ThrowsAsync<BinanceApiException>(() => client.GetAccountAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, requests);
+    }
+
+    [Fact]
+    public async Task SignedReadBackoffUsesInjectedTimeProvider()
+    {
+        var now = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        using var timeProvider = new ManualRetryTimeProvider(now);
+        var clock = new BinanceClockDriftEstimator(timeProvider);
+        clock.Observe(now.ToUnixTimeMilliseconds(), now.AddMilliseconds(-20), now);
+        var requests = 0;
+        using var handler = new DelegatingCallbackHandler(request =>
+        {
+            var attempt = Interlocked.Increment(ref requests);
+            return new HttpResponseMessage(attempt == 1 ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent(attempt == 1 ? "{}" : "{\"makerCommission\":0,\"takerCommission\":0,\"buyerCommission\":0,\"sellerCommission\":0,\"canTrade\":true,\"canWithdraw\":false,\"canDeposit\":true,\"updateTime\":1,\"accountType\":\"SPOT\",\"balances\":[]}")
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var client = new BinanceSpotAccountClient(httpClient, new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret",
+            ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
+        }, clock, timeProvider, new BinanceRequestRetryPolicy(new BinanceRequestResilienceOptions
+        {
+            MaxRetries = 1,
+            InitialRetryDelay = TimeSpan.FromSeconds(10),
+            MaxRetryDelay = TimeSpan.FromSeconds(10)
+        }));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var pending = client.GetAccountAsync(cancellation.Token);
+        try
+        {
+            await timeProvider.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.Equal(1, Volatile.Read(ref requests));
+            timeProvider.Fire();
+            var account = await pending.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.True(account.CanTrade);
+            Assert.Equal(2, requests);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+        }
+    }
+
+    [Fact]
+    public async Task UnknownRateLimitStopsLaterSignedAndClockRequestsForTheSameClient()
+    {
+        var now = new DateTimeOffset(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
+        var timeProvider = new FixedTimeProvider(now);
+        var clock = new BinanceClockDriftEstimator(timeProvider);
+        clock.Observe(now.ToUnixTimeMilliseconds(), now.AddMilliseconds(-20), now);
+        var requests = 0;
+        using var handler = new DelegatingCallbackHandler(request =>
+        {
+            requests++;
+            return new HttpResponseMessage(HttpStatusCode.TooManyRequests) { RequestMessage = request, Content = new StringContent("{}") };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var client = new BinanceSpotAccountClient(httpClient, new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret",
+            ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
+        }, clock, timeProvider);
+
+        await Assert.ThrowsAsync<BinanceApiException>(() => client.GetAccountAsync(TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAccountAsync(TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SynchronizeClockAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, requests);
+    }
+
+    [Fact]
+    public async Task UnknownRateLimitFromClockEndpointBlocksLaterClockRequests()
+    {
+        var requests = 0;
+        using var handler = new DelegatingCallbackHandler(request =>
+        {
+            requests++;
+            return new HttpResponseMessage(HttpStatusCode.TooManyRequests) { RequestMessage = request, Content = new StringContent("{}") };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
+        var client = new BinanceSpotAccountClient(httpClient, new BinanceAuthenticatedClientOptions
+        {
+            RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
+            ApiKey = "test-api-key",
+            ApiSecret = "test-api-secret"
+        });
+
+        await Assert.ThrowsAsync<BinanceApiException>(() => client.SynchronizeClockAsync(TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SynchronizeClockAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, requests);
+    }
+
     private sealed class DelegatingCallbackHandler(Func<HttpRequestMessage, HttpResponseMessage> callback) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
@@ -220,5 +405,28 @@ public sealed class BinanceRequestResilienceTests
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;
+    }
+
+    private sealed class ManualRetryTimeProvider(DateTimeOffset now) : TimeProvider, IDisposable
+    {
+        private ManualRetryTimer? timer;
+        public TaskCompletionSource TimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override DateTimeOffset GetUtcNow() => now;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            timer = new ManualRetryTimer(callback, state);
+            TimerCreated.TrySetResult();
+            return timer;
+        }
+        public void Fire() => timer!.Fire();
+        public void Dispose() => timer?.Dispose();
+    }
+
+    private sealed class ManualRetryTimer(TimerCallback callback, object? state) : ITimer
+    {
+        public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+        public void Fire() => callback(state);
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
