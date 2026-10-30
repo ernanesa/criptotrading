@@ -6,7 +6,7 @@ Isso congela o bloco no Prompt Caching da OpenAI, reduzindo latência e custo em
 -->
 ## 📌 Contexto de Infraestrutura Estática
 - **Ambiente:** VS Code + Codex Multi-Threading (Max 6 Threads)
-- **Modelos:** Orquestração por `gpt-6-sol` (High Reasoning) | Execução por `gpt-6-luna` (Fast Worker)
+- **Modelos:** Orquestração por `gpt-6.1-sol` (High Reasoning) | Execução por `gpt-6-luna` (Fast Worker)
 - **Core Fianceiro:** `NO_TRADE` por padrão, fail-closed, withdrawals disabled.
 - **Autoridade Máxima:** Código, testes e políticas carregadas. RAG e resumos de LLM são apenas auxiliares.
 
@@ -35,7 +35,7 @@ Isso congela o bloco no Prompt Caching da OpenAI, reduzindo latência e custo em
 
 - **Paralelismo Obrigatório por Padrão**: Paralelize sempre qualquer pedido que admita decomposição concorrente (investigações, leituras amplas, auditorias, diagnósticos e testes) utilizando múltiplos agentes e subagentes disparados concorrentemente.
 - **Segregação por Modelo (GPT-6 / Gemini)**: 
-  - O Orquestrador (`gpt-6-sol` / Antigravity Pro) detém o planejamento e a integração de alterações concorrentes.
+  - O Orquestrador (`gpt-6.1-sol` / Antigravity Pro) detém o planejamento e a integração de alterações concorrentes.
   - Os subagentes paralelos operam concorrentemente em tarefas isoladas de exploração, auditoria e validação.
 - **Contratos de Delegação**: Delegue apenas unidades 100% independentes. Cada subagente disparado deve receber: objetivo, caminhos permitidos, não-objetivos, invariantes, commit-base, comandos de validação e conflitos conhecidos.
 - **Prevenção de Colisão**: Agentes paralelos estão proibidos de editar o mesmo arquivo simultaneamente. Havendo sobreposição, o agente integrador/consolidador assume como único responsável pela edição no arquivo compartilhado.
