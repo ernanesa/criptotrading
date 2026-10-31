@@ -5,7 +5,9 @@ namespace CryptoTrading.Backtesting.Autonomy;
 /// raw ensemble margin scores into monotonically calibrated posterior probabilities:
 /// P(y = 1 | s) = 1 / (1 + exp(-(Alpha * s + Beta))).
 /// </summary>
-public readonly record struct PlattParameters(decimal Alpha, decimal Beta)
+public readonly record struct PlattParameters(
+    [property: System.Text.Json.Serialization.JsonRequired] decimal Alpha,
+    [property: System.Text.Json.Serialization.JsonRequired] decimal Beta)
 {
     public static readonly PlattParameters Default = new(1.0m, 0.0m);
 

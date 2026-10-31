@@ -357,6 +357,8 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
     private sealed class FakeRiskContextStore : IAutonomyRiskContextStore
     {
+        public decimal PositionCostNotional { get; init; }
+        public decimal PositionQuantity { get; init; }
         public decimal? LastRecordedEquity { get; private set; }
         public int RecordCount { get; private set; }
         public Action? OnRecord { get; init; }
@@ -369,7 +371,7 @@ public sealed class AutonomyCycleExecutionGuardsTests
             LastRecordedEquity = currentEquityNotional;
             RecordCount++;
             OnRecord?.Invoke();
-            return Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, valuationAtUtc, currentEquityNotional, null, null, false, currentEquityNotional.HasValue));
+            return Task.FromResult(new AutonomyRiskContextSnapshot(0m, PositionCostNotional, PositionQuantity, true, valuationAtUtc, currentEquityNotional, null, null, false, currentEquityNotional.HasValue));
         }
     }
 
@@ -395,12 +397,18 @@ public sealed class AutonomyCycleExecutionGuardsTests
     private sealed class FakeDecisionCommitStore : IAutonomyDecisionCommitStore
     {
         public List<AutonomyDecisionCommit> Commits { get; } = [];
+        public bool FailNextCommit { get; set; }
 
         public Task<DateTimeOffset?> GetLastProcessedCloseAsync(string scope, CancellationToken cancellationToken = default) =>
-            Task.FromResult<DateTimeOffset?>(null);
+            Task.FromResult(Commits.LastOrDefault(commit => commit.CheckpointScope == scope)?.CloseTimeUtc);
 
         public Task CommitAsync(AutonomyDecisionCommit commit, CancellationToken cancellationToken = default)
         {
+            if (FailNextCommit)
+            {
+                FailNextCommit = false;
+                throw new IOException("Simulated durable commit failure.");
+            }
             Commits.Add(commit);
             return Task.CompletedTask;
         }
@@ -1196,6 +1204,168 @@ public sealed class AutonomyCycleExecutionGuardsTests
             throw exception;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SustainedStopWithFrequentTickersDoesNotStarveIntrabarDecisions(bool failFirstCommit)
+    {
+        var actualNow = DateTimeOffset.UtcNow;
+        var minute = new DateTimeOffset(actualNow.Year, actualNow.Month, actualNow.Day, actualNow.Hour, actualNow.Minute, 0, TimeSpan.Zero);
+        var clock = new ManualValuationTimeProvider(minute.AddSeconds(5));
+        var stream = new AcknowledgedMarketDataStream();
+        var options = CreateOptions();
+        var commits = new FakeDecisionCommitStore();
+        var control = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), clock, 0, RuntimeState.Ready);
+        using var service = new AutonomyCycleHostedService(
+            options,
+            new IntrabarMarketClient(minute) { OnBookTicker = symbol => new BinanceBookTicker(symbol, 100m, 10m, 101m, 10m, clock.GetUtcNow()) },
+            new FakeAccountClient([new BinanceBalance("BTC", "1", "0"), new BinanceBalance("USDT", "1000", "0")]),
+            new FakePolicyStore(),
+            new FakeRiskContextStore { PositionCostNotional = 100m, PositionQuantity = 1m },
+            commits, control, supervisor,
+            new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m)),
+            NullLogger<AutonomyCycleHostedService>.Instance,
+            marketDataStreamClient: stream,
+            timeProvider: clock);
+
+        await service.RunOnceAsync(options.Value, TestContext.Current.CancellationToken);
+        Assert.Single(commits.Commits);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var consumer = service.ConsumeMarketDataStreamAsync(options.Value, cancellation.Token);
+        try
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                clock.Advance(TimeSpan.FromSeconds(2));
+                await stream.DeliverAsync(new BinanceBookTickerStreamEvent(
+                    "btcusdt@bookTicker", "BTCUSDT", i + 1, clock.GetUtcNow(), 90m, 10m, 91m, 10m), cancellation.Token);
+                if (i == 0 && failFirstCommit)
+                {
+                    commits.FailNextCommit = true;
+                    await Assert.ThrowsAsync<IOException>(() => service.RunOnceAsync(options.Value, cancellation.Token));
+                    Assert.Single(commits.Commits);
+                }
+                await service.RunOnceAsync(options.Value, cancellation.Token);
+            }
+
+            var intrabarCommits = commits.Commits.Where(commit => commit.CheckpointScope.EndsWith(":intrabar", StringComparison.Ordinal)).ToArray();
+            Assert.Equal(2, intrabarCommits.Length);
+            Assert.Equal(minute.AddSeconds(7), intrabarCommits[0].CloseTimeUtc);
+            Assert.Equal(minute.AddSeconds(23), intrabarCommits[1].CloseTimeUtc);
+            Assert.All(intrabarCommits, commit => Assert.Null(commit.OutboxRecord));
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await consumer.ConfigureAwait(true);
+        }
+    }
+
+    [Fact]
+    public async Task TradeAggressionUsesQuantityDeduplicatesAndExpiresWithTheClock()
+    {
+        var clock = new ManualValuationTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        var stream = new AcknowledgedMarketDataStream();
+        using var fixture = new HostedServiceFixture(new FakeDecisionCommitStore(), null, stream, clock);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var consuming = fixture.HostedService.ConsumeMarketDataStreamAsync(CreateOptions().Value, cancellation.Token);
+        var age = TimeSpan.FromSeconds(3);
+        try
+        {
+            await stream.DeliverAsync(Trade(clock, 1, 10m, false), cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 2, 1m, true), cancellation.Token);
+            Assert.Equal(9m / 11m, fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+            await stream.DeliverAsync(Trade(clock, 2, 100m, true), cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 1, 100m, true), cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 3, 0m, true), cancellation.Token);
+            await stream.DeliverAsync(new BinanceAggTradeStreamEvent("btcusdt@aggTrade", "BTCUSDT",
+                clock.GetUtcNow().ToUnixTimeMilliseconds(), clock.GetUtcNow(), 100, 100m, 100m, 1, 2, true), cancellation.Token);
+            Assert.Equal(9m / 11m, fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+
+            clock.Advance(TimeSpan.FromSeconds(5));
+            await stream.DeliverAsync(Trade(clock, 3, 10m, true), cancellation.Token);
+            Assert.Equal(-11m / 31m, fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+            Assert.Null(fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow().AddSeconds(-1), age));
+            clock.Advance(TimeSpan.FromSeconds(4));
+            Assert.Null(fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+            await stream.DeliverAsync(new BinanceMarketStreamDisconnectedEvent(clock.GetUtcNow(), BinanceMarketDisconnectReason.ReadFailure), cancellation.Token);
+            Assert.Null(fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), TimeSpan.FromDays(1)));
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await consuming.ConfigureAwait(true);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidTradeTimesAndOverflowCannotRefreshOrPoisonAggression()
+    {
+        var clock = new ManualValuationTimeProvider(DateTimeOffset.FromUnixTimeMilliseconds(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        var stream = new AcknowledgedMarketDataStream();
+        using var fixture = new HostedServiceFixture(new FakeDecisionCommitStore(), null, stream, clock);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var consuming = fixture.HostedService.ConsumeMarketDataStreamAsync(CreateOptions().Value, cancellation.Token);
+        var age = TimeSpan.FromSeconds(3);
+        try
+        {
+            await stream.DeliverAsync(Trade(clock, 9999, 10m, true) with { EventTime = 0 }, cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 1, 1m, false), cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 2, 10m, true) with { ReceivedAt = clock.GetUtcNow().AddSeconds(1) }, cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 3, 10m, true) with { EventTime = long.MaxValue }, cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 4, 10m, true) with { EventTime = clock.GetUtcNow().AddSeconds(-1).ToUnixTimeMilliseconds() }, cancellation.Token);
+            await stream.DeliverAsync(Trade(clock, 5, -1m, true), cancellation.Token);
+            Assert.Equal(1m, fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+            await stream.DeliverAsync(Trade(clock, 2, decimal.MaxValue, false), cancellation.Token);
+            Assert.Null(fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+            await stream.DeliverAsync(Trade(clock, 1, 1m, false), cancellation.Token);
+            Assert.Null(fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+            await stream.DeliverAsync(Trade(clock, 3, 2m, true), cancellation.Token);
+            Assert.Equal(-1m, fixture.HostedService.ReadTradeAggression("BTCUSDT", clock.GetUtcNow(), age));
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            await consuming.ConfigureAwait(true);
+        }
+    }
+
+    private static BinanceTradeEvent Trade(TimeProvider clock, long id, decimal quantity, bool buyerMaker) =>
+        new("btcusdt@trade", "BTCUSDT", clock.GetUtcNow().ToUnixTimeMilliseconds(), clock.GetUtcNow(), id, 100m, quantity, buyerMaker);
+
+    private sealed class IntrabarMarketClient(DateTimeOffset minute) : FakeMarketClient
+    {
+        public override Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc = null, DateTimeOffset? endTimeUtc = null, int limit = 500, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<BinanceSpotKline>>([
+                Kline(minute.AddMinutes(-4), 100m), Kline(minute.AddMinutes(-3), 100m),
+                Kline(minute.AddMinutes(-2), 100m), Kline(minute.AddMinutes(-1), 100m)]);
+    }
+
+    private sealed class AcknowledgedMarketDataStream : IBinanceSpotMarketDataClient
+    {
+        private readonly System.Threading.Channels.Channel<(BinanceMarketDataEvent Event, TaskCompletionSource Delivered)> events =
+            System.Threading.Channels.Channel.CreateUnbounded<(BinanceMarketDataEvent, TaskCompletionSource)>();
+
+        public async Task DeliverAsync(BinanceMarketDataEvent item, CancellationToken cancellationToken)
+        {
+            var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await events.Writer.WriteAsync((item, delivered), cancellationToken).ConfigureAwait(false);
+            await delivered.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+        }
+
+        public async IAsyncEnumerable<BinanceMarketDataEvent> ReadAsync(
+            IEnumerable<BinanceMarketSubscription> subscriptions,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await foreach (var item in events.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return item.Event;
+                item.Delivered.TrySetResult();
+            }
+        }
+    }
+
     private sealed class FakeMarketDataStreamClient : IBinanceSpotMarketDataClient
     {
         private readonly System.Threading.Channels.Channel<BinanceMarketDataEvent> events =
@@ -1316,12 +1486,15 @@ public sealed class AutonomyCycleExecutionGuardsTests
 
     private sealed class HostedServiceFixture : IDisposable
     {
-        private readonly RuntimeSupervisor supervisor = new(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        private readonly RuntimeSupervisor supervisor;
 
         public HostedServiceFixture(
             IAutonomyDecisionCommitStore decisionCommitStore,
-            IBinanceSymbolTradingRulesProvider rulesProvider)
+            IBinanceSymbolTradingRulesProvider? rulesProvider,
+            IBinanceSpotMarketDataClient? stream = null,
+            TimeProvider? clock = null)
         {
+            supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), clock ?? TimeProvider.System, 0, RuntimeState.Ready);
             HostedService = new AutonomyCycleHostedService(
                 CreateOptions(),
                 new FakeMarketClient(),
@@ -1333,7 +1506,9 @@ public sealed class AutonomyCycleExecutionGuardsTests
                 supervisor,
                 new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m)),
                 NullLogger<AutonomyCycleHostedService>.Instance,
-                rulesProvider: rulesProvider);
+                rulesProvider: rulesProvider,
+                marketDataStreamClient: stream,
+                timeProvider: clock);
         }
 
         public AutonomyCycleHostedService HostedService { get; }

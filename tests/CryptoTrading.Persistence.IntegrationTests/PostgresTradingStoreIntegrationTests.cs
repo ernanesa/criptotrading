@@ -816,6 +816,9 @@ public sealed class PostgresTradingStoreIntegrationTests
         {
             await firstProcess.ApplyMigrationsAsync(cancellationToken: TestContext.Current.CancellationToken);
             await firstProcess.UpsertOpenOrderAsync(initial, cancellationToken: TestContext.Current.CancellationToken);
+            await firstProcess.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(clientOrderId,
+                new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged,
+                    new IdempotencyKey("seed-" + clientOrderId), observedAtUtc, "7000000002")), TestContext.Current.CancellationToken);
             var partialFill = initial with
             {
                 Status = "PARTIALLY_FILLED",
@@ -828,6 +831,10 @@ public sealed class PostgresTradingStoreIntegrationTests
             var staleNew = partialFill with { Status = "NEW" };
             Assert.False(await firstProcess.ApplyAccountStreamExecutionReportAsync(
                 staleNew, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Equal(2, (await firstProcess.ReadOrderLifecycleEventsAsync(clientOrderId, TestContext.Current.CancellationToken)).Count);
+            var laterRegressiveNew = staleNew with { ExchangeUpdatedAtUtc = observedAtUtc.AddMilliseconds(2) };
+            Assert.False(await firstProcess.ApplyAccountStreamExecutionReportAsync(
+                laterRegressiveNew, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
             var newStatusWithHigherFill = staleNew with { CumulativeExecutedQuantity = 0.006m };
             Assert.False(await firstProcess.ApplyAccountStreamExecutionReportAsync(
                 newStatusWithHigherFill, isTerminal: false, cancellationToken: TestContext.Current.CancellationToken));
@@ -872,6 +879,320 @@ public sealed class PostgresTradingStoreIntegrationTests
             freshRestSnapshot, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Empty(await restartedProcess.ReadOpenOrdersAsync(cancellationToken: TestContext.Current.CancellationToken));
         await restartedProcess.RemoveOpenOrderAsync(clientOrderId, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task AccountStreamEqualTimestampLifecycleUsesDurableOrderNotRandomEventId()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("Run scripts/test-postgres-integration.sh.");
+        var token = TestContext.Current.CancellationToken;
+        var id = "s-" + Guid.NewGuid().ToString("N");
+        var now = DateTimeOffset.UtcNow;
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(token);
+        var initial = new LocalOpenOrderRecord("BTCUSDT", 44, id, "NEW", now, 1m, 0m, now);
+        await store.UpsertOpenOrderAsync(initial, token);
+        var seed = OrderLifecycleEvent.Create(id, new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged,
+            new IdempotencyKey("seed-" + id), now, "44")) with { EventId = Guid.Parse("ffffffff-ffff-ffff-" + Guid.NewGuid().ToString("D")[19..]) };
+        await store.AppendOrderLifecycleEventAsync(seed, token);
+        try
+        {
+            var partial = initial with { Status = "PARTIALLY_FILLED", CumulativeExecutedQuantity = 0.5m };
+            Assert.True(await store.ApplyAccountStreamExecutionReportAsync(partial, false, token));
+            Assert.True(await store.ApplyAccountStreamExecutionReportAsync(partial with { Status = "CANCELED" }, true, token));
+            var events = await store.ReadOrderLifecycleEventsAsync(id, token);
+            Assert.Equal(3, events.Count);
+            Assert.Equal(OrderStatus.PartiallyFilled, Assert.Single(events, row => row.Transition.To == OrderStatus.Cancelled).Transition.From);
+            Assert.Equal(OrderStatus.Acknowledged, events[0].Transition.To);
+            Assert.Equal(OrderStatus.Cancelled, events[^1].Transition.To);
+            Assert.False(await store.ApplyAccountStreamExecutionReportAsync(partial with { Status = "CANCELED" }, true, token));
+            Assert.Equal(3, (await store.ReadOrderLifecycleEventsAsync(id, token)).Count);
+        }
+        finally { await store.RemoveOpenOrderAsync(id, CancellationToken.None); }
+    }
+
+    [Theory]
+    [InlineData("append")]
+    [InlineData("stream")]
+    [InlineData("cancel")]
+    public async Task LifecycleWritersAcquireSameOrderLockBeforeMutatingEvidence(string writer)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("Run scripts/test-postgres-integration.sh.");
+        var token = TestContext.Current.CancellationToken;
+        var id = "l-" + Guid.NewGuid().ToString("N");
+        var now = DateTimeOffset.UtcNow;
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(token);
+        var initial = new LocalOpenOrderRecord("BTCUSDT", 42, id, "PENDING_CANCEL", now, 1m, 0.5m, now);
+        await store.UpsertOpenOrderAsync(initial, token);
+        await store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(id, new OrderTransition(
+            OrderStatus.Submitted, OrderStatus.Acknowledged, new IdempotencyKey("seed-" + id), now, "42")), token);
+        await using var gateConnection = new NpgsqlConnection(connectionString);
+        await gateConnection.OpenAsync(token);
+        await using var gate = await gateConnection.BeginTransactionAsync(token);
+        await using var acquire = new NpgsqlCommand("SELECT pg_advisory_xact_lock(hashtextextended(@identity, 0));", gateConnection, gate);
+        acquire.Parameters.AddWithValue("identity", "order-lifecycle:" + id);
+        await acquire.ExecuteNonQueryAsync(token);
+
+        var cancel = new CancelOrderCommand(OrderId.New(), new ClientOrderId(id), new Symbol("BTCUSDT"), OrderSide.Buy, OrderType.Limit,
+            new Quantity(1m), new Quantity(0.5m), new Price(100m), CorrelationId.New(), new IdempotencyKey("cancel-" + id),
+            0, now.AddMinutes(-2), now.AddMinutes(-1), "42");
+        var outcome = CancelLifecyclePlanner.Resolve(cancel, CancelVenueStatus.Canceled, new Quantity(0.5m));
+        Task operation = writer switch
+        {
+            "append" => store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(id, new OrderTransition(
+                OrderStatus.Acknowledged, OrderStatus.CancelPending, new IdempotencyKey("pending-" + id), now.AddSeconds(1), "42")), token),
+            "stream" => store.ApplyAccountStreamExecutionReportAsync(initial with { Status = "CANCELED", ExchangeUpdatedAtUtc = now.AddSeconds(1) }, true, token),
+            _ => store.ResolveTerminalCancellationAsync(new TerminalCancellationResolution(cancel, outcome, Guid.NewGuid(),
+                OrderLifecycleEvent.Create(id, new OrderTransition(OrderStatus.CancelPending, OrderStatus.Cancelled,
+                    new IdempotencyKey("terminal-" + id), now.AddSeconds(1), "42"))), token)
+        };
+        try
+        {
+            await using var waiting = new NpgsqlCommand("""
+                SELECT EXISTS (SELECT 1 FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+                  AND classid::bigint = ((hashtextextended(@identity, 0) >> 32) & 4294967295)
+                  AND objid::bigint = (hashtextextended(@identity, 0) & 4294967295));
+                """, gateConnection, gate);
+            waiting.Parameters.AddWithValue("identity", "order-lifecycle:" + id);
+            var observedWaiting = false;
+            for (var attempt = 0; attempt < 200 && !observedWaiting; attempt++)
+            {
+                observedWaiting = await waiting.ExecuteScalarAsync(token) is true;
+                if (!observedWaiting) await Task.Delay(TimeSpan.FromMilliseconds(25), TimeProvider.System, token);
+            }
+            Assert.True(observedWaiting, "Writer did not wait on the shared order lock.");
+            Assert.Single(await store.ReadOrderLifecycleEventsAsync(id, token));
+            Assert.Equal("PENDING_CANCEL", Assert.Single(await store.ReadOpenOrdersAsync(token), row => row.ClientOrderId == id).Status);
+        }
+        finally
+        {
+            await gate.RollbackAsync(CancellationToken.None);
+            await operation.WaitAsync(TimeSpan.FromSeconds(10), token);
+            await store.RemoveOpenOrderAsync(id, CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities", Justification = "SQL uses only generated hex fixture names and integrity-checked embedded migration text.")]
+    public async Task LifecycleSequenceUpgradeLocksBeforeCheckingConcurrentHistoricalInsert()
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("Run scripts/test-postgres-integration.sh.");
+        var token = TestContext.Current.CancellationToken;
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(token);
+        var suffix = Guid.NewGuid().ToString("N");
+        var table = "trading.lifecycle_fixture_" + suffix;
+        var migration = Assert.Single(PersistenceMigrations.ReadAll(), script => script.Version == "036" && script.Direction == "up");
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(token);
+        await using var create = new NpgsqlCommand($"CREATE TABLE {table} (client_order_id text, occurred_at timestamptz); INSERT INTO {table} VALUES ('fixture', '2026-10-30T00:00:00Z'); CREATE TEMP TABLE migration_versions_fixture (version text PRIMARY KEY);", connection);
+        await create.ExecuteNonQueryAsync(token);
+        await using var writer = new NpgsqlConnection(connectionString);
+        await writer.OpenAsync(token);
+        await using var writerTransaction = await writer.BeginTransactionAsync(token);
+        await using var migrationTransaction = await connection.BeginTransactionAsync(token);
+        var writerCommitted = false;
+        try
+        {
+            await using var insert = new NpgsqlCommand($"INSERT INTO {table} VALUES ('fixture', '2026-10-30T00:00:00Z');", writer, writerTransaction);
+            await insert.ExecuteNonQueryAsync(token);
+            var sql = migration.Sql.Replace("trading.order_lifecycle_events", table, StringComparison.Ordinal)
+                .Replace("trading.schema_migrations", "pg_temp.migration_versions_fixture", StringComparison.Ordinal)
+                .Replace("order_lifecycle_events_sequence_idx", "fixture_sequence_" + suffix, StringComparison.Ordinal)
+                .Replace("order_lifecycle_events_client_sequence_idx", "fixture_client_" + suffix, StringComparison.Ordinal);
+            await using var upgrade = new NpgsqlCommand(sql, connection, migrationTransaction);
+            var upgrading = upgrade.ExecuteNonQueryAsync(token);
+            await using var waiting = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE relation = to_regclass(@table) AND mode = 'AccessExclusiveLock' AND NOT granted);", writer, writerTransaction);
+            waiting.Parameters.AddWithValue("table", table);
+            var observedWaiting = false;
+            for (var attempt = 0; attempt < 200 && !observedWaiting; attempt++)
+            {
+                observedWaiting = await waiting.ExecuteScalarAsync(token) is true;
+                if (!observedWaiting) await Task.Delay(TimeSpan.FromMilliseconds(25), TimeProvider.System, token);
+            }
+            Assert.True(observedWaiting, "Upgrade did not wait for the concurrent writer.");
+            await writerTransaction.CommitAsync(token);
+            writerCommitted = true;
+            var error = await Assert.ThrowsAsync<PostgresException>(() => upgrading);
+            Assert.Contains("HISTORICAL_TIMESTAMP_TIES_REQUIRE_RECONCILIATION", error.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (!writerCommitted) await writerTransaction.RollbackAsync(CancellationToken.None);
+            await migrationTransaction.RollbackAsync(CancellationToken.None);
+            await using var cleanup = new NpgsqlCommand($"DROP TABLE {table};", connection);
+            await cleanup.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities", Justification = "Only integrity-checked embedded migration SQL is executed in an isolated test transaction.")]
+    public async Task LifecycleSequenceUpgradeRefusesHistoricalTimestampAmbiguity(bool tiedTimestamps)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("Run scripts/test-postgres-integration.sh.");
+        var token = TestContext.Current.CancellationToken;
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(token);
+        var migration = Assert.Single(PersistenceMigrations.ReadAll(), script => script.Version == "036" && script.Direction == "up");
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(token);
+        await using var transaction = await connection.BeginTransactionAsync(token);
+        try
+        {
+            // Target temporary fixtures with the same migration SQL, without
+            // touching shared financial evidence or historical migrations.
+            await using var fixture = new NpgsqlCommand("CREATE TEMP TABLE lifecycle_fixture (client_order_id text, occurred_at timestamptz); CREATE TEMP TABLE migration_versions_fixture (version text PRIMARY KEY);", connection, transaction);
+            await fixture.ExecuteNonQueryAsync(token);
+            await using var seed = new NpgsqlCommand("""
+                INSERT INTO lifecycle_fixture (client_order_id, occurred_at)
+                VALUES (@identity, @time), (@identity, @second_time);
+                """, connection, transaction);
+            var identity = "m-" + Guid.NewGuid().ToString("N");
+            var now = DateTimeOffset.UtcNow;
+            seed.Parameters.AddWithValue("identity", identity);
+            seed.Parameters.AddWithValue("time", now);
+            seed.Parameters.AddWithValue("second_time", tiedTimestamps ? now : now.AddSeconds(1));
+            await seed.ExecuteNonQueryAsync(token);
+            var fixtureSql = migration.Sql.Replace("trading.order_lifecycle_events", "pg_temp.lifecycle_fixture", StringComparison.Ordinal)
+                .Replace("trading.schema_migrations", "pg_temp.migration_versions_fixture", StringComparison.Ordinal);
+            await using var up = new NpgsqlCommand(fixtureSql, connection, transaction);
+            if (tiedTimestamps)
+            {
+                var error = await Assert.ThrowsAsync<PostgresException>(() => up.ExecuteNonQueryAsync(token));
+                Assert.Contains("HISTORICAL_TIMESTAMP_TIES_REQUIRE_RECONCILIATION", error.Message, StringComparison.Ordinal);
+            }
+            else
+            {
+                await up.ExecuteNonQueryAsync(token);
+            }
+        }
+        finally { await transaction.RollbackAsync(CancellationToken.None); }
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    public async Task AccountStreamClockConflictCannotReleaseReservationOrOmitTerminalEvidence(bool lockedUnknown, bool clockConflict)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("Run scripts/test-postgres-integration.sh.");
+        var token = TestContext.Current.CancellationToken;
+        var suffix = Guid.NewGuid().ToString("N");
+        var id = "c-" + suffix;
+        var now = DateTimeOffset.UtcNow;
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(token);
+        var initial = new LocalOpenOrderRecord("BTCUSDT", 43, id, "NEW", now, 1m, 0m, now);
+        await store.UpsertOpenOrderAsync(initial, token);
+        await store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(id,
+            new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged,
+                new IdempotencyKey("seed-" + suffix), clockConflict ? now.AddSeconds(2) : now, "43")), token);
+        Assert.True((await store.TryReserveCapitalAsync(new CapitalReservationRequest(
+            "res-" + suffix, "account-" + suffix, "BTCUSDT", id, "USDT", 100m, 100m, 0m, 0m,
+            "test-worker", 1L, now), token)).Succeeded);
+        if (lockedUnknown)
+            await store.TransitionReservationAsync(id, CapitalReservationStatus.LockedUnknown, 0m, "test-worker", 1L,
+                now.AddSeconds(1), "AMBIGUOUS_SUBMISSION", token);
+        try
+        {
+            var terminal = initial with { Status = "CANCELED", UpdatedAtUtc = now.AddSeconds(1), ExchangeUpdatedAtUtc = now.AddSeconds(1) };
+            if (clockConflict)
+            {
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() => store.ApplyAccountStreamExecutionReportAsync(terminal, true, token));
+                Assert.Contains("LIFECYCLE_CLOCK_CONFLICT", error.Message, StringComparison.Ordinal);
+                Assert.Equal("NEW", Assert.Single(await store.ReadOpenOrdersAsync(token), row => row.ClientOrderId == id).Status);
+                Assert.Single(await store.ReadOrderLifecycleEventsAsync(id, token));
+            }
+            else
+            {
+                Assert.True(await store.ApplyAccountStreamExecutionReportAsync(terminal, true, token));
+                Assert.DoesNotContain(await store.ReadOpenOrdersAsync(token), row => row.ClientOrderId == id);
+                Assert.Equal(2, (await store.ReadOrderLifecycleEventsAsync(id, token)).Count);
+            }
+
+            var reservations = await store.ReadActiveReservationsAsync("account-" + suffix, token);
+            if (lockedUnknown || clockConflict)
+                Assert.Equal(lockedUnknown ? CapitalReservationStatus.LockedUnknown : CapitalReservationStatus.Reserved, Assert.Single(reservations).Status);
+            else
+                Assert.Empty(reservations);
+        }
+        finally
+        {
+            await store.RemoveOpenOrderAsync(id, CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities", Justification = "DDL identifiers and target literal are generated hex IDs; table and operation are fixed test constants.")]
+    public async Task AccountStreamProjectionLifecycleAndReservationRollBackTogether(bool failReservation)
+    {
+        var connectionString = Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(connectionString)) throw SkipException.ForSkip("Run scripts/test-postgres-integration.sh.");
+        var token = TestContext.Current.CancellationToken;
+        var suffix = Guid.NewGuid().ToString("N");
+        var clientOrderId = "a-" + suffix;
+        var now = DateTimeOffset.UtcNow;
+        await using var store = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        await store.ApplyMigrationsAsync(token);
+        var initial = new LocalOpenOrderRecord("BTCUSDT", 42, clientOrderId, "NEW", now, 1m, 0m, now);
+        await store.UpsertOpenOrderAsync(initial, token);
+        await store.AppendOrderLifecycleEventAsync(OrderLifecycleEvent.Create(clientOrderId,
+            new OrderTransition(OrderStatus.Submitted, OrderStatus.Acknowledged,
+                new IdempotencyKey("seed-" + suffix), now, "42")), token);
+        var reservation = await store.TryReserveCapitalAsync(new CapitalReservationRequest(
+            "res-" + suffix, "account-" + suffix, "BTCUSDT", clientOrderId, "USDT",
+            100m, 100m, 0m, 0m, "test-worker", 1L, now), token);
+        Assert.True(reservation.Succeeded);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(token);
+        var table = failReservation ? "capital_reservations" : "order_lifecycle_events";
+        var operation = failReservation ? "UPDATE" : "INSERT";
+        // All interpolated identifiers and literals are generated test-only hex IDs.
+        await using var installFailure = new NpgsqlCommand($"""
+            CREATE FUNCTION trading.fail_{suffix}() RETURNS trigger LANGUAGE plpgsql AS $body$
+            BEGIN
+                IF NEW.client_order_id = '{clientOrderId}' THEN RAISE EXCEPTION 'synthetic stream write failure'; END IF;
+                RETURN NEW;
+            END $body$;
+            CREATE TRIGGER fail_{suffix} BEFORE {operation} ON trading.{table}
+            FOR EACH ROW EXECUTE FUNCTION trading.fail_{suffix}();
+            """, connection);
+        await installFailure.ExecuteNonQueryAsync(token);
+        try
+        {
+            var report = initial with
+            {
+                Status = failReservation ? "CANCELED" : "PARTIALLY_FILLED",
+                UpdatedAtUtc = now.AddMilliseconds(1), ExchangeUpdatedAtUtc = now.AddMilliseconds(1),
+                CumulativeExecutedQuantity = 0.5m
+            };
+            await Assert.ThrowsAsync<PostgresException>(() => store.ApplyAccountStreamExecutionReportAsync(report, failReservation, token));
+            var active = Assert.Single(await store.ReadOpenOrdersAsync(token), order => order.ClientOrderId == clientOrderId);
+            Assert.Equal("NEW", active.Status);
+            Assert.Equal(0m, active.CumulativeExecutedQuantity);
+            Assert.Single(await store.ReadOrderLifecycleEventsAsync(clientOrderId, token));
+            Assert.Equal(CapitalReservationStatus.Reserved,
+                Assert.Single(await store.ReadActiveReservationsAsync("account-" + suffix, token)).Status);
+        }
+        finally
+        {
+            await using var cleanup = new NpgsqlCommand($"DROP TRIGGER fail_{suffix} ON trading.{table}; DROP FUNCTION trading.fail_{suffix}();", connection);
+            await cleanup.ExecuteNonQueryAsync(CancellationToken.None);
+            await store.RemoveOpenOrderAsync(clientOrderId, CancellationToken.None);
+        }
     }
 
     [Fact]

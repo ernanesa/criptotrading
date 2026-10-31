@@ -56,6 +56,19 @@ public sealed class WorkerRuntimeOptions
 
     /// <summary>Autonomy decision mode: "Baseline" (A2), "RegimeAdaptive" (A3), "ContextualAllocation" (A4), "ContinuousLearning" (A5).</summary>
     public string AutonomyEngineMode { get; set; } = "RegimeAdaptive";
+    public string? AutonomyMlArtifactPath { get; set; }
+    public string? AutonomyMlArtifactSha256 { get; set; }
+
+    internal void ValidateMlArtifact()
+    {
+        var hasPath = !string.IsNullOrWhiteSpace(AutonomyMlArtifactPath);
+        var hasDigest = !string.IsNullOrWhiteSpace(AutonomyMlArtifactSha256);
+        if (!hasPath && !hasDigest) return;
+        if (!hasPath || !hasDigest || AutonomyMlArtifactPath?.EndsWith(".mlmodel.json", StringComparison.OrdinalIgnoreCase) is not true ||
+            AutonomyMlArtifactSha256 is not { Length: 64 } || !AutonomyMlArtifactSha256.All(static c => char.IsAsciiHexDigit(c)))
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ML_ARTIFACT_PATH requires a .mlmodel.json catalog and WORKER_ML_ARTIFACT_SHA256 must be its explicit 64-character hexadecimal digest."]);
+    }
 
     public string AutonomySymbol { get; set; } = "BTCUSDT";
 
@@ -147,6 +160,7 @@ public sealed class WorkerRuntimeOptions
 
     public void Validate()
     {
+        ValidateMlArtifact();
         var isPaper = string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase);
         var isTestnet = string.Equals(ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase);
         if (!isPaper && !isTestnet)
@@ -312,7 +326,8 @@ public sealed class WorkerRuntimeOptions
                 }
             }
 
-            if (AutonomyInterval.Trim() is not ("1m" or "5m" or "15m" or "1h"))
+            AutonomyInterval = AutonomyInterval.Trim();
+            if (AutonomyInterval is not ("1m" or "5m" or "15m" or "1h"))
             {
                 throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                     ["WORKER_AUTONOMY_INTERVAL must be one of 1m, 5m, 15m or 1h."]);

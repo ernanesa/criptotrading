@@ -55,4 +55,71 @@ public sealed class BoundedJsonLineFileLoggerProviderTests
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             new BoundedJsonLineFileLoggerProvider("/tmp/ct-test.log", retainedFiles: 0));
     }
+
+    [Fact]
+    public void RedactsEmbeddedSecretsInMessagesAndExceptions()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cryptotrading-log-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "worker.jsonl");
+        try
+        {
+            using (var provider = new BoundedJsonLineFileLoggerProvider(path))
+            {
+                provider.CreateLogger("CryptoTrading.Tests").LogError(
+                    new InvalidOperationException("password=synthetic-exception-value"),
+                    "upstream access_token=synthetic-message-value");
+            }
+
+            var content = File.ReadAllText(path);
+            Assert.DoesNotContain("synthetic-message-value", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("synthetic-exception-value", content, StringComparison.Ordinal);
+            Assert.Contains("[redacted]", content, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void AccountsForEveryRecordDroppedDuringSaturation()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cryptotrading-log-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "worker.jsonl");
+        const int attempts = 20_000;
+        try
+        {
+            var provider = new BoundedJsonLineFileLoggerProvider(path);
+            using (provider)
+            {
+                var logger = provider.CreateLogger("CryptoTrading.Tests");
+                for (var i = 0; i < attempts; i++) logger.LogInformation("record {Index}", i);
+            }
+
+            var persisted = File.Exists(path) ? File.ReadLines(path).Count() : 0;
+            Assert.Equal(attempts, persisted + provider.DroppedRecords);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RejectedWriteAfterCompletionIsCountedExactlyOnce()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "cryptotrading-log-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var provider = new BoundedJsonLineFileLoggerProvider(Path.Combine(directory, "worker.jsonl"));
+            var logger = provider.CreateLogger("CryptoTrading.Tests");
+            provider.Dispose();
+            logger.LogInformation("rejected after completion");
+            Assert.Equal(1, provider.DroppedRecords);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
 }

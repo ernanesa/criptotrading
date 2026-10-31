@@ -59,7 +59,7 @@ public sealed class ArbitrageTests
         // Gross: (1/60000) * (1/0.05) * 3150 = (1/60000) * 20 * 3150 = 63000 / 60000 = 1.05 (+5%)
         var opp = TriangularArbitrageDetector.EvaluateCycle(
             usdtToBtcAskPrice: 60_000m,
-            ethToBtcBidPrice: 0.05m,
+            ethToBtcAskPrice: 0.05m,
             ethToUsdtBidPrice: 3_150m,
             takerFeeRate: 0.001m); // 10 bps per leg
 
@@ -70,7 +70,7 @@ public sealed class ArbitrageTests
         // Fair pricing scenario -> after fees it should be unprofitable
         var fairOpp = TriangularArbitrageDetector.EvaluateCycle(
             usdtToBtcAskPrice: 60_000m,
-            ethToBtcBidPrice: 0.05m,
+            ethToBtcAskPrice: 0.05m,
             ethToUsdtBidPrice: 3_000m, // exact theoretical cross
             takerFeeRate: 0.001m);
 
@@ -96,5 +96,28 @@ public sealed class ArbitrageTests
         // Maker Ask should be above hedge venue ask ($60,020 * (1 + 0.003) = 60,200)
         Assert.True(quote.MakerAskPrice > 60_020m);
         Assert.True(quote.ExpectedSpreadBps >= 30m);
+    }
+
+    [Theory]
+    [InlineData("-0.001")]
+    [InlineData("1")]
+    [InlineData("1.001")]
+    public void TriangularArbitrageRejectsInvalidFees(string feeText)
+    {
+        var fee = decimal.Parse(feeText, System.Globalization.CultureInfo.InvariantCulture);
+        var result = TriangularArbitrageDetector.EvaluateCycle(60_000m, 0.05m, 3_150m, fee);
+        Assert.False(result.IsProfitable);
+        Assert.StartsWith("INVALID_FEES", result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TriangularArbitrageRequiresBuyingEthAtAskAndReportsOnlyTheoreticalProfit()
+    {
+        var atAsk = TriangularArbitrageDetector.EvaluateCycle(60_000m, 0.05m, 3_000m, 0m);
+        var understatedBuyPrice = TriangularArbitrageDetector.EvaluateCycle(60_000m, 0.049m, 3_000m, 0m);
+        Assert.Equal(1m, atAsk.GrossRateMultiplier);
+        Assert.False(atAsk.IsProfitable);
+        Assert.True(understatedBuyPrice.IsProfitable);
+        Assert.Contains("THEORETICAL", understatedBuyPrice.Reason, StringComparison.Ordinal);
     }
 }

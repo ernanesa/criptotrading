@@ -65,18 +65,21 @@ public static class RegimeChallengerClassifier
         var meanReturn = returns.Average();
         var variance = returns.Select(r => (r - meanReturn) * (r - meanReturn)).Average();
         var stdDev = (decimal)Math.Sqrt((double)variance);
+        var metrics = MarketRegimeClassifier.Classify(symbol, bars.Select(static bar => bar.Close).ToArray(), observedAtUtc);
+
+        MarketRegimeSnapshot Snapshot(MarketRegime regime, decimal confidence, decimal slope, string reason) =>
+            new(symbol, observedAtUtc, regime, confidence, Math.Round(slope, 4), metrics.PriceDispersionRate, reason)
+            {
+                ReturnSigmaPerBar = metrics.ReturnSigmaPerBar,
+                EfficiencyRatio = metrics.EfficiencyRatio,
+                LegacyDispersionLimitBreached = metrics.LegacyDispersionLimitBreached
+            };
 
         // Volatility threshold
         if (stdDev > 0.04m) // > 4% bar-to-bar volatility
         {
-            return new MarketRegimeSnapshot(
-                symbol,
-                observedAtUtc,
-                MarketRegime.HighVolatilityChop,
-                Confidence: 0.90m,
-                TrendSlopeRate: Math.Round(meanReturn, 4),
-                VolatilityRate: Math.Round(stdDev, 4),
-                Reason: "CHALLENGER_HIGH_VOLATILITY: Volatility breached 4% threshold.");
+            return Snapshot(MarketRegime.HighVolatilityChop, 0.90m, meanReturn,
+                "CHALLENGER_HIGH_VOLATILITY: Experimental population return sigma breached 4% heuristic.");
         }
 
         // 2. Volume Flow Imbalance (Chaikin / OBV-like proxy)
@@ -101,35 +104,17 @@ public static class RegimeChallengerClassifier
 
         if (trendSlope > 0.005m && normalizedVolumeFlow > 0.05m)
         {
-            return new MarketRegimeSnapshot(
-                symbol,
-                observedAtUtc,
-                MarketRegime.BullTrend,
-                Confidence: 0.85m,
-                TrendSlopeRate: Math.Round(trendSlope, 4),
-                VolatilityRate: Math.Round(stdDev, 4),
-                Reason: "CHALLENGER_BULL: Upward trend confirmed with positive volume flow.");
+            return Snapshot(MarketRegime.BullTrend, 0.85m, trendSlope,
+                "CHALLENGER_BULL: Upward trend confirmed with positive volume flow.");
         }
 
         if (trendSlope < -0.005m && normalizedVolumeFlow < -0.05m)
         {
-            return new MarketRegimeSnapshot(
-                symbol,
-                observedAtUtc,
-                MarketRegime.BearTrend,
-                Confidence: 0.85m,
-                TrendSlopeRate: Math.Round(trendSlope, 4),
-                VolatilityRate: Math.Round(stdDev, 4),
-                Reason: "CHALLENGER_BEAR: Downward trend confirmed with negative volume flow.");
+            return Snapshot(MarketRegime.BearTrend, 0.85m, trendSlope,
+                "CHALLENGER_BEAR: Downward trend confirmed with negative volume flow.");
         }
 
-        return new MarketRegimeSnapshot(
-            symbol,
-            observedAtUtc,
-            MarketRegime.MeanRevertingRange,
-            Confidence: 0.80m,
-            TrendSlopeRate: Math.Round(trendSlope, 4),
-            VolatilityRate: Math.Round(stdDev, 4),
-            Reason: "CHALLENGER_RANGE: Balanced volume flow and bounded slope indicate mean-reverting range.");
+        return Snapshot(MarketRegime.MeanRevertingRange, 0.80m, trendSlope,
+            "CHALLENGER_RANGE: Balanced volume flow and bounded slope indicate mean-reverting range.");
     }
 }

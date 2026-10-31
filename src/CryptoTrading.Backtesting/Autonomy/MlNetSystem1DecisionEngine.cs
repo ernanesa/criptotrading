@@ -3,18 +3,12 @@ using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;
-using Microsoft.ML;
-using Microsoft.ML.Data;
-using Microsoft.ML.Trainers;
-using Microsoft.ML.Trainers.FastTree;
 
 namespace CryptoTrading.Backtesting.Autonomy;
 
 /// <summary>
-/// Structured output produced by the ML.NET 6.0 Preview System-1 decision evaluator combining:
-/// 1. Singular Spectrum Analysis (SSA) change-point and spike detection (<c>Microsoft.ML.TimeSeries</c>).
-/// 2. Calibrated binary meta-labeling ensemble combining <c>Gam</c> (<c>Microsoft.ML.FastTree</c>) and
-///    <c>SdcaLogisticRegression</c> (<c>Microsoft.ML</c>) with Platt Scaling and deterministic single-threaded execution.
+/// Inference from a previously trained, calibrated and integrity-checked artifact.
+/// Neutral legacy SSA fields mean unavailable evidence, not measured p-values.
 /// </summary>
 public readonly record struct MlNetSystem1Evaluation(
     decimal MlWinProbability,
@@ -22,7 +16,16 @@ public readonly record struct MlNetSystem1Evaluation(
     decimal SsaChangePointPValue,
     decimal SsaMartingaleScore,
     decimal SsaSpikePValue,
-    bool IsSsaStructuralBreakdown);
+    bool IsSsaStructuralBreakdown)
+{
+    public bool HasCalibratedProbability { get; init; }
+    public bool HasSsaEvidence { get; init; }
+    public bool IsNegativePriceShock { get; init; }
+    public string? ModelId { get; init; }
+    public string? ModelArtifactSha256 { get; init; }
+    public OrderSide? ModelTargetSide { get; init; }
+    public string? AvailabilityReason { get; init; }
+}
 
 /// <summary>
 /// Walk-forward out-of-sample probability calibration report featuring Brier Score and Expected Calibration Error (ECE).
@@ -35,7 +38,10 @@ public sealed record MlProbabilityCalibrationReport(
     int TotalEvaluations,
     int PositiveOutcomes,
     IReadOnlyList<MlProbabilityCalibrationBin> ReliabilityBins,
-    DateTimeOffset EvaluatedAtUtc);
+    DateTimeOffset EvaluatedAtUtc)
+{
+    public string? EvidenceUnavailableReason { get; init; }
+}
 
 /// <summary>
 /// Individual confidence/reliability bin for probability calibration curve analysis.
@@ -64,29 +70,15 @@ public sealed record MlWalkForwardPromotionReport(
 
 public static class MlNetSystem1DecisionEngine
 {
-    private const int MaxCachedEvaluations = 256;
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<EvaluationCacheKey, MlNetSystem1Evaluation> EvaluationCache = new();
-
-    private readonly record struct EvaluationCacheKey(
-        string Symbol,
-        int BarCount,
-        long LastBarCloseUtcTicks,
-        decimal LastBarClosePrice,
-        OrderSide EffectiveSide,
-        MarketRegime Regime,
-        decimal RegimeConfidence,
-        decimal OrderBookImbalanceRounded,
-        int EmpiricalObservationCount,
-        decimal EmpiricalAverageRewardRounded,
-        int HorizonBars);
-
     public static MlNetSystem1Evaluation Evaluate(
         IReadOnlyList<CloseBar> bars,
         MarketRegimeSnapshot regime,
         OrderSide? candidateSide,
-        decimal orderBookImbalance,
+        decimal? orderBookImbalance,
         StrategyRegimePerformance? empiricalPerformance = null,
-        int horizonBars = 4)
+        int horizonBars = 4,
+        MlDecisionArtifact? artifact = null,
+        string timeframe = "1m")
     {
         if (horizonBars is < 1 or > 32)
         {
@@ -95,317 +87,38 @@ public static class MlNetSystem1DecisionEngine
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(regime);
 
-        if (bars.Count < 20)
+        if (bars.Count < 20) return Unavailable("ML_INSUFFICIENT_HISTORY");
+        var last = bars[^1];
+        if (last.CloseTimeUtc > regime.ObservedAtUtc) return Unavailable("ML_FEATURES_FROM_FUTURE");
+        for (var i = 0; i < bars.Count; i++)
+            if (bars[i].Symbol != last.Symbol || bars[i].CloseTimeUtc.Offset != TimeSpan.Zero ||
+                i > 0 && bars[i].CloseTimeUtc <= bars[i - 1].CloseTimeUtc)
+                return Unavailable("ML_BAR_SEQUENCE_INVALID");
+        var oneBarReturn = (last.ClosePrice.Value - bars[^2].ClosePrice.Value) / bars[^2].ClosePrice.Value;
+        var threeBarReturn = (last.ClosePrice.Value - bars[^4].ClosePrice.Value) / bars[^4].ClosePrice.Value;
+        // Preserve the existing negative-shock entry veto conservatively, without
+        // presenting an unavailable IID/SSA estimate as measured evidence.
+        var negativeShock = oneBarReturn <= -0.00055m || threeBarReturn <= -0.00075m;
+        if (artifact is null) return Unavailable("ML_CALIBRATED_ARTIFACT_UNAVAILABLE", negativeShock);
+        if (regime.Symbol != last.Symbol) return Unavailable("ML_REGIME_SYMBOL_MISMATCH", negativeShock);
+        var features = CreateFeatureVector(bars, bars.Count - 1, orderBookImbalance);
+        var context = new MlInferenceContext(last.Symbol.Value, timeframe, candidateSide ?? OrderSide.Buy,
+            horizonBars, last.CloseTimeUtc, regime.ObservedAtUtc, features);
+        if (!artifact.TryPredict(context, out var prediction))
+            return Unavailable(prediction.RejectionReason ?? "ML_PREDICTION_UNAVAILABLE", negativeShock) with
+            { ModelId = prediction.ModelId, ModelArtifactSha256 = artifact.VerifiedSha256, ModelTargetSide = artifact.Metadata.Policy.Side };
+        return new MlNetSystem1Evaluation(prediction.Probability!.Value, prediction.RawScore!.Value, 0.50m, 0m, 0.50m, false)
         {
-            return new MlNetSystem1Evaluation(
-                MlWinProbability: regime.Confidence,
-                MlRawScore: 0m,
-                SsaChangePointPValue: 0.50m,
-                SsaMartingaleScore: 0m,
-                SsaSpikePValue: 0.50m,
-                IsSsaStructuralBreakdown: false);
-        }
-
-        var effectiveSide = candidateSide ?? OrderSide.Buy;
-        var lastBar = bars[^1];
-        var cacheKey = new EvaluationCacheKey(
-            lastBar.Symbol.Value,
-            bars.Count,
-            lastBar.CloseTimeUtc.UtcTicks,
-            lastBar.ClosePrice.Value,
-            effectiveSide,
-            regime.Regime,
-            Math.Round(regime.Confidence, 4),
-            Math.Round(orderBookImbalance, 4),
-            empiricalPerformance?.ObservationCount ?? 0,
-            Math.Round(empiricalPerformance?.AverageReward ?? 0m, 4),
-            horizonBars);
-
-        if (EvaluationCache.TryGetValue(cacheKey, out var cached))
-        {
-            return cached;
-        }
-
-        var mlContext = new MLContext(seed: 42);
-
-        // 1. Evaluate SSA Change-Point and Spike Detection on 1-minute returns
-        var (changePointPValue, martingaleScore, spikePValue, isBreakdown) = EvaluateSsaTimeSeries(mlContext, bars);
-
-        // 2. Evaluate Calibrated Binary Classification Meta-Labeler Ensemble (GAM + SdcaLogisticRegression, NumberOfThreads = 1)
-        var (winProbability, rawScore) = EvaluateCalibratedMetaLabeler(
-            mlContext,
-            bars,
-            regime,
-            effectiveSide,
-            orderBookImbalance,
-            changePointPValue,
-            empiricalPerformance,
-            horizonBars);
-
-        var result = new MlNetSystem1Evaluation(
-            MlWinProbability: winProbability,
-            MlRawScore: rawScore,
-            SsaChangePointPValue: changePointPValue,
-            SsaMartingaleScore: martingaleScore,
-            SsaSpikePValue: spikePValue,
-            IsSsaStructuralBreakdown: isBreakdown);
-
-        if (EvaluationCache.Count >= MaxCachedEvaluations)
-        {
-            EvaluationCache.Clear();
-        }
-
-        EvaluationCache[cacheKey] = result;
-        return result;
-    }
-
-    private static (decimal ChangePointPValue, decimal MartingaleScore, decimal SpikePValue, bool IsBreakdown) EvaluateSsaTimeSeries(
-        MLContext mlContext,
-        IReadOnlyList<CloseBar> bars)
-    {
-        var n = bars.Count;
-        var returnPoints = new List<SsaInputRow>(n - 1);
-        for (var i = 1; i < n; i++)
-        {
-            var prev = bars[i - 1].ClosePrice.Value;
-            var curr = bars[i].ClosePrice.Value;
-            var retBps = prev > 0m ? (float)((curr - prev) / prev * 10_000m) : 0f;
-            returnPoints.Add(new SsaInputRow { Value = retBps });
-        }
-
-        var seriesLen = returnPoints.Count;
-        var pvalueHistoryLen = Math.Clamp(seriesLen / 2, 6, 24);
-
-        var dataView = mlContext.Data.LoadFromEnumerable(returnPoints);
-
-        var changePointEstimator = mlContext.Transforms.DetectIidChangePoint(
-            outputColumnName: nameof(SsaOutputRow.Prediction),
-            inputColumnName: nameof(SsaInputRow.Value),
-            confidence: 95.0,
-            changeHistoryLength: pvalueHistoryLen);
-
-        var cpTransformed = changePointEstimator.Fit(dataView).Transform(dataView);
-        var cpPredictions = mlContext.Data.CreateEnumerable<SsaOutputRow>(cpTransformed, reuseRowObject: false).ToList();
-
-        var spikeEstimator = mlContext.Transforms.DetectIidSpike(
-            outputColumnName: nameof(SpikeOutputRow.Prediction),
-            inputColumnName: nameof(SsaInputRow.Value),
-            confidence: 98.0,
-            pvalueHistoryLength: pvalueHistoryLen);
-
-        var spikeTransformed = spikeEstimator.Fit(dataView).Transform(dataView);
-        var spikePredictions = mlContext.Data.CreateEnumerable<SpikeOutputRow>(spikeTransformed, reuseRowObject: false).ToList();
-
-        var lastCp = cpPredictions.Count > 0 ? cpPredictions[^1].Prediction : null;
-        var lastSpike = spikePredictions.Count > 0 ? spikePredictions[^1].Prediction : null;
-
-        var cpAlert = lastCp is { Length: >= 4 } && lastCp[0] > 0.5;
-        var cpPValue = lastCp is { Length: >= 4 } && !double.IsNaN(lastCp[2])
-            ? Math.Clamp((decimal)lastCp[2], 0m, 1m)
-            : 0.50m;
-        var martingale = lastCp is { Length: >= 4 } && !double.IsNaN(lastCp[3])
-            ? Math.Clamp((decimal)lastCp[3], 0m, 100m)
-            : 0m;
-
-        var spikeAlert = lastSpike is { Length: >= 3 } && lastSpike[0] > 0.5;
-        var spikePValue = lastSpike is { Length: >= 3 } && !double.IsNaN(lastSpike[2])
-            ? Math.Clamp((decimal)lastSpike[2], 0m, 1m)
-            : 0.50m;
-
-        var recent1BarReturn = bars[^2].ClosePrice.Value > 0m
-            ? (bars[^1].ClosePrice.Value - bars[^2].ClosePrice.Value) / bars[^2].ClosePrice.Value
-            : 0m;
-        var recent3BarReturn = n >= 4 && bars[^4].ClosePrice.Value > 0m
-            ? (bars[^1].ClosePrice.Value - bars[^4].ClosePrice.Value) / bars[^4].ClosePrice.Value
-            : recent1BarReturn;
-
-        var isNegativeShock = recent1BarReturn <= -0.00055m || recent3BarReturn <= -0.00075m;
-        var isBreakdown = isNegativeShock &&
-            ((cpAlert && cpPValue <= 0.05m) ||
-             martingale >= 6.5m ||
-             (spikeAlert && spikePValue <= 0.02m));
-
-        return (Math.Round(cpPValue, 4), Math.Round(martingale, 4), Math.Round(spikePValue, 4), isBreakdown);
-    }
-
-    private static (decimal WinProbability, decimal RawScore) EvaluateCalibratedMetaLabeler(
-        MLContext mlContext,
-        IReadOnlyList<CloseBar> bars,
-        MarketRegimeSnapshot regime,
-        OrderSide side,
-        decimal orderBookImbalance,
-        decimal ssaChangePointPValue,
-        StrategyRegimePerformance? empiricalPerformance,
-        int horizonBars)
-    {
-        var trainingRows = BuildPointInTimeTrainingSet(bars, regime, side, empiricalPerformance, horizonBars);
-        var trainData = mlContext.Data.LoadFromEnumerable(trainingRows);
-
-        var sdcaOptions = new SdcaLogisticRegressionBinaryTrainer.Options
-        {
-            LabelColumnName = nameof(MetaLabelRow.Label),
-            FeatureColumnName = "Features",
-            ExampleWeightColumnName = nameof(MetaLabelRow.Weight),
-            MaximumNumberOfIterations = 35,
-            NumberOfThreads = 1,
-            L2Regularization = 0.05f,
-            L1Regularization = 0.01f,
+            HasCalibratedProbability = true,
+            ModelId = prediction.ModelId,
+            ModelArtifactSha256 = artifact.VerifiedSha256,
+            ModelTargetSide = artifact.Metadata.Policy.Side,
+            IsNegativePriceShock = negativeShock
         };
-
-        var gamOptions = new GamBinaryTrainer.Options
-        {
-            LabelColumnName = nameof(MetaLabelRow.Label),
-            FeatureColumnName = "Features",
-            ExampleWeightColumnName = nameof(MetaLabelRow.Weight),
-            NumberOfIterations = 45,
-            NumberOfThreads = 1,
-            LearningRate = 0.02,
-            MaximumBinCountPerFeature = 16,
-        };
-
-        var featurePipeline = mlContext.Transforms.Concatenate(
-                "Features",
-                nameof(MetaLabelRow.ZScore),
-                nameof(MetaLabelRow.SlopeBpsPerBar),
-                nameof(MetaLabelRow.Momentum3BarBps),
-                nameof(MetaLabelRow.VolatilityBps),
-                nameof(MetaLabelRow.OrderBookImbalance),
-                nameof(MetaLabelRow.SsaStability))
-            .Append(mlContext.Transforms.NormalizeMeanVariance("Features"));
-
-        var sdcaModel = featurePipeline
-            .Append(mlContext.BinaryClassification.Trainers.SdcaLogisticRegression(sdcaOptions))
-            .Fit(trainData);
-
-        var gamModel = featurePipeline
-            .Append(mlContext.BinaryClassification.Trainers.Gam(gamOptions))
-            .Fit(trainData);
-
-        using var sdcaEngine = mlContext.Model.CreatePredictionEngine<MetaLabelRow, MetaLabelPrediction>(sdcaModel);
-        using var gamEngine = mlContext.Model.CreatePredictionEngine<MetaLabelRow, MetaLabelPrediction>(gamModel);
-
-        var currentSample = BuildCurrentSample(bars, regime, orderBookImbalance, ssaChangePointPValue);
-        var sdcaPred = sdcaEngine.Predict(currentSample);
-        var gamPred = gamEngine.Predict(currentSample);
-
-        var sdcaProb = !float.IsNaN(sdcaPred.Probability) && !float.IsInfinity(sdcaPred.Probability)
-            ? Math.Clamp((decimal)sdcaPred.Probability, 0.05m, 0.99m)
-            : regime.Confidence;
-        var gamProb = !float.IsNaN(gamPred.Probability) && !float.IsInfinity(gamPred.Probability)
-            ? Math.Clamp((decimal)gamPred.Probability, 0.05m, 0.99m)
-            : regime.Confidence;
-
-        var ensembleProb = Math.Clamp((sdcaProb * 0.55m) + (gamProb * 0.45m), 0.01m, 0.99m);
-        var ensembleScore = (!float.IsNaN(sdcaPred.Score) && !float.IsNaN(gamPred.Score))
-            ? Math.Round(((decimal)sdcaPred.Score * 0.55m) + ((decimal)gamPred.Score * 0.45m), 4)
-            : 0m;
-
-        // Platt Scaling (John Platt, 1999) regularized sigmoid calibration
-        var plattProb = PlattParameters.Default.Transform(ensembleScore);
-        var finalCalibratedProb = Math.Clamp(
-            Math.Round((ensembleProb * 0.70m) + (plattProb * 0.30m), 4),
-            0.01m,
-            0.99m);
-
-        return (finalCalibratedProb, ensembleScore);
     }
 
-    private static List<MetaLabelRow> BuildPointInTimeTrainingSet(
-        IReadOnlyList<CloseBar> bars,
-        MarketRegimeSnapshot regime,
-        OrderSide side,
-        StrategyRegimePerformance? empiricalPerformance,
-        int horizonBars)
-    {
-        var rows = new List<MetaLabelRow>(Math.Max(68, bars.Count));
-
-        var dir = side == OrderSide.Buy ? 1f : -1f;
-        var priorScale = bars.Count >= 60 ? 0.35f : 1.0f;
-
-        // Calibrated domain priors prevent degenerate single-class fits on short windows while encoding domain invariants:
-        // 1. Oversold Z-Score (for Buy) or Overbought Z-Score (for Sell) with aligned order book -> profitable reversion
-        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f * priorScale, ZScore = -1.65f * dir, SlopeBpsPerBar = 0.0f, Momentum3BarBps = -3.2f * dir, VolatilityBps = 3.5f, OrderBookImbalance = 0.35f * dir, SsaStability = 0.85f });
-        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f * priorScale, ZScore = -1.40f * dir, SlopeBpsPerBar = 0.2f * dir, Momentum3BarBps = -2.5f * dir, VolatilityBps = 2.8f, OrderBookImbalance = 0.20f * dir, SsaStability = 0.80f });
-        rows.Add(new MetaLabelRow { Label = true, Weight = 1.25f * priorScale, ZScore = 0.60f * dir, SlopeBpsPerBar = 2.1f * dir, Momentum3BarBps = 5.5f * dir, VolatilityBps = 4.0f, OrderBookImbalance = 0.45f * dir, SsaStability = 0.75f });
-
-        // 2. Breakdown against side / adverse order book / chasing against reversion -> unprofitable
-        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f * priorScale, ZScore = -2.40f * dir, SlopeBpsPerBar = -2.8f * dir, Momentum3BarBps = -11.0f * dir, VolatilityBps = 9.5f, OrderBookImbalance = -0.80f * dir, SsaStability = 0.05f });
-        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f * priorScale, ZScore = 1.50f * dir, SlopeBpsPerBar = 0.1f * dir, Momentum3BarBps = 4.2f * dir, VolatilityBps = 3.2f, OrderBookImbalance = -0.45f * dir, SsaStability = 0.40f });
-        rows.Add(new MetaLabelRow { Label = false, Weight = 1.35f * priorScale, ZScore = -0.50f * dir, SlopeBpsPerBar = -1.9f * dir, Momentum3BarBps = -8.5f * dir, VolatilityBps = 7.0f, OrderBookImbalance = -0.60f * dir, SsaStability = 0.15f });
-
-        // 3. Closed-loop empirical experience replay from real executed strategy-regime rewards in PostgreSQL
-        if (empiricalPerformance is { ObservationCount: > 0 })
-        {
-            var replayWeight = Math.Clamp(empiricalPerformance.ObservationCount * 0.45f, 0.8f, 2.5f);
-            var regimeSlopeBps = (float)Math.Clamp(regime.TrendSlopeRate * 10_000m, -15m, 15m);
-            var regimeVolBps = (float)Math.Clamp(regime.VolatilityRate * 10_000m, 0.5m, 30m);
-            if (empiricalPerformance.AverageReward > 0m)
-            {
-                rows.Add(new MetaLabelRow
-                {
-                    Label = true,
-                    Weight = replayWeight,
-                    ZScore = -1.35f * dir,
-                    SlopeBpsPerBar = regimeSlopeBps,
-                    Momentum3BarBps = -2.0f * dir,
-                    VolatilityBps = regimeVolBps,
-                    OrderBookImbalance = 0.30f * dir,
-                    SsaStability = 0.75f,
-                });
-            }
-            else if (empiricalPerformance.AverageReward < 0m)
-            {
-                rows.Add(new MetaLabelRow
-                {
-                    Label = false,
-                    Weight = replayWeight,
-                    ZScore = -1.30f * dir,
-                    SlopeBpsPerBar = regimeSlopeBps,
-                    Momentum3BarBps = -3.5f * dir,
-                    VolatilityBps = regimeVolBps,
-                    OrderBookImbalance = -0.25f * dir,
-                    SsaStability = 0.35f,
-                });
-            }
-        }
-
-        var n = bars.Count;
-        const int lookback = 8;
-        var horizon = Math.Clamp(horizonBars, 1, 32);
-        var maxSampleSpan = Math.Max(1, n - horizon - 1 - lookback);
-
-        // Point-in-time walk-forward samples strictly prior to the current bar.
-        // Callers pass a horizon matched to the timeframe; the default remains
-        // 4 for existing 1m research/tests.
-        for (var i = lookback; i + horizon < n - 1; i++)
-        {
-            var (zScore, slopeBps, mom3Bps, volBps) = ComputePointInTimeFeatures(bars, i, lookback);
-            var minProfitableMoveBps = Math.Max(180.0m, volBps * 3.0m);
-            var maxAllowedStopBps = Math.Max(100.0m, volBps * 1.8m);
-            var hitTakeProfitBeforeStop = EvaluateChronologicalTripleBarrier(
-                bars,
-                i,
-                horizon,
-                side,
-                minProfitableMoveBps,
-                maxAllowedStopBps);
-            var recencyRatio = (float)(i - lookback) / maxSampleSpan;
-            var recencyWeight = 0.50f + (1.00f * recencyRatio);
-            rows.Add(new MetaLabelRow
-            {
-                Label = hitTakeProfitBeforeStop,
-                Weight = recencyWeight,
-                ZScore = (float)Math.Clamp(zScore, -4m, 4m),
-                SlopeBpsPerBar = (float)Math.Clamp(slopeBps, -15m, 15m),
-                Momentum3BarBps = (float)Math.Clamp(mom3Bps, -30m, 30m),
-                VolatilityBps = (float)Math.Clamp(volBps, 0.5m, 30m),
-                OrderBookImbalance = 0f,
-                SsaStability = 0.65f,
-            });
-        }
-
-        return rows;
-    }
+    private static MlNetSystem1Evaluation Unavailable(string reason, bool negativeShock = false) =>
+        new(0m, 0m, 0.50m, 0m, 0.50m, false) { AvailabilityReason = reason, IsNegativePriceShock = negativeShock };
 
     public static int ComputeHorizonBars(
         decimal targetMoveBps,
@@ -478,7 +191,14 @@ public static class MlNetSystem1DecisionEngine
         return false;
     }
 
-    private static (decimal ZScore, decimal SlopeBps, decimal Mom3Bps, decimal VolBps) ComputePointInTimeFeatures(
+    internal static MlFeatureVector CreateFeatureVector(IReadOnlyList<CloseBar> bars, int index, decimal? orderBookImbalance)
+    {
+        var (zScore, slope, momentum, dispersion) = ComputePointInTimeFeatures(bars, index, 8);
+        return new(Math.Clamp(zScore, -4m, 4m), Math.Clamp(slope, -15m, 15m),
+            Math.Clamp(momentum, -30m, 30m), Math.Clamp(dispersion, 0.5m, 30m), orderBookImbalance);
+    }
+
+    internal static (decimal ZScore, decimal SlopeBps, decimal Mom3Bps, decimal VolBps) ComputePointInTimeFeatures(
         IReadOnlyList<CloseBar> bars,
         int index,
         int lookback)
@@ -510,30 +230,6 @@ public static class MlNetSystem1DecisionEngine
             : 0m;
         var volBps = mean > 0m ? std / mean * 10_000m : 0m;
         return (zScore, slopeBps, mom3Bps, volBps);
-    }
-
-    private static MetaLabelRow BuildCurrentSample(
-        IReadOnlyList<CloseBar> bars,
-        MarketRegimeSnapshot regime,
-        decimal orderBookImbalance,
-        decimal ssaChangePointPValue)
-    {
-        var n = bars.Count;
-        var lookback = Math.Min(8, n - 1);
-        var (zScore, _, mom3Bps, _) = ComputePointInTimeFeatures(bars, n - 1, lookback);
-        var slopeBps = regime.TrendSlopeRate * 10_000m;
-        var volBps = regime.VolatilityRate * 10_000m;
-
-        return new MetaLabelRow
-        {
-            Label = false,
-            ZScore = (float)Math.Clamp(zScore, -4m, 4m),
-            SlopeBpsPerBar = (float)Math.Clamp(slopeBps, -15m, 15m),
-            Momentum3BarBps = (float)Math.Clamp(mom3Bps, -30m, 30m),
-            VolatilityBps = (float)Math.Clamp(volBps, 0.5m, 30m),
-            OrderBookImbalance = (float)Math.Clamp(orderBookImbalance, -1m, 1m),
-            SsaStability = (float)Math.Clamp(ssaChangePointPValue, 0m, 1m),
-        };
     }
 
     /// <summary>
@@ -580,7 +276,7 @@ public static class MlNetSystem1DecisionEngine
             return new MlProbabilityCalibrationReport(
                 BrierScore: 0m,
                 ExpectedCalibrationError: 0m,
-                BrierScoreThresholdMet: true,
+                BrierScoreThresholdMet: false,
                 TargetBrierThreshold: targetBrierThreshold,
                 TotalEvaluations: 0,
                 PositiveOutcomes: 0,
@@ -663,16 +359,24 @@ public static class MlNetSystem1DecisionEngine
         IReadOnlyList<CloseBar> bars,
         IReadOnlyList<WalkForwardWindow> windows,
         decimal orderBookImbalance = 0m,
-        decimal targetBrierThreshold = 0.15m)
+        decimal targetBrierThreshold = 0.15m,
+        MlDecisionArtifact? artifact = null,
+        string timeframe = "1m")
     {
         ArgumentNullException.ThrowIfNull(bars);
         ArgumentNullException.ThrowIfNull(windows);
+        if (artifact?.Metadata.Policy.UsesOrderBook is true)
+            return CalculateCalibrationReport([], targetBrierThreshold: targetBrierThreshold) with
+            { EvidenceUnavailableReason = "ML_HISTORICAL_BOOK_SNAPSHOTS_REQUIRED" };
+        if (artifact is null)
+            return CalculateCalibrationReport([], targetBrierThreshold: targetBrierThreshold) with
+            { EvidenceUnavailableReason = "ML_CALIBRATED_ARTIFACT_UNAVAILABLE" };
         if (bars.Count < 20 || windows.Count == 0)
         {
             return new MlProbabilityCalibrationReport(
                 BrierScore: 0m,
                 ExpectedCalibrationError: 0m,
-                BrierScoreThresholdMet: true,
+                BrierScoreThresholdMet: false,
                 TargetBrierThreshold: targetBrierThreshold,
                 TotalEvaluations: 0,
                 PositiveOutcomes: 0,
@@ -680,7 +384,7 @@ public static class MlNetSystem1DecisionEngine
                 EvaluatedAtUtc: DateTimeOffset.UtcNow);
         }
 
-        const int horizon = 4;
+        var horizon = artifact.Metadata.Policy.HorizonBars;
         var samples = new List<(decimal PredictedProb, bool ActualOutcome)>();
 
         foreach (var window in windows)
@@ -703,7 +407,9 @@ public static class MlNetSystem1DecisionEngine
                     closePrices,
                     pointInTimeBars[^1].CloseTimeUtc);
 
-                var eval = Evaluate(pointInTimeBars, regime, OrderSide.Buy, orderBookImbalance);
+                var eval = Evaluate(pointInTimeBars, regime, OrderSide.Buy, orderBookImbalance,
+                    horizonBars: horizon, artifact: artifact, timeframe: timeframe);
+                if (!eval.HasCalibratedProbability) continue;
 
                 var volBps = regime.VolatilityRate * 10_000m;
                 var minProfitableMoveBps = Math.Max(180.0m, volBps * 3.0m);
@@ -886,42 +592,4 @@ public static class MlNetSystem1DecisionEngine
         return q < 0 ? -z : z;
     }
 
-    private sealed class SsaInputRow
-    {
-        public float Value { get; set; }
-    }
-
-    private sealed class SsaOutputRow
-    {
-        [VectorType(4)]
-        public double[]? Prediction { get; set; }
-    }
-
-    private sealed class SpikeOutputRow
-    {
-        [VectorType(3)]
-        public double[]? Prediction { get; set; }
-    }
-
-    private sealed class MetaLabelRow
-    {
-        public bool Label { get; set; }
-        public float Weight { get; set; } = 1.0f;
-        public float ZScore { get; set; }
-        public float SlopeBpsPerBar { get; set; }
-        public float Momentum3BarBps { get; set; }
-        public float VolatilityBps { get; set; }
-        public float OrderBookImbalance { get; set; }
-        public float SsaStability { get; set; }
-    }
-
-    private sealed class MetaLabelPrediction
-    {
-        [ColumnName("PredictedLabel")]
-        public bool PredictedLabel { get; set; }
-
-        public float Probability { get; set; }
-
-        public float Score { get; set; }
-    }
 }

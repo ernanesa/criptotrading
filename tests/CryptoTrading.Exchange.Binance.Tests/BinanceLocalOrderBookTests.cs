@@ -386,6 +386,112 @@ public sealed class BinanceLocalOrderBookTests
         return book;
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(32)]
+    [InlineData(33)]
+    [InlineData(60)]
+    [InlineData(1000)]
+    public void TopDepthMetricsMatchSortedReferenceAcrossSmallAndLargeSelections(int levels)
+    {
+        var book = DeepBook();
+        var bid = book.Bids.Take(levels).ToArray();
+        var ask = book.Asks.Take(levels).ToArray();
+        var bidQty = bid.Sum(level => level.Quantity);
+        var askQty = ask.Sum(level => level.Quantity);
+        Assert.Equal(Math.Round((bidQty - askQty) / (bidQty + askQty), 4), book.CalculateTopDepthImbalance(levels));
+        Assert.Equal(Math.Round(Math.Min(bid.Sum(level => level.Price * level.Quantity), ask.Sum(level => level.Price * level.Quantity)), 2),
+            book.CalculateTopDepthLiquidityNotional(levels));
+    }
+
+    [Fact]
+    public void RepeatedHotDepthQueriesDoNotAllocateAfterWarmup()
+    {
+        var book = DeepBook();
+        for (var i = 0; i < 32; i++)
+        {
+            _ = book.CalculateTopDepthImbalance();
+            _ = book.CalculateTopDepthLiquidityNotional();
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        decimal checksum = 0m;
+        for (var i = 0; i < 1000; i++)
+            checksum += (book.CalculateTopDepthImbalance() ?? 0m) + (book.CalculateTopDepthLiquidityNotional() ?? 0m);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(checksum);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void ChangingSmallDepthSelectionsAlsoAvoidsHeapAllocations()
+    {
+        var book = DeepBook();
+        for (var i = 0; i < 32; i++) _ = book.CalculateTopDepthMetrics(i % 2 + 5);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        decimal checksum = 0m;
+        for (var i = 0; i < 1000; i++)
+        {
+            var metrics = book.CalculateTopDepthMetrics(i % 2 + 5);
+            checksum += (metrics.Imbalance ?? 0m) + (metrics.LiquidityNotional ?? 0m);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(checksum);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void LargeSnapshotPruningRetainsBestLevelsOnBothSides()
+    {
+        var book = DeepBook(maxLevels: 25);
+        Assert.Equal(Enumerable.Range(0, 25).Select(i => 1000m - i), book.Bids.Select(level => level.Price));
+        Assert.Equal(Enumerable.Range(0, 25).Select(i => 1001m + i), book.Asks.Select(level => level.Price));
+    }
+
+    [Fact]
+    public void CachedSnapshotsCannotBeMutatedAndRemainStableAfterBookUpdates()
+    {
+        var book = DeepBook();
+        var oldBids = book.Bids;
+        var oldQuantity = oldBids[0].Quantity;
+        var previousImbalance = book.CalculateTopDepthImbalance();
+        Assert.Same(oldBids, book.Bids);
+        Assert.Throws<NotSupportedException>(() => ((IList<BinanceOrderBookLevel>)oldBids)[0] = Level(9999m));
+        book.ApplyDelta(new("btcusdt@depth@100ms", "BTCUSDT", 2, DateTimeOffset.UnixEpoch, 102, 102, null,
+            [Level(1000m, oldQuantity + 5m)], []));
+        Assert.NotSame(oldBids, book.Bids);
+        Assert.Equal(oldQuantity, oldBids[0].Quantity);
+        Assert.Equal(oldQuantity + 5m, book.Bids[0].Quantity);
+        Assert.NotEqual(previousImbalance, book.CalculateTopDepthImbalance());
+        book.InvalidateForStreamDisconnect();
+        Assert.Empty(book.Bids);
+        Assert.Null(book.CalculateTopDepthImbalance());
+        Assert.Equal(oldQuantity, oldBids[0].Quantity);
+    }
+
+    [Fact]
+    public void OverflowingDepthNotionalInvalidatesBookRatherThanPublishingLiquidity()
+    {
+        var book = new BinanceLocalOrderBook("BTCUSDT");
+        book.ApplySnapshot(new("BTCUSDT", 100, [Level(1e20m, 1e20m)], [Level(1e20m + 1m, 1e20m)]));
+        book.ApplyDelta(new("btcusdt@depth@100ms", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, 101, 101, null, [], []));
+        Assert.Null(book.CalculateTopDepthLiquidityNotional());
+        Assert.True(book.ResyncRequired);
+        Assert.Null(book.CalculateTopDepthImbalance());
+        Assert.Empty(book.Bids);
+    }
+
+    private static BinanceLocalOrderBook DeepBook(int maxLevels = 80)
+    {
+        var book = new BinanceLocalOrderBook("BTCUSDT", maxLevels: maxLevels);
+        var bids = Enumerable.Range(0, 80).Reverse().Select(i => Level(1000m - i, i % 7 + 1)).ToArray();
+        var asks = Enumerable.Range(0, 80).Reverse().Select(i => Level(1001m + i, i % 5 + 2)).ToArray();
+        book.ApplySnapshot(new("BTCUSDT", 100, bids, asks));
+        book.ApplyDelta(new("btcusdt@depth@100ms", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, 101, 101, null, [], []));
+        Assert.True(book.IsSynchronized);
+        return book;
+    }
+
     private static BinanceOrderBookSnapshot Snapshot(long updateId) =>
         new("BTCUSDT", updateId, [Level(100)], [Level(101)]);
 

@@ -1950,6 +1950,10 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         ValidateOpenOrder(order);
         ValidateAccountStreamStatus(order.Status, isTerminal);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await LockOrderLifecycleAsync(connection, transaction, order.ClientOrderId.Trim(), cancellationToken).ConfigureAwait(false);
+        // The upsert locks this order until commit, serializing stream updates
+        // together with lifecycle and reservation effects for the same identity.
         await using var command = new NpgsqlCommand(
             """
             INSERT INTO trading.reconciliation_open_orders
@@ -1985,8 +1989,10 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
               AND (trading.reconciliation_open_orders.original_quantity IS NULL OR EXCLUDED.original_quantity IS NULL
                    OR trading.reconciliation_open_orders.original_quantity = EXCLUDED.original_quantity)
               AND COALESCE(EXCLUDED.cumulative_executed_quantity, trading.reconciliation_open_orders.cumulative_executed_quantity, 0)
-                  >= COALESCE(trading.reconciliation_open_orders.cumulative_executed_quantity, 0);
-            """, connection);
+                  >= COALESCE(trading.reconciliation_open_orders.cumulative_executed_quantity, 0)
+              AND NOT (EXCLUDED.status = 'NEW'
+                  AND trading.reconciliation_open_orders.status IN ('PARTIALLY_FILLED', 'PENDING_CANCEL'));
+            """, connection, transaction);
         command.Parameters.Add(Parameter("symbol", NpgsqlDbType.Varchar, order.Symbol.Trim().ToUpperInvariant()));
         command.Parameters.Add(Parameter("order_id", NpgsqlDbType.Bigint, order.OrderId.HasValue ? order.OrderId.Value : DBNull.Value));
         command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
@@ -1997,6 +2003,25 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         command.Parameters.Add(Parameter("active", NpgsqlDbType.Boolean, !isTerminal));
         command.Parameters.Add(Parameter("exchange_updated_at", NpgsqlDbType.TimestampTz, (order.ExchangeUpdatedAtUtc ?? order.UpdatedAtUtc).UtcDateTime));
         var updated = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+        if (!updated)
+        {
+            return false;
+        }
+
+        await using (var clockCheck = new NpgsqlCommand(
+            "SELECT EXISTS (SELECT 1 FROM trading.order_lifecycle_events WHERE client_order_id = @client_order_id AND occurred_at > @occurred_at);",
+            connection, transaction))
+        {
+            clockCheck.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
+            clockCheck.Parameters.Add(Parameter("occurred_at", NpgsqlDbType.TimestampTz, (order.ExchangeUpdatedAtUtc ?? order.UpdatedAtUtc).UtcDateTime));
+            if (await clockCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
+            {
+                // Preserve the original evidence clock. A conflict must not
+                // silently omit a terminal event while releasing its capital.
+                throw new InvalidOperationException("ACCOUNT_STREAM_LIFECYCLE_CLOCK_CONFLICT_REQUIRES_RECONCILIATION");
+            }
+        }
+
         var mappedLifecycleStatus = order.Status.Trim().ToUpperInvariant() switch
         {
             "FILLED" => "Filled",
@@ -2025,17 +2050,18 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                     @occurred_at,
                     @exchange_order_id
                 FROM (
-                    SELECT to_status
+                    SELECT to_status, occurred_at
                     FROM trading.order_lifecycle_events
                     WHERE client_order_id = @client_order_id
-                    ORDER BY occurred_at DESC, event_id DESC
+                    ORDER BY occurred_at DESC, journal_sequence DESC
                     LIMIT 1
                 ) AS latest
                 WHERE latest.to_status <> @to_status
+                  AND latest.occurred_at <= @occurred_at
                   AND latest.to_status NOT IN ('Filled', 'Cancelled', 'Rejected', 'Expired')
                 ON CONFLICT (idempotency_key) DO NOTHING;
                 """,
-                connection);
+                connection, transaction);
             lifecycleCommand.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, Guid.NewGuid()));
             lifecycleCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
             lifecycleCommand.Parameters.Add(Parameter("to_status", NpgsqlDbType.Varchar, mappedLifecycleStatus));
@@ -2055,12 +2081,13 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
                 WHERE client_order_id = @client_order_id
                   AND status IN ('Reserved', 'CommittedToExchange', 'PartiallyFilled');
                 """,
-                connection);
+                connection, transaction);
             releaseCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, order.ClientOrderId.Trim()));
             _ = await releaseCommand.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        return updated;
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     public async Task<bool> ApplyAuthoritativeOpenOrderSnapshotAsync(
@@ -2284,6 +2311,8 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         }
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await LockOrderLifecycleAsync(connection, transaction, lifecycleEvent.ClientOrderId.Trim(), cancellationToken).ConfigureAwait(false);
         await using var command = new NpgsqlCommand(
             """
             INSERT INTO trading.order_lifecycle_events
@@ -2291,7 +2320,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             VALUES (@event_id, @client_order_id, @from_status, @to_status, @idempotency_key, @occurred_at, @exchange_order_id)
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING event_id;
-            """, connection);
+            """, connection, transaction);
         command.Parameters.Add(Parameter("event_id", NpgsqlDbType.Uuid, lifecycleEvent.EventId));
         command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, lifecycleEvent.ClientOrderId.Trim()));
         command.Parameters.Add(Parameter("from_status", NpgsqlDbType.Varchar, transition.From.ToString()));
@@ -2302,6 +2331,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         var inserted = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (inserted is not null and not DBNull)
         {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
 
@@ -2310,7 +2340,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             SELECT event_id, client_order_id, from_status, to_status, occurred_at, exchange_order_id
             FROM trading.order_lifecycle_events
             WHERE idempotency_key = @idempotency_key;
-            """, connection);
+            """, connection, transaction);
         existingCommand.Parameters.Add(Parameter("idempotency_key", NpgsqlDbType.Varchar, transition.IdempotencyKey.Value));
         await using var reader = await existingCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -2331,6 +2361,8 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             throw new InvalidOperationException("The lifecycle idempotency key is already associated with different event data.");
         }
 
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return false;
     }
 
@@ -2345,7 +2377,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             SELECT event_id, client_order_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id
             FROM trading.order_lifecycle_events
             WHERE client_order_id = @client_order_id
-            ORDER BY occurred_at ASC;
+            ORDER BY occurred_at, journal_sequence;
             """, connection);
         command.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, clientOrderId.Trim()));
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -2481,7 +2513,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             JOIN LATERAL (
                 SELECT to_status FROM trading.order_lifecycle_events
                 WHERE client_order_id = context.client_order_id
-                ORDER BY occurred_at DESC, event_id DESC LIMIT 1
+                ORDER BY occurred_at DESC, journal_sequence DESC LIMIT 1
             ) AS lifecycle ON TRUE
             WHERE context.expires_at IS NOT NULL AND context.expires_at <= @observed_at
               AND lifecycle.to_status IN ('Acknowledged', 'PartiallyFilled')
@@ -2562,6 +2594,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         var command = resolution.Command;
         var outcome = resolution.Resolution;
         if (outcome.ProjectedStatus is not (OrderStatus.Filled or OrderStatus.Cancelled or OrderStatus.Rejected or OrderStatus.Expired)
+            || !string.Equals(resolution.LifecycleEvent.ClientOrderId.Trim(), command.ClientOrderId.Value, StringComparison.Ordinal)
             || resolution.LifecycleEvent.Transition.To != outcome.ProjectedStatus
             || outcome.ExecutedQuantity.Value < 0m || outcome.ExecutedQuantity.Value > command.OriginalQuantity.Value
             || outcome.ResidualQuantity.Value != command.OriginalQuantity.Value - outcome.ExecutedQuantity.Value)
@@ -2571,6 +2604,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await LockOrderLifecycleAsync(connection, transaction, command.ClientOrderId.Value, cancellationToken).ConfigureAwait(false);
         await InsertLifecycleEventAsync(connection, transaction, resolution.LifecycleEvent, cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction,
             "UPDATE trading.reconciliation_open_orders SET active = FALSE, updated_at = transaction_timestamp() WHERE client_order_id = @client_order_id;",
@@ -2728,7 +2762,7 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             SELECT event_id, from_status, to_status, idempotency_key, occurred_at, exchange_order_id
             FROM trading.order_lifecycle_events
             WHERE client_order_id = @client_order_id
-            ORDER BY occurred_at, event_id;
+            ORDER BY occurred_at, journal_sequence;
             """, connection);
         lifecycleCommand.Parameters.Add(Parameter("client_order_id", NpgsqlDbType.Varchar, context.ClientOrderId));
         await using var lifecycleReader = await lifecycleCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -3441,6 +3475,11 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? new(ParseRuntimeState(reader.GetString(0)), ParseRuntimeState(reader.GetString(1)), revision, reader.GetString(2), new DateTimeOffset(reader.GetFieldValue<DateTime>(3).ToUniversalTime()), reader.IsDBNull(4) ? null : reader.GetString(4)) : null;
     }
+
+    private static Task LockOrderLifecycleAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string clientOrderId, CancellationToken cancellationToken) =>
+        ExecuteAsync(connection, transaction,
+            "SELECT pg_advisory_xact_lock(hashtextextended(@lifecycle_identity, 0));",
+            [Parameter("lifecycle_identity", NpgsqlDbType.Text, "order-lifecycle:" + clientOrderId)], cancellationToken);
 
     private static async Task InsertLifecycleEventAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, OrderLifecycleEvent lifecycleEvent, CancellationToken cancellationToken)
     {

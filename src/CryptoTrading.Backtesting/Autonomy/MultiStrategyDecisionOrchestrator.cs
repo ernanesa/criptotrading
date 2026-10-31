@@ -532,7 +532,8 @@ public static class MultiStrategyDecisionOrchestrator
 /// <summary>
 /// Point-in-time SOTA technical indicator snapshot computed from closed OHLCV bars:
 /// Wilder's True OHLC ATR, ADX (+DI/-DI), Rolling VWAP + Relative Volume (RVOL), Wilder's 14-period RSI,
-/// Cumulative Volume Delta (CVD) Imbalance, and Volume-Synchronized Probability of Informed Trading (VPIN).
+/// Rolling signed volume imbalance and absolute imbalance of time bars.
+/// The latter is a candle proxy, not volume-synchronized VPIN or a toxicity probability.
 /// </summary>
 public readonly record struct TechnicalIndicatorSnapshot(
     decimal Atr,
@@ -545,10 +546,13 @@ public readonly record struct TechnicalIndicatorSnapshot(
     decimal VwapDeviationBps,
     decimal RelativeVolume,
     decimal CvdImbalance = 0m,
-    decimal Vpin = 0m)
+    decimal AbsoluteBarVolumeImbalance = 0m)
 {
+    public bool IsWilderReady { get; init; }
+    public bool IsAdxReady { get; init; }
+
     public static TechnicalIndicatorSnapshot Empty(decimal closePrice) =>
-        new(0m, 0m, 15m, 15m, 15m, 50m, closePrice, 0m, 1.0m, 0m, 0m);
+        new(0m, 0m, 0m, 0m, 0m, 50m, closePrice, 0m, 1.0m, 0m, 0m);
 }
 
 public static class TechnicalIndicatorCalculator
@@ -562,18 +566,14 @@ public static class TechnicalIndicatorCalculator
         }
 
         var n = bars.Count;
-        var effectivePeriod = Math.Min(period, n - 1);
-        var startIdx = n - effectivePeriod;
         var latestClose = bars[^1].ClosePrice.Value;
 
-        // 1. True OHLC ATR & Wilder's Directional Movement (+DI, -DI, ADX)
-        decimal trSum = 0m;
-        decimal plusDmSum = 0m;
-        decimal minusDmSum = 0m;
-        decimal gainSum = 0m;
-        decimal lossSum = 0m;
+        // Seed each RMA with period observations, then update without rounding.
+        decimal atr = 0m, plusDm = 0m, minusDm = 0m, avgGain = 0m, avgLoss = 0m;
+        decimal dxSeed = 0m, adx = 0m;
+        var dxCount = 0;
 
-        for (var i = startIdx; i < n; i++)
+        for (var i = 1; i < n; i++)
         {
             var curr = bars[i];
             var prev = bars[i - 1];
@@ -581,46 +581,68 @@ public static class TechnicalIndicatorCalculator
             var highPrevClose = Math.Abs(curr.HighPrice.Value - prev.ClosePrice.Value);
             var lowPrevClose = Math.Abs(curr.LowPrice.Value - prev.ClosePrice.Value);
             var tr = Math.Max(highLow, Math.Max(highPrevClose, lowPrevClose));
-            trSum += tr;
-
             var upMove = curr.HighPrice.Value - prev.HighPrice.Value;
             var downMove = prev.LowPrice.Value - curr.LowPrice.Value;
-            if (upMove > downMove && upMove > 0m)
-            {
-                plusDmSum += upMove;
-            }
-
-            if (downMove > upMove && downMove > 0m)
-            {
-                minusDmSum += downMove;
-            }
-
+            var positiveDm = upMove > downMove && upMove > 0m ? upMove : 0m;
+            var negativeDm = downMove > upMove && downMove > 0m ? downMove : 0m;
             var change = curr.ClosePrice.Value - prev.ClosePrice.Value;
-            if (change > 0m)
+            var gain = Math.Max(change, 0m);
+            var loss = Math.Max(-change, 0m);
+            if (i <= period)
             {
-                gainSum += change;
+                atr += tr;
+                plusDm += positiveDm;
+                minusDm += negativeDm;
+                avgGain += gain;
+                avgLoss += loss;
+                if (i < period) continue;
+                atr /= period;
+                plusDm /= period;
+                minusDm /= period;
+                avgGain /= period;
+                avgLoss /= period;
             }
-            else if (change < 0m)
+            else
             {
-                lossSum += -change;
+                atr += (tr - atr) / period;
+                plusDm += (positiveDm - plusDm) / period;
+                minusDm += (negativeDm - minusDm) / period;
+                avgGain += (gain - avgGain) / period;
+                avgLoss += (loss - avgLoss) / period;
+            }
+
+            var dmTotal = plusDm + minusDm;
+            var dx = dmTotal > 0m ? 100m * Math.Abs(plusDm - minusDm) / dmTotal : 0m;
+            dxCount++;
+            if (dxCount <= period)
+            {
+                dxSeed += dx;
+                if (dxCount == period) adx = dxSeed / period;
+            }
+            else
+            {
+                adx += (dx - adx) / period;
             }
         }
 
-        var atr = trSum / effectivePeriod;
-        var atrBps = latestClose > 0m ? Math.Round(atr / latestClose * 10_000m, 4) : 0m;
-        var plusDi = trSum > 0m ? Math.Clamp(Math.Round(plusDmSum / trSum * 100m, 2), 0m, 100m) : 0m;
-        var minusDi = trSum > 0m ? Math.Clamp(Math.Round(minusDmSum / trSum * 100m, 2), 0m, 100m) : 0m;
-        var diSum = plusDi + minusDi;
-        var adx = diSum > 0m ? Math.Clamp(Math.Round(Math.Abs(plusDi - minusDi) / diSum * 100m, 2), 0m, 100m) : 0m;
+        if (n - 1 < period)
+        {
+            atr /= n - 1;
+            plusDm /= n - 1;
+            minusDm /= n - 1;
+            avgGain /= n - 1;
+            avgLoss /= n - 1;
+        }
 
-        // 2. Wilder's Relative Strength Index (RSI)
-        var avgGain = gainSum / effectivePeriod;
-        var avgLoss = lossSum / effectivePeriod;
+        var atrBps = latestClose > 0m ? Math.Round(atr / latestClose * 10_000m, 4) : 0m;
+        var plusDi = atr > 0m ? Math.Clamp(Math.Round(plusDm / atr * 100m, 2), 0m, 100m) : 0m;
+        var minusDi = atr > 0m ? Math.Clamp(Math.Round(minusDm / atr * 100m, 2), 0m, 100m) : 0m;
+
         var rsi = avgLoss <= 0m
             ? (avgGain > 0m ? 100m : 50m)
             : Math.Clamp(Math.Round(100m - (100m / (1m + (avgGain / avgLoss))), 2), 0m, 100m);
 
-        // 3. Rolling Window VWAP, Relative Volume (RVOL), CVD Imbalance & VPIN
+        // 3. Rolling VWAP, RVOL, signed volume and absolute time-bar imbalance.
         var vwapWindow = Math.Min(20, n);
         var vwapStart = n - vwapWindow;
         decimal pvSum = 0m;
@@ -664,14 +686,14 @@ public static class TechnicalIndicatorCalculator
         var cvdImbalance = aggressorVolSum > 0m
             ? Math.Clamp(Math.Round(cvdDeltaSum / aggressorVolSum, 4), -1m, 1m)
             : 0m;
-        var vpin = aggressorVolSum > 0m
+        var absoluteBarVolumeImbalance = aggressorVolSum > 0m
             ? Math.Clamp(Math.Round(absOrderImbalanceSum / aggressorVolSum, 4), 0m, 1m)
             : 0m;
 
         return new TechnicalIndicatorSnapshot(
             Math.Round(atr, 8),
             atrBps,
-            adx,
+            dxCount >= period ? Math.Clamp(Math.Round(adx, 2), 0m, 100m) : 0m,
             plusDi,
             minusDi,
             rsi,
@@ -679,6 +701,10 @@ public static class TechnicalIndicatorCalculator
             vwapDeviationBps,
             rvol,
             cvdImbalance,
-            vpin);
+            absoluteBarVolumeImbalance)
+        {
+            IsWilderReady = n - 1 >= period,
+            IsAdxReady = dxCount >= period
+        };
     }
 }
