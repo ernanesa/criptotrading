@@ -54,7 +54,7 @@ public sealed class BoundedJsonLineFileLoggerProvider : ILoggerProvider
             FullMode = BoundedChannelFullMode.DropWrite,
             SingleReader = true,
             SingleWriter = false
-        });
+        }, _ => Interlocked.Increment(ref droppedRecords));
 
         writerTask = Task.Run(WriteLoopAsync);
     }
@@ -107,7 +107,7 @@ public sealed class BoundedJsonLineFileLoggerProvider : ILoggerProvider
             // Logging must never crash the trading host. The durable financial
             // audit trail remains authoritative if file logging fails.
             await Console.Error.WriteLineAsync(
-                $"JSONL file logger stopped: {exception.GetType().Name}: {exception.Message}").ConfigureAwait(false);
+                $"JSONL file logger stopped: {exception.GetType().Name}").ConfigureAwait(false);
         }
         finally
         {
@@ -209,7 +209,7 @@ public sealed class BoundedJsonLineFileLoggerProvider : ILoggerProvider
                 return;
             }
 
-            var message = formatter(state, exception);
+            var message = SecretRedactor.RedactEmbeddedSecrets(formatter(state, exception));
             _ = provider.TryWrite(new LogRecord(
                 DateTimeOffset.UtcNow,
                 logLevel.ToString(),
@@ -218,8 +218,8 @@ public sealed class BoundedJsonLineFileLoggerProvider : ILoggerProvider
                 eventId.Name,
                 message,
                 exception?.GetType().FullName,
-                exception?.Message,
-                logLevel >= LogLevel.Error ? exception?.StackTrace : null));
+                exception?.Message is { } exceptionMessage ? SecretRedactor.RedactEmbeddedSecrets(exceptionMessage) : null,
+                logLevel >= LogLevel.Error && exception?.StackTrace is { } stack ? SecretRedactor.RedactEmbeddedSecrets(stack) : null));
         }
     }
 }

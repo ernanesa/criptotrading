@@ -22,14 +22,23 @@ public sealed record MarketRegimeSnapshot(
     decimal VolatilityRate,
     string Reason)
 {
-    public bool FavorsTrendFollowing => Regime is MarketRegime.BullTrend or MarketRegime.BearTrend;
-    public bool FavorsMeanReversion => Regime is MarketRegime.MeanRevertingRange;
-    public bool ProhibitsNewExposure => Regime is MarketRegime.HighVolatilityChop or MarketRegime.IlliquidOrStale;
+    // VolatilityRate remains the legacy price CV for existing policies/models.
+    // It must not be interpreted as the sigma of returns.
+    public decimal PriceDispersionRate => VolatilityRate;
+    public decimal ReturnSigmaPerBar { get; init; }
+    public decimal EfficiencyRatio { get; init; }
+    public bool HasCompleteMetrics { get; init; } = true;
+    public bool LegacyDispersionLimitBreached { get; init; }
+    public decimal? AppliedMaxReturnSigmaPerBar { get; init; }
+    public bool FavorsTrendFollowing => !ProhibitsNewExposure && (Regime is MarketRegime.BullTrend or MarketRegime.BearTrend);
+    public bool FavorsMeanReversion => !ProhibitsNewExposure && Regime is MarketRegime.MeanRevertingRange;
+    public bool ProhibitsNewExposure => !HasCompleteMetrics || LegacyDispersionLimitBreached || Regime is MarketRegime.HighVolatilityChop or MarketRegime.IlliquidOrStale;
 }
 
 /// <summary>
 /// Deterministic statistical market regime classifier.
-/// Computes normalized linear trend slope and coefficient of variation to segment market conditions.
+/// Measures per-bar return sigma and trend efficiency independently of the
+/// legacy price-dispersion exposure guard. No return limit is inferred from CV.
 /// </summary>
 public static class MarketRegimeClassifier
 {
@@ -41,9 +50,14 @@ public static class MarketRegimeClassifier
         IReadOnlyList<decimal> closePrices,
         DateTimeOffset observedAtUtc,
         decimal maxVolatilityThreshold = DefaultMaxVolatilityThreshold,
-        decimal trendSlopeThreshold = DefaultTrendSlopeThreshold)
+        decimal trendSlopeThreshold = DefaultTrendSlopeThreshold,
+        decimal? maxReturnSigmaPerBar = null)
     {
         ArgumentNullException.ThrowIfNull(closePrices);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxVolatilityThreshold);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trendSlopeThreshold);
+        if (maxReturnSigmaPerBar is <= 0m)
+            throw new ArgumentOutOfRangeException(nameof(maxReturnSigmaPerBar));
         if (observedAtUtc.Offset != TimeSpan.Zero)
         {
             throw new ArgumentException("Observation timestamp must be UTC.", nameof(observedAtUtc));
@@ -58,11 +72,12 @@ public static class MarketRegimeClassifier
                 Confidence: 0.0m,
                 TrendSlopeRate: 0.0m,
                 VolatilityRate: 0.0m,
-                "INSUFFICIENT_DATA: Requires at least 5 price observations.");
+                "INSUFFICIENT_DATA: Requires at least 5 price observations.") { HasCompleteMetrics = false };
         }
 
         var n = closePrices.Count;
         decimal sum = 0m;
+        decimal returnMean = 0m, returnM2 = 0m, path = 0m;
         for (var i = 0; i < n; i++)
         {
             if (closePrices[i] <= 0m)
@@ -70,6 +85,15 @@ public static class MarketRegimeClassifier
                 throw new ArgumentOutOfRangeException(nameof(closePrices), "Price must be strictly positive.");
             }
             sum += closePrices[i];
+            if (i > 0)
+            {
+                var change = closePrices[i] - closePrices[i - 1];
+                var value = change / closePrices[i - 1];
+                var delta = value - returnMean;
+                returnMean += delta / i;
+                returnM2 += delta * (value - returnMean);
+                path += Math.Abs(change);
+            }
         }
 
         var mean = sum / n;
@@ -110,56 +134,49 @@ public static class MarketRegimeClassifier
         }
 
         var trendSlopeRate = mean > 0m ? rawSlope / mean : 0m;
-
-        if (volatilityRate > maxVolatilityThreshold)
+        // The conversion is confined to an analytical statistic, never money.
+        var returnSigma = (decimal)Math.Sqrt((double)Math.Max(0m, returnM2 / (n - 2)));
+        var efficiency = path > 0m ? Math.Abs(closePrices[^1] - closePrices[0]) / path : 0m;
+        var dispersionBreached = volatilityRate > maxVolatilityThreshold;
+        MarketRegime regime;
+        decimal confidence;
+        string reason;
+        if (maxReturnSigmaPerBar is { } returnLimit && returnSigma > returnLimit)
         {
-            return new MarketRegimeSnapshot(
-                symbol,
-                observedAtUtc,
-                MarketRegime.HighVolatilityChop,
-                Confidence: 0.90m,
-                trendSlopeRate,
-                volatilityRate,
-                $"CHOP: Volatility {volatilityRate:P2} exceeds threshold {maxVolatilityThreshold:P2}.");
+            regime = MarketRegime.HighVolatilityChop;
+            confidence = 0.90m;
+            reason = $"CHOP: Return sigma per bar {returnSigma:P2} exceeds explicit limit {returnLimit:P2}.";
+        }
+        else if (trendSlopeRate > trendSlopeThreshold)
+        {
+            regime = MarketRegime.BullTrend;
+            confidence = Math.Min(1.0m, 0.70m + (trendSlopeRate / trendSlopeThreshold * 0.1m));
+            reason = $"BULL: Slope {trendSlopeRate:P3} exceeds threshold {trendSlopeThreshold:P3}.";
+        }
+        else if (trendSlopeRate < -trendSlopeThreshold)
+        {
+            regime = MarketRegime.BearTrend;
+            confidence = Math.Min(1.0m, 0.70m + (Math.Abs(trendSlopeRate) / trendSlopeThreshold * 0.1m));
+            reason = $"BEAR: Slope {trendSlopeRate:P3} is below threshold -{trendSlopeThreshold:P3}.";
+        }
+        else
+        {
+            regime = MarketRegime.MeanRevertingRange;
+            confidence = n >= 20
+                ? Math.Round(Math.Clamp(0.95m - (Math.Abs(trendSlopeRate) / trendSlopeThreshold * 0.35m), 0.55m, 0.95m), 4)
+                : 0.85m;
+            reason = $"RANGE: Slope {trendSlopeRate:P3}; return sigma per bar {returnSigma:P2}.";
         }
 
-        if (trendSlopeRate > trendSlopeThreshold)
+        if (dispersionBreached)
+            reason += $" PRICE_DISPERSION_GUARD: Legacy price CV {volatilityRate:P2} exceeds {maxVolatilityThreshold:P2}.";
+
+        return new MarketRegimeSnapshot(symbol, observedAtUtc, regime, confidence, trendSlopeRate, volatilityRate, reason)
         {
-            var confidence = Math.Min(1.0m, 0.70m + (trendSlopeRate / trendSlopeThreshold * 0.1m));
-            return new MarketRegimeSnapshot(
-                symbol,
-                observedAtUtc,
-                MarketRegime.BullTrend,
-                confidence,
-                trendSlopeRate,
-                volatilityRate,
-                $"BULL: Slope {trendSlopeRate:P3} exceeds threshold {trendSlopeThreshold:P3}.");
-        }
-
-        if (trendSlopeRate < -trendSlopeThreshold)
-        {
-            var confidence = Math.Min(1.0m, 0.70m + (Math.Abs(trendSlopeRate) / trendSlopeThreshold * 0.1m));
-            return new MarketRegimeSnapshot(
-                symbol,
-                observedAtUtc,
-                MarketRegime.BearTrend,
-                confidence,
-                trendSlopeRate,
-                volatilityRate,
-                $"BEAR: Slope {trendSlopeRate:P3} is below threshold -{trendSlopeThreshold:P3}.");
-        }
-
-        var rangeConfidence = n >= 20 && trendSlopeThreshold > 0m
-            ? Math.Round(Math.Clamp(0.95m - (Math.Abs(trendSlopeRate) / trendSlopeThreshold * 0.35m), 0.55m, 0.95m), 4)
-            : 0.85m;
-
-        return new MarketRegimeSnapshot(
-            symbol,
-            observedAtUtc,
-            MarketRegime.MeanRevertingRange,
-            Confidence: rangeConfidence,
-            trendSlopeRate,
-            volatilityRate,
-            $"RANGE: Slope {trendSlopeRate:P3} and volatility {volatilityRate:P2} within bounds.");
+            ReturnSigmaPerBar = returnSigma,
+            EfficiencyRatio = efficiency,
+            LegacyDispersionLimitBreached = dispersionBreached,
+            AppliedMaxReturnSigmaPerBar = maxReturnSigmaPerBar
+        };
     }
 }

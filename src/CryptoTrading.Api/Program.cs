@@ -572,6 +572,7 @@ localDiagnostics.MapGet("/trading/trades", async (
 
 localDiagnostics.MapGet("/portfolio/performance", async (
     [Microsoft.AspNetCore.Mvc.FromQuery] string? symbol,
+    HttpContext context,
     IServiceProvider services,
     CancellationToken cancellationToken) =>
 {
@@ -604,7 +605,9 @@ localDiagnostics.MapGet("/portfolio/performance", async (
     }
     catch (Exception ex)
     {
-        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", $"Durable portfolio snapshots could not be read: {ex.Message}");
+        ApiLog.UnhandledRequestFailure(app.Logger, "GET", "/portfolio/performance",
+            context.Response.Headers["X-Correlation-Id"].ToString(), ex.GetType().Name);
+        return ApiProblem.ServiceUnavailable("PORTFOLIO_HISTORY_UNAVAILABLE", "Durable portfolio snapshots could not be read.");
     }
 
     var responseTimeUtc = DateTimeOffset.UtcNow;
@@ -700,11 +703,16 @@ localDiagnostics.MapGet("/operational/regimes/current", async (
             confidence = 0m,
             trendSlopeRate = 0m,
             volatilityRate = 0m,
+            priceDispersionRate = 0m,
+            returnSigmaPerBar = 0m,
+            efficiencyRatio = 0m,
+            hasCompleteMetrics = false,
+            legacyDispersionLimitBreached = false,
             reason = "NO_REGIME_RECORDED_YET",
             observedAtUtc = DateTimeOffset.UtcNow,
             favorsTrendFollowing = false,
             favorsMeanReversion = false,
-            prohibitsNewExposure = false
+            prohibitsNewExposure = true
         });
     }
 
@@ -715,6 +723,12 @@ localDiagnostics.MapGet("/operational/regimes/current", async (
         confidence = latest.Confidence,
         trendSlopeRate = latest.TrendSlopeRate,
         volatilityRate = latest.VolatilityRate,
+        priceDispersionRate = latest.PriceDispersionRate,
+        returnSigmaPerBar = latest.ReturnSigmaPerBar,
+        efficiencyRatio = latest.EfficiencyRatio,
+        hasCompleteMetrics = latest.HasCompleteMetrics,
+        legacyDispersionLimitBreached = latest.LegacyDispersionLimitBreached,
+        appliedMaxReturnSigmaPerBar = latest.AppliedMaxReturnSigmaPerBar,
         reason = latest.Reason,
         observedAtUtc = latest.ObservedAtUtc,
         favorsTrendFollowing = latest.FavorsTrendFollowing,
@@ -744,6 +758,13 @@ localDiagnostics.MapGet("/operational/regimes/history", async (
         confidence = h.Confidence,
         trendSlopeRate = h.TrendSlopeRate,
         volatilityRate = h.VolatilityRate,
+        priceDispersionRate = h.PriceDispersionRate,
+        returnSigmaPerBar = h.ReturnSigmaPerBar,
+        efficiencyRatio = h.EfficiencyRatio,
+        hasCompleteMetrics = h.HasCompleteMetrics,
+        legacyDispersionLimitBreached = h.LegacyDispersionLimitBreached,
+        appliedMaxReturnSigmaPerBar = h.AppliedMaxReturnSigmaPerBar,
+        prohibitsNewExposure = h.ProhibitsNewExposure,
         reason = h.Reason,
         observedAtUtc = h.ObservedAtUtc
     }));

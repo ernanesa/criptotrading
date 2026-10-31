@@ -88,6 +88,8 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AutonomySymbol = builder.Configuration["WORKER_AUTONOMY_SYMBOL"] ?? "BTCUSDT";
         options.AutonomySymbols = builder.Configuration["WORKER_AUTONOMY_SYMBOLS"] ?? string.Empty;
         options.AutonomyInterval = builder.Configuration["WORKER_AUTONOMY_INTERVAL"] ?? "1m";
+        options.AutonomyMlArtifactPath = builder.Configuration["WORKER_ML_ARTIFACT_PATH"];
+        options.AutonomyMlArtifactSha256 = builder.Configuration["WORKER_ML_ARTIFACT_SHA256"];
         options.AutonomyKlineLimit = builder.Configuration.GetValue("WORKER_AUTONOMY_KLINE_LIMIT", 100);
         var entryTargetRaw = builder.Configuration["WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL"]
             ?? builder.Configuration["WORKER_ENTRY_TARGET_NOTIONAL"];
@@ -189,10 +191,13 @@ if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false) ||
         new CryptoTrading.Backtesting.Autonomy.BaselineDecisionCycle(
             CryptoTrading.Backtesting.Strategies.TrendFollowingParameters.BtcUsdtBaseline));
     builder.Services.AddSingleton<CryptoTrading.Domain.Research.ContextualMetaAllocator>();
+    builder.Services.AddSingleton<MlArtifactState>();
+    builder.Services.AddSingleton<CryptoTrading.Backtesting.Autonomy.IMlDecisionArtifactProvider>(sp => sp.GetRequiredService<MlArtifactState>());
     builder.Services.AddSingleton(sp =>
         new CryptoTrading.Backtesting.Autonomy.AdaptiveDecisionCycle(
             sp.GetService<CryptoTrading.Domain.Research.ContextualMetaAllocator>(),
-            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ResolveQuarantinedStrategies()));
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>().Value.ResolveQuarantinedStrategies(),
+            sp.GetRequiredService<CryptoTrading.Backtesting.Autonomy.IMlDecisionArtifactProvider>()));
 }
 if (builder.Configuration.GetValue("WORKER_PERSISTENCE_ENABLED", false))
 {
@@ -375,6 +380,7 @@ builder.Services.AddSingleton<DiskSpaceSafetyGuard>(serviceProvider =>
 builder.Services.AddHostedService<CryptoTrading.Worker.TradingWorker>();
 if (builder.Configuration.GetValue("WORKER_AUTONOMY_ENABLED", false))
 {
+    builder.Services.AddHostedService<MlArtifactLoadingHostedService>();
     builder.Services.AddHostedService<AutonomyCycleHostedService>();
 }
 builder.Services.AddHostedService<ShadowDrillHostedService>();

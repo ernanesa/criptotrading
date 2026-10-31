@@ -1,7 +1,9 @@
 using System.Net;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
+using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Persistence;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -9,6 +11,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace CryptoTrading.Api.Tests;
@@ -549,6 +552,89 @@ public sealed class OperationalApiEndpointsTests
         var response = await client.GetAsync(new Uri("/portfolio/performance?symbol=DOGEBUSD", UriKind.Relative), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetPortfolioPerformanceDoesNotExposeStorageExceptionDetails()
+    {
+        using var capture = new ErrorCorrelationLoggerProvider();
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+        {
+            services.AddSingleton<IPortfolioNavSnapshotStore>(new ThrowingPortfolioSnapshotStore());
+            services.AddLogging(builder => builder.AddProvider(capture));
+        });
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Correlation-Id", "synthetic-correlation");
+        using var response = await client.GetAsync(new Uri("/portfolio/performance", UriKind.Relative), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("PORTFOLIO_HISTORY_UNAVAILABLE", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic-internal-storage-detail", body, StringComparison.Ordinal);
+        Assert.Equal("synthetic-correlation", Assert.Single(response.Headers.GetValues("X-Correlation-Id")));
+        Assert.Contains("synthetic-correlation", capture.CorrelationIds);
+    }
+
+    private sealed class ErrorCorrelationLoggerProvider : ILoggerProvider
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> CorrelationIds { get; } = new();
+        public ILogger CreateLogger(string categoryName) => new ErrorCorrelationLogger(this);
+        public void Dispose() { }
+
+        private sealed class ErrorCorrelationLogger(ErrorCorrelationLoggerProvider provider) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+            public bool IsEnabled(LogLevel logLevel) => true;
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel >= LogLevel.Error && state is IEnumerable<KeyValuePair<string, object?>> fields)
+                    foreach (var field in fields)
+                        if (field.Key == "CorrelationId" && field.Value is string value) provider.CorrelationIds.Enqueue(value);
+            }
+        }
+    }
+
+    private sealed class ThrowingPortfolioSnapshotStore : IPortfolioNavSnapshotStore
+    {
+        public Task RecordNavSnapshotAsync(PortfolioNavSnapshot snapshot, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(DateTimeOffset asOfUtc, CancellationToken cancellationToken = default) => throw new InvalidOperationException("synthetic-internal-storage-detail");
+        public Task<AggregatedPortfolioPerformanceMetrics> GetPerformanceMetricsAsync(DateTimeOffset asOfUtc, string? symbol, CancellationToken cancellationToken = default) => throw new InvalidOperationException("synthetic-internal-storage-detail");
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task RegimeApiExposesMetricUnitsAndNeverPermitsMissingOrGuardedData(bool hasSnapshot, bool incomplete)
+    {
+        var snapshot = hasSnapshot ? MarketRegimeClassifier.Classify(new Symbol("BTCUSDT"),
+            Enumerable.Range(100, 20).Select(value => (decimal)value).ToArray(), DateTimeOffset.UtcNow) : null;
+        if (incomplete && snapshot is not null)
+            snapshot = MarketRegimeClassifier.Classify(new Symbol("BTCUSDT"), [100m, 101m, 102m, 103m, 104m], DateTimeOffset.UtcNow) with { HasCompleteMetrics = false };
+        using var factory = CreateFactory(IPAddress.Loopback, services =>
+            services.AddSingleton<IMarketRegimeStore>(new RegimeApiStore(snapshot)));
+        using var client = factory.CreateClient();
+        using var response = await client.GetAsync(new Uri("/operational/regimes/current?symbol=BTCUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.True(document.RootElement.GetProperty("prohibitsNewExposure").GetBoolean());
+        Assert.Equal(hasSnapshot && !incomplete, document.RootElement.GetProperty("hasCompleteMetrics").GetBoolean());
+        Assert.Equal(snapshot?.ReturnSigmaPerBar ?? 0m, document.RootElement.GetProperty("returnSigmaPerBar").GetDecimal());
+        Assert.Equal(snapshot?.PriceDispersionRate ?? 0m, document.RootElement.GetProperty("priceDispersionRate").GetDecimal());
+        if (hasSnapshot)
+        {
+            using var historyResponse = await client.GetAsync(new Uri("/operational/regimes/history?symbol=BTCUSDT", UriKind.Relative), TestContext.Current.CancellationToken);
+            using var history = JsonDocument.Parse(await historyResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+            Assert.True(history.RootElement[0].GetProperty("prohibitsNewExposure").GetBoolean());
+            Assert.Equal(snapshot!.ReturnSigmaPerBar, history.RootElement[0].GetProperty("returnSigmaPerBar").GetDecimal());
+        }
+    }
+
+    private sealed class RegimeApiStore(MarketRegimeSnapshot? value) : IMarketRegimeStore
+    {
+        public Task RecordMarketRegimeAsync(MarketRegimeSnapshot snapshot, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<MarketRegimeSnapshot?> GetLatestMarketRegimeAsync(Symbol symbol, CancellationToken cancellationToken = default) => Task.FromResult(value);
+        public Task<IReadOnlyList<MarketRegimeSnapshot>> GetMarketRegimeHistoryAsync(Symbol symbol, int limit = 50, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<MarketRegimeSnapshot>>(value is null ? [] : [value]);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "The caller disposes the created WebApplicationFactory.")]

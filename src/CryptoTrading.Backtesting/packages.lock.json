@@ -28,20 +28,6 @@
           "System.CodeDom": "9.0.4"
         }
       },
-      "Microsoft.ML.TimeSeries": {
-        "type": "Direct",
-        "requested": "[6.0.0-preview.26457.2, )",
-        "resolved": "6.0.0-preview.26457.2",
-        "contentHash": "OaJ3ZKk6yOHIz34hkOedNaoy68IjhuLpHeynqm50vzGMboRd8R4aZRt8bXH1qKOQu889Gzq43BZ/E7cELqf8bQ==",
-        "dependencies": {
-          "Microsoft.Bcl.AsyncInterfaces": "9.0.4",
-          "Microsoft.ML": "6.0.0-preview.26457.2",
-          "Microsoft.ML.Mkl.Redist": "6.0.0-preview.26457.2",
-          "Newtonsoft.Json": "13.0.3",
-          "System.CodeDom": "9.0.4",
-          "System.Numerics.Tensors": "9.0.4"
-        }
-      },
       "Microsoft.Bcl.AsyncInterfaces": {
         "type": "Transitive",
         "resolved": "9.0.4",
@@ -59,11 +45,6 @@
         "type": "Transitive",
         "resolved": "6.0.0-preview.26457.2",
         "contentHash": "Xnq5y8dSEpp5e+aM50bLWE33/W0KVgHX+iyOY39ken5+il3AqH6i+iZpbG6As7Atxi89TCF6EgFrICcM8JlLew=="
-      },
-      "Microsoft.ML.Mkl.Redist": {
-        "type": "Transitive",
-        "resolved": "6.0.0-preview.26457.2",
-        "contentHash": "tBU++rYwKApoQm0/Z/yEZ3RbjqnBtcuYLjQPKEgOK0sD70E5okJegeMjNzTMkZJ33MNVAlCDvnp0jflcmln8Yg=="
       },
       "Newtonsoft.Json": {
         "type": "Transitive",

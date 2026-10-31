@@ -48,7 +48,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     decimal? MarketBreadthRatio = null,
     decimal? EthBtcSpreadReturnBps = null,
     decimal? CanaryBasketReturnBps = null,
-    decimal? CanaryBasketTrendSlope = null)
+    decimal? CanaryBasketTrendSlope = null,
+    string MlTimeframe = "1m")
 {
     public void Validate()
     {
@@ -56,6 +57,7 @@ public sealed record AdaptiveDecisionCycleRequest(
         ArgumentNullException.ThrowIfNull(Portfolio);
         ArgumentNullException.ThrowIfNull(RiskPolicy);
         ArgumentNullException.ThrowIfNull(OperationalControl);
+        ArgumentException.ThrowIfNullOrWhiteSpace(MlTimeframe);
         if (Bars.Count == 0)
         {
             throw new ArgumentException("At least one closed bar is required.", nameof(Bars));
@@ -119,15 +121,31 @@ public sealed class AdaptiveDecisionCycle
 
     private readonly ContextualMetaAllocator _metaAllocator;
     private readonly HashSet<string>? _quarantinedStrategies;
+    private readonly IMlDecisionArtifactProvider? _artifactProvider;
 
     public AdaptiveDecisionCycle(
         ContextualMetaAllocator? metaAllocator = null,
-        IEnumerable<string>? quarantinedStrategies = null)
+        IEnumerable<string>? quarantinedStrategies = null,
+        IMlDecisionArtifactProvider? artifactProvider = null)
     {
         _metaAllocator = metaAllocator ?? new ContextualMetaAllocator();
+        _artifactProvider = artifactProvider;
         _quarantinedStrategies = quarantinedStrategies is not null
             ? new HashSet<string>(quarantinedStrategies, StringComparer.OrdinalIgnoreCase)
             : null;
+    }
+
+    private MlNetSystem1Evaluation EvaluateMl(AdaptiveDecisionCycleRequest request, MarketRegimeSnapshot regime, OrderSide side)
+    {
+        var market = request.ExecutionMarket;
+        decimal? book = market is { IsComplete: true, BidQuantity: > 0m, AskQuantity: > 0m } &&
+            market.ObservedAtUtc <= request.EvaluatedAtUtc &&
+            request.EvaluatedAtUtc - market.ObservedAtUtc <= request.RiskPolicy.MaxMarketDataAge
+                ? market.OrderBookImbalance : null;
+        return MlNetSystem1DecisionEngine.Evaluate(request.Bars, regime, side, book,
+            horizonBars: request.MlHorizonBars,
+            artifact: _artifactProvider?.Find(request.Bars[^1].Symbol.Value, request.MlTimeframe, side, request.MlHorizonBars),
+            timeframe: request.MlTimeframe);
     }
 
     public static string StrategyId => DefaultStrategyId;
@@ -190,12 +208,7 @@ public sealed class AdaptiveDecisionCycle
         var indicators = bars.Count >= 20
             ? TechnicalIndicatorCalculator.Evaluate(bars)
             : TechnicalIndicatorSnapshot.Empty(latestBar.ClosePrice.Value);
-        var mlEval = MlNetSystem1DecisionEngine.Evaluate(
-            bars,
-            regime,
-            OrderSide.Buy,
-            orderBookImbalance,
-            horizonBars: request.MlHorizonBars);
+        var mlEval = EvaluateMl(request, regime, OrderSide.Buy);
 
         // 3. Operational Mode & Risk Pre-checks
         // SafeMode blocks new exposure but must keep the risk-reducing exit path alive for an open position.
@@ -402,14 +415,16 @@ public sealed class AdaptiveDecisionCycle
         // High-volatility chop is a risk event, not merely the absence of an entry
         // signal.  Do not depend on alpha ownership or a profitable exit signal to
         // reduce an existing position while a fresh snapshot is available.
-        if (regime.Regime == MarketRegime.HighVolatilityChop && hasOpenPosition)
+        if ((regime.Regime == MarketRegime.HighVolatilityChop || regime.LegacyDispersionLimitBreached) && hasOpenPosition)
         {
             orchestration = orchestration with
             {
                 SelectedStrategyId = exitStrategyId,
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
-                OrchestrationReason = "HIGH_VOLATILITY_CHOP_RISK_EXIT: Reducing open exposure on fresh high-volatility regime.",
+                OrchestrationReason = regime.LegacyDispersionLimitBreached
+                    ? "HIGH_PRICE_DISPERSION_RISK_EXIT: Reducing open exposure under the existing dispersion guard."
+                    : "HIGH_VOLATILITY_CHOP_RISK_EXIT: Reducing open exposure on fresh high-volatility regime.",
                 IsNoTrade = false
             };
         }
@@ -458,7 +473,7 @@ public sealed class AdaptiveDecisionCycle
                    (orderBookImbalance < 0m ||
                     indicators.CvdImbalance < 0m ||
                     regime.TrendSlopeRate <= 0m ||
-                    mlEval.MlWinProbability < 0.42m ||
+                     (mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.42m) ||
                     request.MarketBreadthRatio is < 0.35m))))
         {
             orchestration = orchestration with
@@ -476,7 +491,7 @@ public sealed class AdaptiveDecisionCycle
                  request.Portfolio.PositionCostNotional > 0m &&
                  currentUnrealizedProfitBps <= 15.0m &&
                  currentUnrealizedProfitBps >= -maxNoiseLossBps &&
-                 mlEval.MlWinProbability <= 0.24m &&
+                  mlEval.HasCalibratedProbability && mlEval.MlWinProbability <= 0.24m &&
                  orderBookImbalance <= -0.45m &&
                  (isCanaryBasketRetreating ||
                   isLeaderRetreating ||
@@ -497,7 +512,7 @@ public sealed class AdaptiveDecisionCycle
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
                  currentUnrealizedProfitBps >= minProfitBps &&
                  orderBookImbalance <= -0.60m &&
-                 mlEval.MlWinProbability < 0.38m)
+                  mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.38m)
         {
             orchestration = orchestration with
             {
@@ -512,7 +527,7 @@ public sealed class AdaptiveDecisionCycle
                  bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
                  currentUnrealizedProfitBps >= targetProfitBps &&
-                 (orderBookImbalance <= -0.15m || mlEval.MlWinProbability < 0.50m))
+                  (orderBookImbalance <= -0.15m || mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.50m))
         {
             orchestration = orchestration with
             {
@@ -529,7 +544,8 @@ public sealed class AdaptiveDecisionCycle
                  request.Portfolio.PositionCostNotional > 0m &&
                  bars[^1].ClosePrice.Value > 0m &&
                  currentUnrealizedProfitBps >= (roundTripFeeBps + 3.0m) &&
-                 EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, request.LifetimePeakProfitBps, mlEval.MlWinProbability, out var chandelierReason))
+                  EvaluateTrailingStopPullback(bars, request.Portfolio, currentUnrealizedProfitBps, roundTripFeeBps, volBps, request.LifetimePeakProfitBps,
+                      mlEval.HasCalibratedProbability ? mlEval.MlWinProbability : null, out var chandelierReason))
         {
             orchestration = orchestration with
             {
@@ -549,8 +565,8 @@ public sealed class AdaptiveDecisionCycle
                   isLeaderRetreating ||
                   isCanaryBasketRetreating ||
                   request.LifetimePeakProfitBps is >= 75.0m ||
-                  (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.42m)) &&
-                 (orderBookImbalance <= -0.15m || mlEval.MlWinProbability < 0.46m))
+                   (orderBookImbalance <= -0.45m && mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.42m)) &&
+                  (orderBookImbalance <= -0.15m || mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.46m))
         {
             orchestration = orchestration with
             {
@@ -566,6 +582,11 @@ public sealed class AdaptiveDecisionCycle
         var trendPerf = _metaAllocator.GetPerformance(trendFollowingId, regime.Regime);
         var isTrendNegativeExpectancy = (trendPerf is { ObservationCount: >= 5, AverageReward: < 0m }) ||
                                         (trendPerf is { ObservationCount: >= 3, AverageReward: <= -0.0020m });
+        if (!hasOpenPosition && !mlEval.HasCalibratedProbability)
+            return CreateNoTradeResult(regime, orchestration.Candidates, null,
+                mlEval.AvailabilityReason ?? "ML_CALIBRATED_ARTIFACT_UNAVAILABLE",
+                orderBookImbalance: orderBookImbalance, mlEval: mlEval, request: request);
+
         var canRehabilitateTrendConfluence = mlEval.MlWinProbability >= 0.51m &&
                                              orderBookImbalance >= 0.35m &&
                                              request.MarketBreadthRatio is >= 0.60m;
@@ -703,11 +724,12 @@ public sealed class AdaptiveDecisionCycle
             !orchestration.OrchestrationReason.StartsWith("TRAILING_STOP_CHANDELIER_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("PROTECTIVE_STOP_LOSS_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("HIGH_VOLATILITY_CHOP_RISK_EXIT", StringComparison.Ordinal) &&
+            !orchestration.OrchestrationReason.StartsWith("HIGH_PRICE_DISPERSION_RISK_EXIT", StringComparison.Ordinal) &&
             !(regime.Regime == MarketRegime.BearTrend &&
               (request.LifetimePeakProfitBps is >= 60.0m ||
                indicators.CvdImbalance < -0.05m ||
                (regime.TrendSlopeRate <= -0.00015m &&
-                (mlEval.MlWinProbability < 0.42m ||
+                 ((mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.42m) ||
                  request.MarketBreadthRatio is < 0.35m ||
                  isLeaderRetreating ||
                  isCanaryBasketRetreating)))) &&
@@ -732,32 +754,14 @@ public sealed class AdaptiveDecisionCycle
 
         }
 
-        // 5b. System-1 Calibrated Decision Confidence, ML.NET 6.0 Meta-Labeler, SSA Breakdown & Order-Book Imbalance Gate
+        // 5b. Previously calibrated System-1 evidence and independent entry guards.
         var selectedPerf = _metaAllocator.GetPerformance(orchestration.SelectedStrategyId!, regime.Regime)
             ?? (isEntry && regime.Regime == MarketRegime.BullTrend
                 ? _metaAllocator.GetPerformance(meanReversionId, MarketRegime.BullTrend)
                 : null);
-        if (!isEntry)
-        {
-            mlEval = MlNetSystem1DecisionEngine.Evaluate(
-                bars,
-                regime,
-                OrderSide.Sell,
-                orderBookImbalance,
-                selectedPerf,
-                request.MlHorizonBars);
-        }
-        else if (selectedPerf is { ObservationCount: > 0 } &&
-                 !(canRehabilitateTrendConfluence && selectedPerf.AverageReward < 0m))
-        {
-            mlEval = MlNetSystem1DecisionEngine.Evaluate(
-                bars,
-                regime,
-                OrderSide.Buy,
-                orderBookImbalance,
-                selectedPerf,
-                request.MlHorizonBars);
-        }
+        // Spot exits close an existing long: the Buy continuation model is the
+        // causal evidence for holding/reducing that position. Do not replace it
+        // with a Sell model after using it to choose the exit.
 
         var perfBonus = selectedPerf is { ObservationCount: > 0 }
             ? Math.Clamp(selectedPerf.AverageReward * 150m, canRehabilitateTrendConfluence ? -0.05m : -0.25m, 0.12m)
@@ -766,7 +770,7 @@ public sealed class AdaptiveDecisionCycle
         var bookBonus = Math.Clamp(bookAlignment * 0.15m, -0.22m, 0.10m);
         var leaderBonus = isEntry && hasCrossAssetLeaderMomentum ? 0.035m : 0m;
         var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus + leaderBonus, 0.05m, 0.99m);
-        var decisionConfidence = bars.Count >= 20
+        var decisionConfidence = isEntry && bars.Count >= 20 && mlEval.HasCalibratedProbability
             ? Math.Round(Math.Clamp((baseConfidence * 0.58m) + (mlEval.MlWinProbability * 0.42m), 0.05m, 0.99m), 4)
             : Math.Round(baseConfidence, 4);
 
@@ -780,8 +784,10 @@ public sealed class AdaptiveDecisionCycle
         var roundTripCostBps = roundTripFeeBps + expectedSlippageCostBps;
         var expectedGainBps = Math.Max(targetProfitBps, effectiveVolBps * 3.5m);
         var expectedLossBps = protectiveStopLossBps;
-        var pWin = Math.Clamp((decisionConfidence * 0.50m) + (mlEval.MlWinProbability * 0.50m), 0.05m, 0.95m);
-        var expectedNetEdgeBps = Math.Round((pWin * expectedGainBps) - ((1m - pWin) * expectedLossBps) - roundTripCostBps, 2);
+        var pWin = isEntry && mlEval.HasCalibratedProbability
+            ? Math.Clamp((decisionConfidence * 0.50m) + (mlEval.MlWinProbability * 0.50m), 0.05m, 0.95m) : 0m;
+        var expectedNetEdgeBps = isEntry && mlEval.HasCalibratedProbability
+            ? Math.Round((pWin * expectedGainBps) - ((1m - pWin) * expectedLossBps) - roundTripCostBps, 2) : 0m;
 
         if (bars.Count >= 20)
         {
@@ -801,13 +807,13 @@ public sealed class AdaptiveDecisionCycle
                     request: request);
             }
 
-            if (isEntry && mlEval.IsSsaStructuralBreakdown)
+            if (isEntry && (mlEval.IsSsaStructuralBreakdown || mlEval.IsNegativePriceShock))
             {
                 return CreateNoTradeResult(
                     regime,
                     orchestration.Candidates,
                     null,
-                    "SSA_STRUCTURAL_BREAKDOWN_DETECTED",
+                     mlEval.IsNegativePriceShock ? "NEGATIVE_PRICE_SHOCK_BLOCKED" : "SSA_STRUCTURAL_BREAKDOWN_DETECTED",
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
@@ -816,14 +822,14 @@ public sealed class AdaptiveDecisionCycle
             }
 
             if (isEntry &&
-                ((indicators.Vpin >= 0.78m && indicators.CvdImbalance <= -0.35m) ||
-                 (indicators.Vpin >= 0.92m && indicators.RelativeVolume <= 0.20m)))
+                ((indicators.AbsoluteBarVolumeImbalance >= 0.78m && indicators.CvdImbalance <= -0.35m) ||
+                 (indicators.AbsoluteBarVolumeImbalance >= 0.92m && indicators.RelativeVolume <= 0.20m)))
             {
                 return CreateNoTradeResult(
                     regime,
                     orchestration.Candidates,
                     null,
-                    "TOXIC_VPIN_FLOW_BLOCKED",
+                    "ABSOLUTE_BAR_FLOW_IMBALANCE_BLOCKED",
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
@@ -1054,6 +1060,8 @@ public sealed class AdaptiveDecisionCycle
                 !request.HasPendingExitReplan &&
                 !orchestration.OrchestrationReason.StartsWith("TRAILING_STOP_CHANDELIER_EXIT", StringComparison.Ordinal) &&
                 !orchestration.OrchestrationReason.StartsWith("CROSS_ASSET_LEADER_SHOCK_EXIT", StringComparison.Ordinal) &&
+                !orchestration.OrchestrationReason.StartsWith("HIGH_PRICE_DISPERSION_RISK_EXIT", StringComparison.Ordinal) &&
+                !orchestration.OrchestrationReason.StartsWith("HIGH_VOLATILITY_CHOP_RISK_EXIT", StringComparison.Ordinal) &&
                 (orderBookImbalance >= 0.70m ||
                  (regime.Regime == MarketRegime.BullTrend &&
                   regime.TrendSlopeRate >= 0.00018m &&
@@ -1347,24 +1355,37 @@ public sealed class AdaptiveDecisionCycle
             Regime = regime.Regime.ToString(),
             RegimeConfidence = regime.Confidence,
             DecisionConfidence = decisionConfidence,
-            MlWinProbability = mlEval.MlWinProbability,
+            MlWinProbability = mlEval.HasCalibratedProbability ? (decimal?)mlEval.MlWinProbability : null,
+            MlRawScore = mlEval.HasCalibratedProbability ? (decimal?)mlEval.MlRawScore : null,
+            mlEval.HasCalibratedProbability,
+            MlModelId = mlEval.ModelId,
+            mlEval.ModelArtifactSha256,
+            MlModelTargetSide = mlEval.ModelTargetSide?.ToString(),
+            MlAvailabilityReason = mlEval.AvailabilityReason,
+            mlEval.HasSsaEvidence,
+            mlEval.IsNegativePriceShock,
             ExpectedNetEdgeBps = expectedNetEdgeBps,
-            SsaChangePointPValue = mlEval.SsaChangePointPValue,
-            SsaMartingaleScore = mlEval.SsaMartingaleScore,
-            IsSsaStructuralBreakdown = mlEval.IsSsaStructuralBreakdown,
+            SsaChangePointPValue = mlEval.HasSsaEvidence ? (decimal?)mlEval.SsaChangePointPValue : null,
+            SsaMartingaleScore = mlEval.HasSsaEvidence ? (decimal?)mlEval.SsaMartingaleScore : null,
+            IsSsaStructuralBreakdown = mlEval.HasSsaEvidence ? (bool?)mlEval.IsSsaStructuralBreakdown : null,
             OrderBookImbalance = orderBookImbalance,
             TemporalOfi = request.ExecutionMarket?.TemporalOrderFlowImbalance,
             TradeAggressionDelta = request.ExecutionMarket?.TradeAggressionDelta,
             MicroPriceDivergenceBps = microPriceDivergenceBps,
             TrendSlope = regime.TrendSlopeRate,
             Volatility = regime.VolatilityRate,
+            LegacyPriceDispersionRate = regime.PriceDispersionRate,
+            regime.ReturnSigmaPerBar,
+            regime.EfficiencyRatio,
+            regime.LegacyDispersionLimitBreached,
+            RegimeReason = regime.Reason,
             AtrBps = indicators.AtrBps,
             Adx = indicators.Adx,
             Rsi = indicators.Rsi,
             VwapDeviationBps = indicators.VwapDeviationBps,
             RelativeVolume = indicators.RelativeVolume,
             CvdImbalance = indicators.CvdImbalance,
-            Vpin = indicators.Vpin,
+            AbsoluteBarVolumeImbalance = indicators.AbsoluteBarVolumeImbalance,
             MaxOpenPositionCorrelation = request.MaxOpenPositionCorrelation,
             LeaderReturnBps = request.LeaderReturnBps,
             LeaderRegime = request.LeaderRegime?.ToString(),
@@ -1431,14 +1452,27 @@ public sealed class AdaptiveDecisionCycle
             Regime = regime.Regime.ToString(),
             RegimeConfidence = regime.Confidence,
             DecisionConfidence = decisionConfidence ?? regime.Confidence,
-            MlWinProbability = mlEval?.MlWinProbability ?? regime.Confidence,
+            MlWinProbability = mlEval is { HasCalibratedProbability: true } calibrated ? (decimal?)calibrated.MlWinProbability : null,
+            MlRawScore = mlEval is { HasCalibratedProbability: true } scored ? (decimal?)scored.MlRawScore : null,
+            HasCalibratedProbability = mlEval?.HasCalibratedProbability ?? false,
+            MlModelId = mlEval?.ModelId,
+            ModelArtifactSha256 = mlEval?.ModelArtifactSha256,
+            MlModelTargetSide = mlEval?.ModelTargetSide?.ToString(),
+            MlAvailabilityReason = mlEval?.AvailabilityReason,
+            HasSsaEvidence = mlEval?.HasSsaEvidence ?? false,
+            IsNegativePriceShock = mlEval?.IsNegativePriceShock ?? false,
             ExpectedNetEdgeBps = expectedNetEdgeBps ?? 0m,
-            SsaChangePointPValue = mlEval?.SsaChangePointPValue ?? 0.50m,
-            SsaMartingaleScore = mlEval?.SsaMartingaleScore ?? 0m,
-            IsSsaStructuralBreakdown = mlEval?.IsSsaStructuralBreakdown ?? false,
+            SsaChangePointPValue = mlEval is { HasSsaEvidence: true } ssa ? (decimal?)ssa.SsaChangePointPValue : null,
+            SsaMartingaleScore = mlEval is { HasSsaEvidence: true } martingale ? (decimal?)martingale.SsaMartingaleScore : null,
+            IsSsaStructuralBreakdown = mlEval is { HasSsaEvidence: true } knownSsa ? (bool?)knownSsa.IsSsaStructuralBreakdown : null,
             OrderBookImbalance = orderBookImbalance ?? 0m,
             TrendSlope = regime.TrendSlopeRate,
             Volatility = regime.VolatilityRate,
+            LegacyPriceDispersionRate = regime.PriceDispersionRate,
+            regime.ReturnSigmaPerBar,
+            regime.EfficiencyRatio,
+            regime.LegacyDispersionLimitBreached,
+            RegimeReason = regime.Reason,
             LeaderReturnBps = request?.LeaderReturnBps,
             LeaderRegime = request?.LeaderRegime?.ToString(),
             LeaderTrendSlope = request?.LeaderTrendSlope,
@@ -1478,7 +1512,7 @@ public sealed class AdaptiveDecisionCycle
         decimal roundTripFeeBps,
         decimal volBps,
         decimal? lifetimePeakProfitBps,
-        decimal mlWinProbability,
+        decimal? mlWinProbability,
         out string reason)
     {
         reason = string.Empty;
@@ -1502,7 +1536,7 @@ public sealed class AdaptiveDecisionCycle
             peakProfitBps = (peakNotional - portfolio.PositionCostNotional) / portfolio.PositionCostNotional * 10_000m;
         }
 
-        var isHighConviction = mlWinProbability >= 0.60m;
+        var isHighConviction = mlWinProbability is >= 0.60m;
         var trailingGapBps = isHighConviction && peakProfitBps < 150.0m
             ? Math.Clamp(volBps * 2.2m, 40.0m, 100.0m)
             : Math.Clamp(volBps * 1.5m, 30.0m, 70.0m);

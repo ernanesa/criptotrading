@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace CryptoTrading.Exchange.Binance;
 
 public enum BinanceOrderBookStatus
@@ -45,6 +47,8 @@ public sealed record BinanceOrderBookQuarantineEntry(
     long? FinalUpdateId,
     BinanceOrderBookInvalidReason Reason);
 
+public readonly record struct BinanceOrderBookDepthMetrics(decimal? Imbalance, decimal? LiquidityNotional);
+
 /// <summary>
 /// Applies Binance Spot depth snapshots and diff events with sequence validation.
 /// A healthy book is never silently advanced across a gap; callers must fetch a
@@ -59,6 +63,17 @@ public sealed class BinanceLocalOrderBook
     private readonly Dictionary<decimal, decimal> asks = new();
     private readonly Queue<BinanceOrderBookQuarantineEntry> quarantine = new();
     private bool hasAppliedDelta;
+    private System.Collections.ObjectModel.ReadOnlyCollection<BinanceOrderBookLevel>? cachedBids;
+    private System.Collections.ObjectModel.ReadOnlyCollection<BinanceOrderBookLevel>? cachedAsks;
+    private int cachedMetricLevels;
+    private BinanceOrderBookDepthMetrics cachedMetrics;
+    private static readonly Comparison<BinanceOrderBookLevel> BidComparison = static (a, b) => b.Price.CompareTo(a.Price);
+    private static readonly Comparison<BinanceOrderBookLevel> AskComparison = static (a, b) => a.Price.CompareTo(b.Price);
+
+    private readonly record struct DepthLevel(decimal Price, decimal Quantity) : IComparable<DepthLevel>
+    {
+        public int CompareTo(DepthLevel other) => Price.CompareTo(other.Price);
+    }
 
     public BinanceLocalOrderBook(
         string symbol,
@@ -93,19 +108,14 @@ public sealed class BinanceLocalOrderBook
     {
         Status = BinanceOrderBookStatus.Invalid;
         hasAppliedDelta = false;
+        ClearDerivedState();
     }
 
     public long? LastUpdateId { get; private set; }
 
-    public IReadOnlyList<BinanceOrderBookLevel> Bids => !IsSynchronized ? [] :
-        bids.OrderByDescending(pair => pair.Key)
-            .Select(pair => new BinanceOrderBookLevel(pair.Key, pair.Value))
-            .ToArray();
+    public IReadOnlyList<BinanceOrderBookLevel> Bids => !IsSynchronized ? [] : cachedBids ??= SnapshotSide(bids, true);
 
-    public IReadOnlyList<BinanceOrderBookLevel> Asks => !IsSynchronized ? [] :
-        asks.OrderBy(pair => pair.Key)
-            .Select(pair => new BinanceOrderBookLevel(pair.Key, pair.Value))
-            .ToArray();
+    public IReadOnlyList<BinanceOrderBookLevel> Asks => !IsSynchronized ? [] : cachedAsks ??= SnapshotSide(asks, false);
 
     public IReadOnlyCollection<BinanceOrderBookQuarantineEntry> Quarantined => quarantine.ToArray();
 
@@ -113,35 +123,90 @@ public sealed class BinanceLocalOrderBook
     /// Computes the volume-weighted depth imbalance across the top <paramref name="levels"/> of the local L2 book.
     /// Returns <see langword="null"/> if the book is invalid (e.g. sequence gap / resync required) or empty.
     /// </summary>
-    public decimal? CalculateTopDepthImbalance(int levels = 5)
-    {
-        if (Status is not BinanceOrderBookStatus.Healthy || !hasAppliedDelta || levels <= 0 || bids.Count == 0 || asks.Count == 0)
-        {
-            return null;
-        }
-
-        var topBidQty = bids.OrderByDescending(static p => p.Key).Take(levels).Sum(static p => p.Value);
-        var topAskQty = asks.OrderBy(static p => p.Key).Take(levels).Sum(static p => p.Value);
-        var total = topBidQty + topAskQty;
-        return total > 0m ? Math.Clamp(Math.Round((topBidQty - topAskQty) / total, 4), -1m, 1m) : null;
-    }
+    public decimal? CalculateTopDepthImbalance(int levels = 5) => CalculateTopDepthMetrics(levels).Imbalance;
 
     /// <summary>
     /// Computes the conservative available notional liquidity (minimum of cumulative bid notional and cumulative ask notional)
     /// across the top <paramref name="levels"/> of the local L2 book.
     /// Returns <see langword="null"/> if the book is invalid or empty.
     /// </summary>
-    public decimal? CalculateTopDepthLiquidityNotional(int levels = 5)
-    {
-        if (Status is not BinanceOrderBookStatus.Healthy || !hasAppliedDelta || levels <= 0 || bids.Count == 0 || asks.Count == 0)
-        {
-            return null;
-        }
+    public decimal? CalculateTopDepthLiquidityNotional(int levels = 5) => CalculateTopDepthMetrics(levels).LiquidityNotional;
 
-        var topBidNotional = bids.OrderByDescending(static p => p.Key).Take(levels).Sum(static p => p.Key * p.Value);
-        var topAskNotional = asks.OrderBy(static p => p.Key).Take(levels).Sum(static p => p.Key * p.Value);
-        var minNotional = Math.Min(topBidNotional, topAskNotional);
-        return minNotional > 0m ? Math.Round(minNotional, 2) : null;
+    public BinanceOrderBookDepthMetrics CalculateTopDepthMetrics(int levels = 5)
+    {
+        if (!IsSynchronized || levels <= 0 || bids.Count == 0 || asks.Count == 0) return default;
+        if (cachedMetricLevels == levels) return cachedMetrics;
+        try
+        {
+            var bid = SideTotals(bids, levels, true);
+            var ask = SideTotals(asks, levels, false);
+            var total = bid.Quantity + ask.Quantity;
+            var liquidity = Math.Min(bid.Notional, ask.Notional);
+            cachedMetrics = new(total > 0m ? Math.Clamp(Math.Round((bid.Quantity - ask.Quantity) / total, 4), -1m, 1m) : null,
+                liquidity > 0m ? Math.Round(liquidity, 2) : null);
+            cachedMetricLevels = levels;
+            return cachedMetrics;
+        }
+        catch (OverflowException)
+        {
+            _ = Invalidate(BinanceOrderBookApplyDisposition.InvalidQuarantined, BinanceOrderBookInvalidReason.InvalidBookState,
+                LastUpdateId, LastUpdateId, LastUpdateId);
+            return default;
+        }
+    }
+
+    private void ClearDerivedState()
+    {
+        cachedBids = null;
+        cachedAsks = null;
+        cachedMetricLevels = 0;
+        cachedMetrics = default;
+    }
+
+    private static System.Collections.ObjectModel.ReadOnlyCollection<BinanceOrderBookLevel> SnapshotSide(Dictionary<decimal, decimal> side, bool isBid)
+    {
+        var levels = new BinanceOrderBookLevel[side.Count];
+        var index = 0;
+        foreach (var pair in side) levels[index++] = new(pair.Key, pair.Value);
+        Array.Sort(levels, isBid ? BidComparison : AskComparison);
+        return Array.AsReadOnly(levels);
+    }
+
+    private static (decimal Quantity, decimal Notional) SideTotals(Dictionary<decimal, decimal> side, int levels, bool isBid)
+    {
+        decimal quantity = 0m, notional = 0m;
+        if (levels >= side.Count)
+        {
+            foreach (var pair in side) { quantity += pair.Value; notional += pair.Key * pair.Value; }
+            return (quantity, notional);
+        }
+        if (levels <= 32)
+        {
+            Span<DepthLevel> top = stackalloc DepthLevel[levels];
+            var count = 0;
+            foreach (var pair in side)
+            {
+                var position = 0;
+                while (position < count && (isBid ? top[position].Price >= pair.Key : top[position].Price <= pair.Key)) position++;
+                if (position == levels) continue;
+                for (var j = Math.Min(count, levels - 1); j > position; j--) top[j] = top[j - 1];
+                top[position] = new(pair.Key, pair.Value);
+                count = Math.Min(count + 1, levels);
+            }
+            for (var i = 0; i < count; i++) { quantity += top[i].Quantity; notional += top[i].Price * top[i].Quantity; }
+            return (quantity, notional);
+        }
+        var rented = ArrayPool<DepthLevel>.Shared.Rent(side.Count);
+        try
+        {
+            var count = 0;
+            foreach (var pair in side) rented[count++] = new(pair.Key, pair.Value);
+            Array.Sort(rented, 0, count);
+            var start = isBid ? count - levels : 0;
+            for (var i = start; i < start + levels; i++) { quantity += rented[i].Quantity; notional += rented[i].Price * rented[i].Quantity; }
+            return (quantity, notional);
+        }
+        finally { ArrayPool<DepthLevel>.Shared.Return(rented); }
     }
 
     /// <summary>
@@ -184,6 +249,7 @@ public sealed class BinanceLocalOrderBook
         asks.Clear();
         Copy(nextBids, bids);
         Copy(nextAsks, asks);
+        ClearDerivedState();
         LastUpdateId = snapshot.LastUpdateId;
         hasAppliedDelta = false;
         Status = BinanceOrderBookStatus.Healthy;
@@ -227,6 +293,7 @@ public sealed class BinanceLocalOrderBook
             return Invalidate(disposition, reason, update.FirstUpdateId, update.FinalUpdateId, update.FinalUpdateId);
         }
 
+        ClearDerivedState();
         ApplyLevels(update.Bids, bids);
         ApplyLevels(update.Asks, asks);
         if (!HasValidSpread(bids, asks))
@@ -262,6 +329,7 @@ public sealed class BinanceLocalOrderBook
         }
 
         Status = BinanceOrderBookStatus.Invalid;
+        ClearDerivedState();
         return new(disposition, Status, lastUpdateId ?? LastUpdateId, reason);
     }
 
@@ -347,15 +415,26 @@ public sealed class BinanceLocalOrderBook
             return;
         }
 
-        var toRemove = (isBid
-                ? levels.Keys.OrderBy(price => price)
-                : levels.Keys.OrderByDescending(price => price))
-            .Take(excess)
-            .ToArray();
-        foreach (var price in toRemove)
+        if (excess <= 8)
         {
-            levels.Remove(price);
+            for (var i = 0; i < excess; i++)
+            {
+                var worst = isBid ? decimal.MaxValue : decimal.MinValue;
+                foreach (var pair in levels) worst = isBid ? Math.Min(worst, pair.Key) : Math.Max(worst, pair.Key);
+                levels.Remove(worst);
+            }
+            return;
         }
+        var rented = ArrayPool<decimal>.Shared.Rent(levels.Count);
+        try
+        {
+            var count = 0;
+            foreach (var pair in levels) rented[count++] = pair.Key;
+            Array.Sort(rented, 0, count);
+            var start = isBid ? 0 : count - excess;
+            for (var i = start; i < start + excess; i++) levels.Remove(rented[i]);
+        }
+        finally { ArrayPool<decimal>.Shared.Return(rented); }
     }
 
     private void AddQuarantine(BinanceOrderBookQuarantineEntry entry)

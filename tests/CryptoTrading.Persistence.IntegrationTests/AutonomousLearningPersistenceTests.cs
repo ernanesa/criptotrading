@@ -3,6 +3,7 @@
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;
+using Npgsql;
 using Xunit;
 using Xunit.Sdk;
 
@@ -121,6 +122,57 @@ public sealed class AutonomousLearningPersistenceTests
 
         var allModels = await store.ListModelsAsync(strategyId, TestContext.Current.CancellationToken);
         Assert.Equal(2, allModels.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RegimeRoundTripPreservesDispersionGuardAndReturnMetricUnits(bool explicitReturnLimit)
+    {
+        await using var store = await CreateStoreAsync();
+        var symbol = new Symbol("RG" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant() + "USDT");
+        var snapshot = MarketRegimeClassifier.Classify(symbol,
+            Enumerable.Range(100, 20).Select(value => (decimal)value).ToArray(), DateTimeOffset.UtcNow,
+            maxReturnSigmaPerBar: explicitReturnLimit ? 0.001m : null);
+        Assert.Equal(MarketRegime.BullTrend, snapshot.Regime);
+        Assert.True(snapshot.ProhibitsNewExposure);
+        await store.RecordMarketRegimeAsync(snapshot, TestContext.Current.CancellationToken);
+        var latest = await store.GetLatestMarketRegimeAsync(symbol, TestContext.Current.CancellationToken);
+        Assert.NotNull(latest);
+        Assert.True(latest.ProhibitsNewExposure);
+        Assert.False(latest.FavorsTrendFollowing);
+        Assert.Equal(snapshot.ReturnSigmaPerBar, latest.ReturnSigmaPerBar);
+        Assert.Equal(snapshot.EfficiencyRatio, latest.EfficiencyRatio);
+        Assert.Equal(snapshot.AppliedMaxReturnSigmaPerBar, latest.AppliedMaxReturnSigmaPerBar);
+        var history = Assert.Single(await store.GetMarketRegimeHistoryAsync(symbol, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.True(history.ProhibitsNewExposure);
+        Assert.Equal(snapshot.ReturnSigmaPerBar, history.ReturnSigmaPerBar);
+        Assert.Equal(snapshot.EfficiencyRatio, history.EfficiencyRatio);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"hasCompleteMetrics\":true,\"returnSigmaPerBar\":0.001,\"efficiencyRatio\":1,\"legacyDispersionLimitBreached\":false}")]
+    public async Task LegacyOrPartialRegimePayloadCannotAuthorizeExposure(string payload)
+    {
+        await using var store = await CreateStoreAsync();
+        var symbol = new Symbol("LG" + Guid.NewGuid().ToString("N")[..8].ToUpperInvariant() + "USDT");
+        await using var connection = new NpgsqlConnection(Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING"));
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var seed = new NpgsqlCommand("""
+            INSERT INTO trading.market_regime_snapshots
+                (symbol, observed_at, regime, confidence, trend_slope, volatility, reason, payload)
+            VALUES (@symbol, @time, 'BullTrend', 0.9, 0.01, 0.001, 'legacy fixture', @payload::jsonb);
+            """, connection);
+        seed.Parameters.AddWithValue("symbol", symbol.Value);
+        seed.Parameters.AddWithValue("time", DateTimeOffset.UtcNow);
+        seed.Parameters.AddWithValue("payload", payload);
+        await seed.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        var latest = await store.GetLatestMarketRegimeAsync(symbol, TestContext.Current.CancellationToken);
+        Assert.NotNull(latest);
+        Assert.True(latest.ProhibitsNewExposure);
+        Assert.False(latest.FavorsTrendFollowing);
+        Assert.True(Assert.Single(await store.GetMarketRegimeHistoryAsync(symbol, cancellationToken: TestContext.Current.CancellationToken)).ProhibitsNewExposure);
     }
 
     [Fact]

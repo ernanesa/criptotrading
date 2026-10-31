@@ -67,7 +67,7 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, BinanceBookTicker> streamBookTickers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BinanceBookTicker> previousBookTickers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, decimal> temporalOfiBySymbol = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, decimal> tradeAggressionDeltaBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, TradeAggressionState> tradeAggressionBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BinanceLocalOrderBook> localOrderBooks = new(StringComparer.OrdinalIgnoreCase);
     private long marketStreamEpoch;
     private readonly ConcurrentDictionary<string, List<BinanceSpotKline>> klineCache = new(StringComparer.OrdinalIgnoreCase);
@@ -75,7 +75,7 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, string> positionOriginatingStrategy = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, decimal> positionLifetimePeakProfitBps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (decimal CostNotional, decimal Quantity)> positionCostBases = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarTriggerUtc = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarWakeupUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastProcessedCloseByScope = new(StringComparer.Ordinal);
@@ -87,6 +87,51 @@ internal sealed class AutonomyCycleHostedService(
     internal ConcurrentDictionary<string, BinanceLocalOrderBook> LocalOrderBooks => localOrderBooks;
     internal ConcurrentDictionary<string, List<BinanceSpotKline>> KlineCache => klineCache;
     internal ConcurrentDictionary<string, DynamicExitThresholds> DynamicExitThresholdsBySymbol => dynamicExitThresholdsBySymbol;
+
+    internal decimal? ReadTradeAggression(string symbol, DateTimeOffset now, TimeSpan maxAge)
+    {
+        if (maxAge <= TimeSpan.Zero || !tradeAggressionBySymbol.TryGetValue(symbol, out var state) || state.TotalQuantity <= 0m ||
+            now < state.SourceAtUtc || now < state.ReceivedAtUtc ||
+            now - state.SourceAtUtc > maxAge || now - state.ReceivedAtUtc > maxAge)
+            return null;
+        return Math.Clamp(state.SignedQuantity / state.TotalQuantity, -1m, 1m);
+    }
+
+    private void ObserveTradeAggression(BinanceTradeEvent trade)
+    {
+        var now = valuationTimeProvider.GetUtcNow();
+        if (trade.Quantity <= 0m || trade.Price <= 0m || trade.TradeId < 0 ||
+            trade.EventTime <= 0 || trade.EventTime > DateTimeOffset.MaxValue.ToUnixTimeMilliseconds() ||
+            trade.ReceivedAt.Offset != TimeSpan.Zero || trade.ReceivedAt > now)
+            return;
+        var sourceAt = DateTimeOffset.FromUnixTimeMilliseconds(trade.EventTime);
+        if (sourceAt > now || sourceAt > trade.ReceivedAt) return;
+        tradeAggressionBySymbol.AddOrUpdate(trade.Symbol,
+            static (_, input) => TradeAggressionState.Initial(input.Trade, input.SourceAt),
+            static (_, previous, input) => previous.Add(input.Trade, input.SourceAt),
+            (Trade: trade, SourceAt: sourceAt));
+    }
+
+    private readonly record struct TradeAggressionState(
+        decimal SignedQuantity, decimal TotalQuantity, DateTimeOffset SourceAtUtc, DateTimeOffset ReceivedAtUtc, long LastTradeId)
+    {
+        public static TradeAggressionState Initial(BinanceTradeEvent trade, DateTimeOffset sourceAt) =>
+            new(trade.IsBuyerMaker ? -trade.Quantity : trade.Quantity, trade.Quantity, sourceAt, trade.ReceivedAt, trade.TradeId);
+
+        public TradeAggressionState Add(BinanceTradeEvent trade, DateTimeOffset sourceAt)
+        {
+            if (trade.TradeId <= LastTradeId || sourceAt < SourceAtUtc || trade.ReceivedAt < ReceivedAtUtc) return this;
+            if (TotalQuantity <= 0m) return Initial(trade, sourceAt);
+            // Analytical five-second half-life, not a risk limit or calibrated alpha.
+            // Only elapsed time is converted; price and quantity stay decimal.
+            var decay = (decimal)Math.Pow(0.5d, (sourceAt - SourceAtUtc).Ticks / (5d * TimeSpan.TicksPerSecond));
+            var decayedTotal = TotalQuantity * decay;
+            if (decimal.MaxValue - decayedTotal < trade.Quantity)
+                return new(0m, 0m, sourceAt, trade.ReceivedAt, trade.TradeId);
+            return new(SignedQuantity * decay + (trade.IsBuyerMaker ? -trade.Quantity : trade.Quantity),
+                decayedTotal + trade.Quantity, sourceAt, trade.ReceivedAt, trade.TradeId);
+        }
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -384,10 +429,10 @@ internal sealed class AutonomyCycleHostedService(
                             if (isTakeProfitTrigger || isChandelierTrigger || isStopLossTrigger)
                             {
                                 var nowUtc = tickerEvent.ReceivedAt;
-                                if (!lastIntrabarTriggerUtc.TryGetValue(tickerEvent.Symbol, out var lastTrigger) ||
+                                if (!lastIntrabarWakeupUtc.TryGetValue(tickerEvent.Symbol, out var lastTrigger) ||
                                     nowUtc - lastTrigger >= TimeSpan.FromSeconds(2))
                                 {
-                                    lastIntrabarTriggerUtc[tickerEvent.Symbol] = nowUtc;
+                                    lastIntrabarWakeupUtc[tickerEvent.Symbol] = nowUtc;
                                     barCloseSignalChannel.Writer.TryWrite(nowUtc);
                                 }
                             }
@@ -395,19 +440,9 @@ internal sealed class AutonomyCycleHostedService(
                     }
                     else if (marketEvent is BinanceTradeEvent tradeEvent)
                     {
-                        var signedSign = tradeEvent.IsBuyerMaker ? -1m : 1m;
-                        tradeAggressionDeltaBySymbol.AddOrUpdate(
-                            tradeEvent.Symbol,
-                            signedSign * 0.25m,
-                            (_, prevDelta) => Math.Round(Math.Clamp((prevDelta * 0.85m) + (signedSign * 0.15m), -1m, 1m), 4));
-                    }
-                    else if (marketEvent is BinanceAggTradeStreamEvent aggTradeEvent)
-                    {
-                        var signedSign = aggTradeEvent.IsBuyerMaker ? -1m : 1m;
-                        tradeAggressionDeltaBySymbol.AddOrUpdate(
-                            aggTradeEvent.Symbol,
-                            signedSign * 0.25m,
-                            (_, prevDelta) => Math.Round(Math.Clamp((prevDelta * 0.85m) + (signedSign * 0.15m), -1m, 1m), 4));
+                        // This service subscribes to trade only. Mixing aggTrade
+                        // IDs with trade IDs would count the same executions twice.
+                        ObserveTradeAggression(tradeEvent);
                     }
                     else if (marketEvent is BinanceDepthUpdateEvent depthEvent)
                     {
@@ -435,7 +470,7 @@ internal sealed class AutonomyCycleHostedService(
             {
                 InvalidateMarketStreamState();
                 AutonomyCycleLog.StreamDisconnected(logger, ex);
-                await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(2), valuationTimeProvider, stoppingToken).ConfigureAwait(false);
             }
         }
     }
@@ -446,7 +481,7 @@ internal sealed class AutonomyCycleHostedService(
         streamBookTickers.Clear();
         previousBookTickers.Clear();
         temporalOfiBySymbol.Clear();
-        tradeAggressionDeltaBySymbol.Clear();
+        tradeAggressionBySymbol.Clear();
         klineCache.Clear();
         foreach (var book in localOrderBooks.Values)
         {
@@ -472,7 +507,7 @@ internal sealed class AutonomyCycleHostedService(
             ["engine_mode"] = runtime.AutonomyEngineMode,
             ["trace_id"] = System.Diagnostics.Activity.Current?.TraceId.ToString()
         });
-        var now = DateTimeOffset.UtcNow;
+        var now = valuationTimeProvider.GetUtcNow();
         var symbolObj = new Symbol(symbol);
         var activeCycle = cycle.Parameters.Symbol == symbolObj
             ? cycle
@@ -637,28 +672,26 @@ internal sealed class AutonomyCycleHostedService(
                 if (isIntrabarTakeProfit || isIntrabarChandelier || isIntrabarStopLoss)
                 {
                     var intrabarCloseUtc = DateTimeOffset.FromUnixTimeMilliseconds(intrabarTicker.ObservedAtUtc.ToUnixTimeMilliseconds());
-                    var lastTrigger = lastIntrabarTriggerUtc.GetValueOrDefault(symbol, DateTimeOffset.MinValue);
-                    if ((now - lastTrigger) >= TimeSpan.FromSeconds(15))
+                    // Wakeups are not completed decisions: frequent quotes must not
+                    // postpone protection. Only a durable decision starts cooldown.
+                    var intrabarScope = $"{checkpointScope}:intrabar";
+                    var lastIntrabarCloseUtc = await decisionCommitStore
+                        .GetLastProcessedCloseAsync(intrabarScope, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (lastIntrabarCloseUtc is null ||
+                        intrabarCloseUtc - lastIntrabarCloseUtc.Value >= TimeSpan.FromSeconds(15))
                     {
-                        var intrabarScope = $"{checkpointScope}:intrabar";
-                        var lastIntrabarCloseUtc = await decisionCommitStore
-                            .GetLastProcessedCloseAsync(intrabarScope, cancellationToken)
-                            .ConfigureAwait(false);
-                        if (lastIntrabarCloseUtc is null || intrabarCloseUtc > lastIntrabarCloseUtc.Value.AddMilliseconds(1))
+                        checkpointScope = intrabarScope;
+                        var intrabarAvailableAtUtc = now >= closed[^1].AvailableAtUtc ? now : closed[^1].AvailableAtUtc;
+                        if (intrabarCloseUtc <= closed[^1].Bar.CloseTimeUtc)
                         {
-                            lastIntrabarTriggerUtc[symbol] = now;
-                            checkpointScope = intrabarScope;
-                            var intrabarAvailableAtUtc = now >= closed[^1].AvailableAtUtc ? now : closed[^1].AvailableAtUtc;
-                            if (intrabarCloseUtc <= closed[^1].Bar.CloseTimeUtc)
-                            {
-                                intrabarCloseUtc = closed[^1].Bar.CloseTimeUtc.AddMilliseconds(1);
-                            }
-                            closed.Add(new ClosedBarEnvelope(
-                                closed.Count,
-                                new CloseBar(symbolObj, intrabarCloseUtc, intrabarTicker.BidPrice),
-                                intrabarAvailableAtUtc));
-                            isIntrabarProtectiveTrigger = true;
+                            intrabarCloseUtc = closed[^1].Bar.CloseTimeUtc.AddMilliseconds(1);
                         }
+                        closed.Add(new ClosedBarEnvelope(
+                            closed.Count,
+                            new CloseBar(symbolObj, intrabarCloseUtc, intrabarTicker.BidPrice),
+                            intrabarAvailableAtUtc));
+                        isIntrabarProtectiveTrigger = true;
                     }
                 }
             }
@@ -974,12 +1007,13 @@ internal sealed class AutonomyCycleHostedService(
         {
             if (localBook.Status == BinanceOrderBookStatus.Healthy)
             {
-                depthImbalanceTop5 = localBook.CalculateTopDepthImbalance(5);
-                depthLiquidityTop5 = localBook.CalculateTopDepthLiquidityNotional(5);
+                var metrics = localBook.CalculateTopDepthMetrics(5);
+                depthImbalanceTop5 = metrics.Imbalance;
+                depthLiquidityTop5 = metrics.LiquidityNotional;
             }
         }
         var temporalOfi = temporalOfiBySymbol.TryGetValue(symbol, out var tOfi) ? (decimal?)tOfi : null;
-        var tradeAggressionDelta = tradeAggressionDeltaBySymbol.TryGetValue(symbol, out var tAgg) ? (decimal?)tAgg : null;
+        var tradeAggressionDelta = ReadTradeAggression(symbol, valuationTimeProvider.GetUtcNow(), policyDocument.Policy.MaxMarketDataAge);
         var effectiveAvailableLiquidity = Math.Max(mappedExecutionMarket.AvailableLiquidityNotional, depthLiquidityTop5 ?? 0m);
         var executionMarket = new ExecutionMarketSnapshot(
             mappedExecutionMarket.BestBid,
@@ -1053,7 +1087,7 @@ internal sealed class AutonomyCycleHostedService(
         {
             if (positionCostBases.TryRemove(symbol, out _))
             {
-                lastClosedTradeAtBySymbol[symbol] = DateTimeOffset.UtcNow;
+                lastClosedTradeAtBySymbol[symbol] = valuationTimeProvider.GetUtcNow();
             }
             positionLifetimePeakProfitBps.TryRemove(symbol, out _);
             positionOriginatingStrategy.TryRemove(symbol, out _);
@@ -1269,7 +1303,7 @@ internal sealed class AutonomyCycleHostedService(
                 policyDocument.Policy,
                 effectiveControl,
                 runtime.AutonomyEntryTargetNotional,
-                DateTimeOffset.UtcNow,
+                valuationTimeProvider.GetUtcNow(),
                 marketRisk,
                 executionMarket,
                 policyDocument.Policy.MaxMarketDataAge,
@@ -1297,7 +1331,8 @@ internal sealed class AutonomyCycleHostedService(
                 MarketBreadthRatio: marketBreadthRatio,
                 EthBtcSpreadReturnBps: ethBtcSpreadReturnBps,
                 CanaryBasketReturnBps: canaryBasketReturnBps,
-                CanaryBasketTrendSlope: canaryBasketTrendSlope);
+                CanaryBasketTrendSlope: canaryBasketTrendSlope,
+                MlTimeframe: runtime.AutonomyInterval.Trim());
 
             if (durablePerformances is not null)
             {
@@ -1420,7 +1455,7 @@ internal sealed class AutonomyCycleHostedService(
             policyDocument.Policy,
             effectiveControl,
             runtime.AutonomyEntryTargetNotional,
-            DateTimeOffset.UtcNow,
+            valuationTimeProvider.GetUtcNow(),
             marketRisk,
             executionMarket,
             policyDocument.Policy.MaxMarketDataAge,
@@ -1753,7 +1788,7 @@ internal sealed class AutonomyCycleHostedService(
         _ => TimeSpan.FromMinutes(1)
     };
 
-    internal static int ResolveMlHorizonBars(string interval) => interval switch
+    internal static int ResolveMlHorizonBars(string interval) => interval.Trim() switch
     {
         "1m" => 4,
         "5m" => 8,

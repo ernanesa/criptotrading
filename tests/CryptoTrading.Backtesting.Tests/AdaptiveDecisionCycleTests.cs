@@ -6,6 +6,7 @@ using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Regimes;
+using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using Xunit;
 
@@ -16,6 +17,10 @@ public sealed class AdaptiveDecisionCycleTests
     private static readonly Symbol BtcUsdt = new("BTCUSDT");
     private static readonly Symbol EthUsdt = new("ETHUSDT");
     private static readonly DateTimeOffset TestTime = DateTimeOffset.Parse("2026-09-21T12:00:00Z", CultureInfo.InvariantCulture);
+
+    private static AdaptiveDecisionCycle CreateCycle(ContextualMetaAllocator? metaAllocator = null,
+        IEnumerable<string>? quarantinedStrategies = null, bool lowProbability = false) =>
+        new(metaAllocator, quarantinedStrategies, MlOperationalTestModels.Catalog(lowProbability));
 
     private static RiskPolicy CreateRiskPolicy() =>
         new(
@@ -44,9 +49,9 @@ public sealed class AdaptiveDecisionCycleTests
             RiskContextComplete: true);
 
     [Fact]
-    public void FailsClosedWhenMarketIsInHighVolatilityChop()
+    public void FailsClosedWhenLegacyPriceDispersionLimitIsBreached()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // High volatility chop prices
         var bars = Bars(100m, 160m, 60m, 170m, 50m, 180m);
         var request = new AdaptiveDecisionCycleRequest(
@@ -60,22 +65,26 @@ public sealed class AdaptiveDecisionCycleTests
         var result = cycle.Evaluate(request);
 
         Assert.True(result.IsNoTrade);
-        Assert.Equal(MarketRegime.HighVolatilityChop, result.Regime.Regime);
+        Assert.True(result.Regime.LegacyDispersionLimitBreached);
         Assert.Contains("REGIME_PROHIBITS_NEW_EXPOSURE", result.NoTradeReason, StringComparison.Ordinal);
         Assert.Null(result.Intent);
-        Assert.Contains("HighVolatilityChop", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Contains("PRICE_DISPERSION_GUARD", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void HighVolatilityChopForcesRiskReducingExitForOpenPosition()
+    [Theory]
+    [InlineData("95", false)]
+    [InlineData("99.99", false)]
+    [InlineData("99.99", true)]
+    public void LegacyDispersionGuardPreservesRiskReducingExitForOpenPosition(string exposure, bool smoothTrend)
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             100m, 160m, 60m, 170m, 50m, 180m,
             55m, 175m, 45m, 165m, 50m, 155m,
             60m, 150m, 55m, 145m, 60m, 140m,
             65m, 135m, 70m, 130m, 75m, 125m);
-        var portfolio = CreatePortfolio(95m) with { PositionCostNotional = 100m };
+        if (smoothTrend) bars = Bars(Enumerable.Range(100, 20).Select(value => (decimal)value).ToArray());
+        var portfolio = CreatePortfolio(decimal.Parse(exposure, CultureInfo.InvariantCulture)) with { PositionCostNotional = 100m };
         var request = new AdaptiveDecisionCycleRequest(
             bars,
             portfolio,
@@ -99,17 +108,17 @@ public sealed class AdaptiveDecisionCycleTests
         var result = cycle.Evaluate(request);
 
         Assert.False(result.IsNoTrade);
-        Assert.Equal(MarketRegime.HighVolatilityChop, result.Regime.Regime);
+        Assert.True(result.Regime.LegacyDispersionLimitBreached);
         Assert.Equal(OrderSide.Sell, result.RecommendedSide);
         Assert.NotNull(result.Intent);
         Assert.Equal(OrderType.Limit, result.Intent!.Type);
-        Assert.Contains("HIGH_VOLATILITY_CHOP_RISK_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Contains("HIGH_PRICE_DISPERSION_RISK_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
     }
 
     [Fact]
     public void FailsClosedWhenOperationalControlBlocksEntries()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(100m, 101m, 102m, 103m, 104m, 105m);
         var safeModeControl = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -135,7 +144,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void SafeModeAllowsRiskReducingExitWhenPositionIsOpen()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -177,7 +186,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void KillSwitchAlwaysBlocksExitEvenWhenPositionIsOpen()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -219,8 +228,8 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void SelectsMeanReversionInRangeWhenOversoldAndExecutesDispatchableOrder()
     {
-        var cycle = new AdaptiveDecisionCycle();
-        // Flat bars then dip to 95 -> oversold range
+        var cycle = CreateCycle();
+        // Fully warmed flat history followed by a small oversold dip, not a crash.
         var request = CreateDispatchableRequest();
 
         var result = cycle.Evaluate(request);
@@ -240,7 +249,7 @@ public sealed class AdaptiveDecisionCycleTests
     {
         var request = CreateDispatchableRequest() with
         {
-            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime, isComplete: false),
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99.979m), new Price(99.981m), 10_000m, TestTime, isComplete: false),
         };
 
         AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.MarketDataUnavailable);
@@ -251,7 +260,7 @@ public sealed class AdaptiveDecisionCycleTests
     {
         var request = CreateDispatchableRequest() with
         {
-            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime.AddMinutes(-6)),
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99.979m), new Price(99.981m), 10_000m, TestTime.AddMinutes(-6)),
         };
 
         AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.MarketDataStale);
@@ -262,7 +271,7 @@ public sealed class AdaptiveDecisionCycleTests
     {
         var request = CreateDispatchableRequest() with
         {
-            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 1m, TestTime),
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99.979m), new Price(99.981m), 1m, TestTime),
         };
 
         AssertPlannerRejectionFailsClosed(request, ExecutionPlanner.LiquidityUnavailable);
@@ -282,20 +291,19 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void SelectsBreakoutInStrongBullTrend()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // Clear breakout pattern in bull trend
-        var bars = Bars(100m, 101m, 102m, 103m, 102m, 107m);
-        var request = new AdaptiveDecisionCycleRequest(
-            bars,
-            CreatePortfolio(),
-            CreateRiskPolicy(),
-            OperationalControlSnapshot.Initial,
-            EntryTargetNotional: 500m,
-            EvaluatedAtUtc: TestTime);
+        var bars = WithWilderWarmup(Bars(100m, 100.1m, 100.2m, 100.3m, 100.2m, 100.45m));
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(100.44m), new Price(100.46m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 10m, askQuantity: 10m)
+        };
 
         var result = cycle.Evaluate(request);
 
-        Assert.False(result.IsNoTrade);
+        Assert.False(result.IsNoTrade, result.NoTradeReason);
         Assert.NotNull(result.Intent);
         Assert.Equal(OrderSide.Buy, result.RecommendedSide);
         Assert.Equal(MarketRegime.BullTrend, result.Regime.Regime);
@@ -306,7 +314,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void SuppressesBreakoutEntryWhenQuarantinedInBullTrend()
     {
-        var cycle = new AdaptiveDecisionCycle(quarantinedStrategies: ["breakout-momentum"]);
+        var cycle = CreateCycle(quarantinedStrategies: ["breakout-momentum"]);
         var bars = Bars(100m, 101m, 102m, 103m, 102m, 106m);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -327,7 +335,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksMeanReversionFallingKnifeEntryDuringIntradayBreakdown()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 24 intraday 1m bars drifting down and breaking below the 6-bar Donchian channel low on the final bar
         var bars = Bars(
             84_300m, 84_290m, 84_280m, 84_270m, 84_260m, 84_250m,
@@ -353,7 +361,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksBreakoutEntryInMeanRevertingRangeOnIntradayWindow()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 24 intraday 1m bars oscillating in a flat MeanRevertingRange and poking slightly above the 12-bar high on the final bar
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
@@ -380,7 +388,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void AllowsNormalMeanReversionDipInRangeOnIntradayWindow()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 24 intraday 1m bars in a flat MeanRevertingRange with a normal ~3.5 bps oversold dip on the final bar
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
@@ -406,7 +414,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenOrderBookImbalanceIsSeverelyAdverseOnIntradayWindow()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -439,7 +447,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenModerateOrderBookImbalanceAndLowMlWinProbabilityAlign()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle(lowProbability: true);
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -472,7 +480,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void RejectsEntryWhenMlWinProbabilityIsBelowFiftyPercentFloor()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle(lowProbability: true);
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -504,7 +512,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void LocksProfitWhenAdverseOrderBookImbalanceHitsProfitableOpenPosition()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle(lowProbability: true);
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -539,7 +547,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void ScalesUpEntryNotionalOnHighConvictionKellyConfluence()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -574,7 +582,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void LocksProfitWhenExpandedTargetReachedAndMomentumSoftens()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -611,7 +619,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void LocksProfitOnTrailingStopChandelierExitWhenPricePullbacksFromPeak()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 24 bars: position entered earlier, swings up to 85_200 (+142.8 bps gain from cost basis 84_000),
         // then pulls back to 84_500 (+59.5 bps gain, a 83.3 bps pullback >= trailing gap)
         var bars = Bars(
@@ -651,7 +659,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void LocksProfitAtBreakEvenWhenMomentumSoftens()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -689,9 +697,9 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void EmitsConfluenceEntryWhenMlWinProbabilityAndOrderBookAreStrong()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
-        var bars = Bars(prices);
+        var bars = WithWilderWarmup(Bars(prices));
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -715,9 +723,9 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void ConfluenceEntryIsSuppressedWhenTrendFollowingIsQuarantined()
     {
-        var cycle = new AdaptiveDecisionCycle(quarantinedStrategies: ["trend-following-btcusdt"]);
+        var cycle = CreateCycle(quarantinedStrategies: ["trend-following-btcusdt"]);
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
-        var bars = Bars(prices);
+        var bars = WithWilderWarmup(Bars(prices));
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -735,7 +743,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void ConfluenceEntryIsSuppressedWhenRegimeIsBearTrend()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // Declining prices produce a BearTrend
         var prices = Enumerable.Range(0, 25).Select(i => 120m - (i * 0.50m)).ToArray();
         var bars = Bars(prices);
@@ -754,14 +762,14 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     private static AdaptiveDecisionCycleRequest CreateDispatchableRequest() => new(
-        Bars(100m, 100m, 100m, 100m, 100m, 95m),
+        WithWilderWarmup(Bars(100m, 100m, 100m, 100m, 100m, 99.98m)),
         CreatePortfolio(),
         CreateRiskPolicy(),
         OperationalControlSnapshot.Initial,
         EntryTargetNotional: 500m,
         EvaluatedAtUtc: TestTime)
     {
-        ExecutionMarket = new ExecutionMarketSnapshot(new Price(99m), new Price(101m), 10_000m, TestTime),
+        ExecutionMarket = new ExecutionMarketSnapshot(new Price(99.979m), new Price(99.981m), 10_000m, TestTime),
         ExecutionMarketMaxAge = TimeSpan.FromMinutes(5),
         AvailableAccountLiquidityNotional = 10_000m,
         EffectiveCommission = CreateCommission(TestTime),
@@ -772,7 +780,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void LocksProfitOnTrailingStopWithLifetimePeakAcrossWindowConsolidation()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 35 bars: position entered at 84_000, spiked to 84_350 at bar index 10 (>20 bars ago),
         // followed by 24 bars of top consolidation and slight pullback to 84_210 (+25.0 bps gain)
         var prices = new List<decimal>
@@ -815,7 +823,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void AttributesExitToPositionOriginatingStrategy()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_000m, 84_020m, 84_050m, 84_080m, 84_120m, 84_150m,
             84_180m, 84_220m, 84_260m, 84_300m, 84_330m, 84_350m,
@@ -829,7 +837,8 @@ public sealed class AdaptiveDecisionCycleTests
             OperationalControlSnapshot.Initial,
             EntryTargetNotional: 12m,
             EvaluatedAtUtc: TestTime,
-            PositionOriginatingStrategyId: "trend-following-btcusdt")
+            PositionOriginatingStrategyId: "trend-following-btcusdt",
+            HasPendingExitReplan: true)
         {
             ExecutionMarket = new ExecutionMarketSnapshot(
                 new Price(84_349m),
@@ -851,7 +860,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void DoesNotTriggerPhantomTrailingStopWhenPreEntryHighExceedsDipEntry()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // Pre-entry bars were at 85_000, dipped to 84_000 where position was opened,
         // and now sits at 84_160 (+19.0 bps gain). LifetimePeakProfitBps is 19.0 bps.
         // Without lifetimePeakProfitBps precedence, 85_000 would look like a +119 bps peak and trigger a phantom exit.
@@ -963,7 +972,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void FailsClosedWhenPostTradeCooldownIsActive()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = new decimal[25];
         for (var i = 0; i < 25; i++)
         {
@@ -989,7 +998,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void AllowsEntryWhenPostTradeCooldownHasExpired()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = new decimal[25];
         for (var i = 0; i < 25; i++)
         {
@@ -1016,7 +1025,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksMomentumEntryInMeanRevertingRangeWithoutConfluence()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 25 bars in a flat range
         var prices = new decimal[25];
         for (var i = 0; i < 25; i++)
@@ -1069,9 +1078,9 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void TechnicalIndicatorCalculatorComputesOhlcAtrAdxRsiVwapAndRelativeVolume()
     {
-        var start = TestTime.AddMinutes(-25);
-        var bars = new List<CloseBar>(25);
-        for (var i = 0; i < 25; i++)
+        var start = TestTime.AddMinutes(-35);
+        var bars = new List<CloseBar>(35);
+        for (var i = 0; i < 35; i++)
         {
             var close = 100m + (i * 0.40m);
             bars.Add(new CloseBar(
@@ -1081,7 +1090,7 @@ public sealed class AdaptiveDecisionCycleTests
                 openPrice: close - 0.20m,
                 highPrice: close + 0.30m,
                 lowPrice: close - 0.30m,
-                volume: i == 24 ? 30m : 10m));
+                volume: i == 34 ? 30m : 10m));
         }
 
         var snapshot = TechnicalIndicatorCalculator.Evaluate(bars);
@@ -1095,9 +1104,75 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void WilderIndicatorsUseSeededSmoothingAndAverageDxInsteadOfReportingLatestDx()
+    {
+        // Period 3: DX seed = (100/3 + 200/3 + 700/33)/3 = 4000/99.
+        // Next DX = 170/3, so the next Wilder ADX is 13610/297.
+        var snapshot = TechnicalIndicatorCalculator.Evaluate(Bars(10m, 11m, 12m, 11m, 13m, 12m, 14m), period: 3);
+        Assert.Equal(1.48148148m, snapshot.Atr);
+        Assert.Equal(45.82m, snapshot.Adx);
+        Assert.Equal(78.33m, snapshot.PlusDi);
+        Assert.Equal(21.67m, snapshot.MinusDi);
+        Assert.Equal(78.33m, snapshot.Rsi);
+        Assert.True(snapshot.IsWilderReady);
+        Assert.True(snapshot.IsAdxReady);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void AdxDoesNotInventTrendStrengthBeforeItsWarmup(int count)
+    {
+        var bars = Bars(10m, 11m, 12m, 13m, 14m).Take(count).ToArray();
+        var snapshot = TechnicalIndicatorCalculator.Evaluate(bars, period: 3);
+        Assert.Equal(0m, snapshot.Adx);
+        Assert.False(snapshot.IsAdxReady);
+    }
+
+    [Fact]
+    public void WilderIndicatorsArePointInTimeAndFlatPricesHaveNoDirectionalStrength()
+    {
+        var bars = Bars(10m, 10m, 10m, 10m, 10m, 10m, 10m);
+        var before = TechnicalIndicatorCalculator.Evaluate(bars, period: 3);
+        Assert.Equal(0m, before.Atr);
+        Assert.Equal(0m, before.Adx);
+        Assert.Equal(50m, before.Rsi);
+        var after = TechnicalIndicatorCalculator.Evaluate([.. bars, new CloseBar(BtcUsdt, TestTime.AddMinutes(1), 100m)], period: 3);
+        Assert.Equal(33.33m, after.Adx);
+        Assert.Equal(0m, before.Adx);
+    }
+
+    [Fact]
+    public void WilderReadinessChangesOnlyAtTheCompleteSeedBoundaries()
+    {
+        var bars = Bars(10m, 11m, 12m, 13m, 14m, 15m);
+        Assert.False(TechnicalIndicatorCalculator.Evaluate(bars.Take(3).ToArray(), period: 3).IsWilderReady);
+        Assert.True(TechnicalIndicatorCalculator.Evaluate(bars.Take(4).ToArray(), period: 3).IsWilderReady);
+        Assert.False(TechnicalIndicatorCalculator.Evaluate(bars.Take(5).ToArray(), period: 3).IsAdxReady);
+        Assert.True(TechnicalIndicatorCalculator.Evaluate(bars, period: 3).IsAdxReady);
+    }
+
+    [Fact]
+    public void TimeBarVolumeProxyIsNotPublishedAsVolumeSynchronizedVpin()
+    {
+        CloseBar[] bars = [
+            new(BtcUsdt, TestTime.AddMinutes(-1), 100m, volume: 10m, takerBuyBaseVolume: 10m, numberOfTrades: 1),
+            new(BtcUsdt, TestTime, 100m, volume: 30m, takerBuyBaseVolume: 0m, numberOfTrades: 1)];
+        var snapshot = TechnicalIndicatorCalculator.Evaluate(bars);
+        Assert.Equal(-0.5m, snapshot.CvdImbalance);
+        using var json = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(snapshot));
+        Assert.True(json.RootElement.TryGetProperty("AbsoluteBarVolumeImbalance", out var imbalance));
+        Assert.Equal(1m, imbalance.GetDecimal());
+        Assert.False(json.RootElement.TryGetProperty("Vpin", out _));
+    }
+
+    [Fact]
     public void ProtectiveStopLossExitFiresWhenPositionDropsBeyondAtrStopThreshold()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -1134,7 +1209,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void NegativeExpectedNetEdgeBlocksEntryWhenSlippageAndFeesExceedPayoff()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -1160,9 +1235,9 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
-    public void BlocksEntryWhenToxicVpinAndNegativeCvdImbalanceAlign()
+    public void BlocksEntryWhenAbsoluteBarVolumeImbalanceAndNegativeCvdAlign()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = new[]
         {
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
@@ -1180,7 +1255,7 @@ public sealed class AdaptiveDecisionCycleTests
                 highPrice: p + 2m,
                 lowPrice: p - 2m,
                 volume: 100m,
-                takerBuyBaseVolume: 5m, // 95% taker sell aggression -> VPIN = 0.90, CVD = -0.90
+                takerBuyBaseVolume: 5m, // Time-bar absolute imbalance = 0.90; signed delta = -0.90.
                 quoteVolume: p * 100m,
                 numberOfTrades: 250))
             .ToArray();
@@ -1196,13 +1271,13 @@ public sealed class AdaptiveDecisionCycleTests
         var result = cycle.Evaluate(request);
 
         Assert.True(result.IsNoTrade);
-        Assert.Equal("TOXIC_VPIN_FLOW_BLOCKED", result.NoTradeReason);
+        Assert.Equal("ABSOLUTE_BAR_FLOW_IMBALANCE_BLOCKED", result.NoTradeReason);
     }
 
     [Fact]
     public void BlocksEntryWhenMaxOpenPositionCorrelationExceedsHardLimit()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
             84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
@@ -1315,7 +1390,7 @@ public sealed class AdaptiveDecisionCycleTests
         AdaptiveDecisionCycleRequest request,
         string expectedReason)
     {
-        var result = new AdaptiveDecisionCycle().Evaluate(request);
+        var result = CreateCycle().Evaluate(request);
 
         Assert.True(result.IsNoTrade);
         Assert.Null(result.Intent);
@@ -1326,6 +1401,17 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     private static List<CloseBar> Bars(params decimal[] prices) => BarsForSymbol(BtcUsdt, prices);
+
+    private static List<CloseBar> WithWilderWarmup(IReadOnlyList<CloseBar> bars)
+    {
+        var prefixCount = Math.Max(0, 28 - bars.Count);
+        List<CloseBar> result = new(prefixCount + bars.Count);
+        for (var i = 0; i < prefixCount; i++)
+            result.Add(new CloseBar(bars[0].Symbol, bars[0].CloseTimeUtc.AddMinutes(i - prefixCount), bars[0].ClosePrice.Value));
+        result.AddRange(bars);
+        Assert.True(TechnicalIndicatorCalculator.Evaluate(result).IsAdxReady);
+        return result;
+    }
 
     private static List<CloseBar> BarsForSymbol(Symbol symbol, params decimal[] prices)
     {
@@ -1370,7 +1456,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksAltcoinEntryWhenLeaderIsRetreating()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(EthUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -1392,7 +1478,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksAltcoinEntryWhenLeaderInBearTrend()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(EthUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -1415,7 +1501,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenCvdImbalanceIsNegative()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(BtcUsdt, volume: 100m, takerBuyBaseVolume: 40m);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -1435,7 +1521,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenMarketBreadthIsWeak()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(BtcUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -1457,7 +1543,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenOverboughtVwapStretchedWithNegativeCvd()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 25 rising bars (RSI 100, VWAP dev > 80 bps) that trigger ML_ORDERBOOK_CONFLUENCE_ENTRY,
         // but with volume showing subtle distribution selling (takerBuy = 49, volume = 100 => cvd = -0.02 < 0)
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
@@ -1476,6 +1562,7 @@ public sealed class AdaptiveDecisionCycleTests
                 numberOfTrades: 50))
             .ToArray();
 
+        bars = WithWilderWarmup(bars).ToArray();
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -1518,7 +1605,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void MlOrderBookConfluenceSuppressedWhenLeaderIsRetreating()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
         var bars = BarsForSymbol(EthUsdt, prices);
         var request = CreateDispatchableRequest() with
@@ -1540,7 +1627,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void ExitsFullMaxNotionalAndUsesAggressiveTakerWhenPositionAppreciatesAboveMaxOrderNotional()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = Bars(
             84_000m, 84_050m, 84_150m, 84_300m, 84_500m, 84_700m,
             84_900m, 85_050m, 85_150m, 85_200m, 85_100m, 85_000m,
@@ -1593,7 +1680,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void PreemptivelyExitsAltcoinPositionOnCrossAssetLeaderShock()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = BarsForSymbol(
             EthUsdt,
             2_500m, 2_501m, 2_502m, 2_501m, 2_502m, 2_503m,
@@ -1636,7 +1723,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksAltcoinEntryWhenCanaryBasketIsRetreating()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(EthUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -1658,10 +1745,10 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksAltcoinEntryWhenFollowerOverextendedAgainstLeaders()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // Smooth rising bars (+48.8 bps on the final bar, RSI = 100) while BTC and Canary leaders are flat/negative
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.55m)).ToArray();
-        var bars = BarsForSymbol(EthUsdt, prices);
+        var bars = WithWilderWarmup(BarsForSymbol(EthUsdt, prices));
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -1688,7 +1775,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenTickSpreadIsExcessive()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(EthUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -1720,7 +1807,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void DoesNotPrematurelyLockBreakEvenInActiveBullTrendWithoutPriorPeak()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.40m)).ToArray();
         var bars = Bars(prices);
         // Position is in BullTrend at +35 bps profit with LifetimePeakProfitBps = 35 bps (< 75 bps threshold)
@@ -1754,7 +1841,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void SuppressesConfluenceEntryWhenRelativeVolumeIsDeadOnFinalBar()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 25 rising bars in BullTrend, but the final bar has dead relative volume (5% of average, like ARBUSDT at 01:45 UTC)
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
         var start = TestTime.AddMinutes(-prices.Length);
@@ -1791,9 +1878,9 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
-    public void BlocksEntryWhenExtremeVpinOccursOnThinRelativeVolumeEvenWithPositiveCvd()
+    public void BlocksEntryWhenExtremeBarVolumeImbalanceOccursOnThinRelativeVolumeEvenWithPositiveCvd()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = new[]
         {
             84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
@@ -1814,7 +1901,7 @@ public sealed class AdaptiveDecisionCycleTests
                     highPrice: p + 2m,
                     lowPrice: p - 2m,
                     volume: vol,
-                    takerBuyBaseVolume: vol * 0.98m, // Positive CVD (+0.96), extreme VPIN (0.96 >= 0.92), thin RVOL (0.10 <= 0.20)
+                    takerBuyBaseVolume: vol * 0.98m, // Signed delta +0.96, absolute bar imbalance 0.96; thin RVOL 0.10.
                     quoteVolume: p * vol,
                     numberOfTrades: 50);
             })
@@ -1831,13 +1918,13 @@ public sealed class AdaptiveDecisionCycleTests
         var result = cycle.Evaluate(request);
 
         Assert.True(result.IsNoTrade);
-        Assert.Equal("TOXIC_VPIN_FLOW_BLOCKED", result.NoTradeReason);
+        Assert.Equal("ABSOLUTE_BAR_FLOW_IMBALANCE_BLOCKED", result.NoTradeReason);
     }
 
     [Fact]
     public void ExitsImmediatelyInConfirmedBearTrendWithinNoiseBandWhenMarketBreadthOrCanaryIsWeak()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         // 18 rising/flat bars followed by sharp rollover on the final bars so FastSMA crosses below SlowSMA on the final bar in BearTrend
         var bars = BarsForSymbol(
             EthUsdt,
@@ -1880,8 +1967,10 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void TriggersConfluenceBreakdownDefensiveExitWhenMlOrderBookAndCanaryCollapseSimultaneously()
     {
-        var cycle = new AdaptiveDecisionCycle();
-        // Bars in mild BullTrend that stall and roll over at the top (giving low ML win probability <= 0.24)
+        var models = MlOperationalTestModels.DefensiveCatalog;
+        var cycle = new AdaptiveDecisionCycle(artifactProvider: models);
+        // The actual Buy artifact predicts low continuation; the Sell artifact
+        // predicts high outcomes. The exit trace must retain its causal Buy model.
         var bars = BarsForSymbol(
             EthUsdt,
             2_480m, 2_482m, 2_484m, 2_486m, 2_488m, 2_490m,
@@ -1918,6 +2007,12 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal(OrderSide.Sell, result.RecommendedSide);
         Assert.Contains("CONFLUENCE_BREAKDOWN_DEFENSIVE_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
         Assert.Equal(ExecutionTactic.AggressiveTakerImmediate, result.TacticRecommendation!.SelectedTactic);
+        var causal = models.Find("ETHUSDT", "1m", OrderSide.Buy, 4)!;
+        using var trace = System.Text.Json.JsonDocument.Parse(result.DecisionTraceJson);
+        Assert.Equal(causal.Metadata.ModelId, trace.RootElement.GetProperty("MlModelId").GetString());
+        Assert.Equal(causal.VerifiedSha256, trace.RootElement.GetProperty("ModelArtifactSha256").GetString());
+        Assert.Equal("Buy", trace.RootElement.GetProperty("MlModelTargetSide").GetString());
+        Assert.True(trace.RootElement.GetProperty("MlWinProbability").GetDecimal() <= 0.24m);
     }
 
     [Fact]
@@ -1929,9 +2024,9 @@ public sealed class AdaptiveDecisionCycleTests
             allocator.RecordReward("trend-following-ethusdt", MarketRegime.BullTrend, -0.0010m);
         }
 
-        var cycle = new AdaptiveDecisionCycle(allocator);
+        var cycle = CreateCycle(allocator);
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
-        var bars = BarsForSymbol(EthUsdt, prices);
+        var bars = WithWilderWarmup(BarsForSymbol(EthUsdt, prices));
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -1961,11 +2056,62 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void MissingCalibratedArtifactBlocksEntryInsteadOfTrainingDuringDecision()
+    {
+        var bars = WithWilderWarmup(Bars(Enumerable.Range(0, 25).Select(i => 100m + i * 0.5m).ToArray()));
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            EvaluatedAtUtc = TestTime,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(111.98m), new Price(112.02m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 18m, askQuantity: 2m)
+        };
+        var result = new AdaptiveDecisionCycle().Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("ML_CALIBRATED_ARTIFACT_UNAVAILABLE", result.NoTradeReason);
+        using var trace = System.Text.Json.JsonDocument.Parse(result.DecisionTraceJson);
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, trace.RootElement.GetProperty("IsSsaStructuralBreakdown").ValueKind);
+    }
+
+    [Fact]
+    public void MissingModelIsNotAZeroProbabilityDefensiveSellSignal()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = Bars(Enumerable.Repeat(100m, 30).ToArray()),
+            Portfolio = CreatePortfolio(99.9m) with { PositionCostNotional = 100m },
+            CanaryBasketTrendSlope = -0.00009m,
+            MarketBreadthRatio = 0.30m,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(100m), new Price(100.01m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 1m, askQuantity: 3m)
+        };
+        var result = new AdaptiveDecisionCycle().Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.DoesNotContain("CONFLUENCE_BREAKDOWN_DEFENSIVE_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DispersionRiskExitCannotBeOverruledByHoldingAProfitableStrongBidPosition()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = Bars(Enumerable.Range(100, 20).Select(value => (decimal)value).ToArray()),
+            Portfolio = CreatePortfolio(102m) with { PositionCostNotional = 100m },
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(118.99m), new Price(119.01m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 19m, askQuantity: 1m)
+        };
+        var result = new AdaptiveDecisionCycle().Evaluate(request);
+        Assert.False(result.IsNoTrade, result.NoTradeReason);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("HIGH_PRICE_DISPERSION_RISK_EXIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DoesNotBlockAltcoinEntryOnMinorLeaderBarPullbackWhenLeaderIsInBullTrendWithPositiveSlope()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var prices = Enumerable.Range(0, 25).Select(i => 100m + (i * 0.50m)).ToArray();
-        var bars = BarsForSymbol(EthUsdt, prices);
+        var bars = WithWilderWarmup(BarsForSymbol(EthUsdt, prices));
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -1996,7 +2142,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksAltcoinEntryWhenCanaryBasketRetreatsAtTightenedThreshold()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(EthUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -2017,7 +2163,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksAltcoinEntryWhenCanaryBasketRetreatsWithNegativeSlopeAtTightenedThreshold()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var bars = CreateMeanReversionEntryBars(EthUsdt);
         var request = new AdaptiveDecisionCycleRequest(
             bars,
@@ -2039,7 +2185,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenRsiIsExtremelyOverboughtAndVwapStretched()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var start = TestTime.AddMinutes(-30);
         // Construct 25 bars with steep surge on final bars with live taker volume
         var prices = new List<decimal>();
@@ -2064,6 +2210,7 @@ public sealed class AdaptiveDecisionCycleTests
             })
             .ToArray();
 
+        bars = WithWilderWarmup(bars).ToArray();
         var request = CreateDispatchableRequest() with
         {
             Bars = bars,
@@ -2093,7 +2240,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksEntryWhenRelativeVolumeIsThin()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var start = TestTime.AddMinutes(-30);
         var baseBars = CreateMeanReversionEntryBars(EthUsdt, volume: 100m, takerBuyBaseVolume: 50m);
         // Set the final entry bar volume to 10m (rvol = 10 / 100 = 0.10 <= 0.15m)
@@ -2123,7 +2270,7 @@ public sealed class AdaptiveDecisionCycleTests
     [Fact]
     public void BlocksConfluenceEntryWhenSubmergedBelowVwap()
     {
-        var cycle = new AdaptiveDecisionCycle();
+        var cycle = CreateCycle();
         var start = TestTime.AddMinutes(-35);
         // 25 bars in BullTrend: bars 0..4 start at 90.0. Bar 5 has 105.0 with 1,000,000 volume (anchoring VWAP at ~105.0).
         // Bars 6..24 rise steadily from 97.0 to 102.0. Price 102.0 is submerged by -285 bps below VWAP (105.0).

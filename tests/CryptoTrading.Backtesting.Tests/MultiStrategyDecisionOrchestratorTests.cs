@@ -25,14 +25,14 @@ public sealed class MultiStrategyDecisionOrchestratorTests
     }
 
     [Fact]
-    public void OrchestratorYieldsNoTradeWhenRegimeIsHighVolatilityChop()
+    public void OrchestratorYieldsNoTradeWhenLegacyDispersionLimitIsBreached()
     {
         // Extreme swings trigger Chop regime: 100, 150, 70, 160, 60, 170
         var bars = Bars(100m, 150m, 70m, 160m, 60m, 170m);
         var result = MultiStrategyDecisionOrchestrator.Orchestrate(BtcUsdt, bars, 1000m, TestTime);
 
         Assert.True(result.IsNoTrade);
-        Assert.Equal(MarketRegime.HighVolatilityChop, result.Regime.Regime);
+        Assert.True(result.Regime.LegacyDispersionLimitBreached);
         Assert.Contains("prohibits new exposure", result.OrchestrationReason, StringComparison.Ordinal);
     }
 

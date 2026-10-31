@@ -4,6 +4,7 @@
 
 using System.Data;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Research;
@@ -23,7 +24,7 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
         ArgumentNullException.ThrowIfNull(snapshot);
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        var payloadJson = JsonSerializer.Serialize(snapshot, JsonOptions);
+        var payloadJson = JsonSerializer.Serialize(snapshot, MarketRegimeJsonContext.Default.MarketRegimeSnapshot);
 
         const string sql = """
             INSERT INTO trading.market_regime_snapshots
@@ -50,7 +51,12 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
         const string sql = """
-            SELECT symbol, observed_at, regime, confidence, trend_slope, volatility, reason
+            SELECT symbol, observed_at, regime, confidence, trend_slope, volatility, reason,
+                   COALESCE((payload->>'hasCompleteMetrics')::boolean, false),
+                   (payload->>'returnSigmaPerBar')::numeric, (payload->>'efficiencyRatio')::numeric,
+                   (payload->>'legacyDispersionLimitBreached')::boolean,
+                   (payload->>'appliedMaxReturnSigmaPerBar')::numeric,
+                   payload ? 'appliedMaxReturnSigmaPerBar'
             FROM trading.market_regime_snapshots
             WHERE symbol = @symbol
             ORDER BY observed_at DESC
@@ -63,14 +69,7 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            return new MarketRegimeSnapshot(
-                new Symbol(reader.GetString(0)),
-                Utc(reader.GetDateTime(1)),
-                Enum.Parse<MarketRegime>(reader.GetString(2), ignoreCase: true),
-                reader.GetDecimal(3),
-                reader.GetDecimal(4),
-                reader.GetDecimal(5),
-                reader.GetString(6));
+            return ReadMarketRegimeSnapshot(reader);
         }
 
         return null;
@@ -81,7 +80,12 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
         const string sql = """
-            SELECT symbol, observed_at, regime, confidence, trend_slope, volatility, reason
+            SELECT symbol, observed_at, regime, confidence, trend_slope, volatility, reason,
+                   COALESCE((payload->>'hasCompleteMetrics')::boolean, false),
+                   (payload->>'returnSigmaPerBar')::numeric, (payload->>'efficiencyRatio')::numeric,
+                   (payload->>'legacyDispersionLimitBreached')::boolean,
+                   (payload->>'appliedMaxReturnSigmaPerBar')::numeric,
+                   payload ? 'appliedMaxReturnSigmaPerBar'
             FROM trading.market_regime_snapshots
             WHERE symbol = @symbol
             ORDER BY observed_at DESC
@@ -96,18 +100,23 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            list.Add(new MarketRegimeSnapshot(
-                new Symbol(reader.GetString(0)),
-                Utc(reader.GetDateTime(1)),
-                Enum.Parse<MarketRegime>(reader.GetString(2), ignoreCase: true),
-                reader.GetDecimal(3),
-                reader.GetDecimal(4),
-                reader.GetDecimal(5),
-                reader.GetString(6)));
+            list.Add(ReadMarketRegimeSnapshot(reader));
         }
 
         return list;
     }
+
+    private static MarketRegimeSnapshot ReadMarketRegimeSnapshot(NpgsqlDataReader reader) =>
+        new(new Symbol(reader.GetString(0)), Utc(reader.GetDateTime(1)),
+            Enum.Parse<MarketRegime>(reader.GetString(2), ignoreCase: true),
+            reader.GetDecimal(3), reader.GetDecimal(4), reader.GetDecimal(5), reader.GetString(6))
+        {
+            HasCompleteMetrics = reader.GetBoolean(7) && !reader.IsDBNull(8) && !reader.IsDBNull(9) && !reader.IsDBNull(10) && reader.GetBoolean(12),
+            ReturnSigmaPerBar = reader.IsDBNull(8) ? 0m : reader.GetDecimal(8),
+            EfficiencyRatio = reader.IsDBNull(9) ? 0m : reader.GetDecimal(9),
+            LegacyDispersionLimitBreached = !reader.IsDBNull(10) && reader.GetBoolean(10),
+            AppliedMaxReturnSigmaPerBar = reader.IsDBNull(11) ? null : reader.GetDecimal(11)
+        };
 
     // ==========================================
     // IModelStrategyRegistryStore (Async & Sync)
@@ -570,3 +579,7 @@ public sealed partial class PostgresTradingStore : IMarketRegimeStore, IModelStr
         return list;
     }
 }
+
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(MarketRegimeSnapshot))]
+internal partial class MarketRegimeJsonContext : JsonSerializerContext;

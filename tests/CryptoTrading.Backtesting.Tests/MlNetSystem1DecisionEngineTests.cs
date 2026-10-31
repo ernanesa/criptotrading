@@ -134,7 +134,7 @@ public sealed class MlNetSystem1DecisionEngineTests
     }
 
     [Fact]
-    public void EvaluateProducesPlattCalibratedProbabilityAndScores()
+    public void EvaluateWithoutArtifactExplicitlyReportsUnavailableEvidence()
     {
         var (_, bars) = SyntheticMarketDataset.CreateBtcUsdtV1();
         var closePrices = bars.Select(b => b.ClosePrice.Value).ToArray();
@@ -146,14 +146,83 @@ public sealed class MlNetSystem1DecisionEngineTests
             OrderSide.Buy,
             orderBookImbalance: 0.15m);
 
-        Assert.InRange(evaluation.MlWinProbability, 0.01m, 0.99m);
-        Assert.InRange(evaluation.SsaChangePointPValue, 0.0m, 1.0m);
-        Assert.InRange(evaluation.SsaSpikePValue, 0.0m, 1.0m);
-        Assert.False(evaluation.IsSsaStructuralBreakdown);
+        Assert.Equal(0m, evaluation.MlWinProbability);
+        Assert.False(evaluation.HasCalibratedProbability);
+        Assert.False(evaluation.HasSsaEvidence);
+        Assert.Equal("ML_CALIBRATED_ARTIFACT_UNAVAILABLE", evaluation.AvailabilityReason);
     }
 
     [Fact]
-    public void EvaluateWalkForwardCalibrationWalkForwardWindowsProducesBrierScoreBelowFifteenBps()
+    public void MissingArtifactCannotTurnRegimeConfidenceIntoAProbability()
+    {
+        var at = DateTimeOffset.Parse("2026-09-21T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var symbol = new CryptoTrading.Domain.Primitives.Symbol("BTCUSDT");
+        CloseBar[] bars = [new(symbol, at.AddMinutes(-1), 100m), new(symbol, at, 101m)];
+        var regime = new MarketRegimeSnapshot(symbol, at, MarketRegime.BullTrend, 0.95m, 0.01m, 0.01m, "unit fixture");
+        var evaluation = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, 0.8m);
+        Assert.Equal(0m, evaluation.MlWinProbability);
+        Assert.False(evaluation.HasCalibratedProbability);
+    }
+
+    [Fact]
+    public void MissingArtifactOnLongHistoryDoesNotTrainOrPublishAProbability()
+    {
+        var (_, bars) = SyntheticMarketDataset.CreateBtcUsdtV1();
+        var regime = MarketRegimeClassifier.Classify(bars[0].Symbol, bars.Select(bar => bar.ClosePrice.Value).ToArray(), bars[^1].CloseTimeUtc);
+        var evaluation = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, 0.8m);
+        Assert.Equal(0m, evaluation.MlWinProbability);
+        Assert.False(evaluation.HasCalibratedProbability);
+    }
+
+    [Fact]
+    public void InferenceUsesPreviouslyTrainedArtifactAndRejectsWrongSide()
+    {
+        var export = MlDecisionArtifactTests.Train();
+        var artifact = MlDecisionArtifact.LoadVerified(export.Payload.Span, export.Sha256);
+        var symbol = new CryptoTrading.Domain.Primitives.Symbol("BTCUSDT");
+        var start = DateTimeOffset.Parse("2026-09-01T04:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var bars = Enumerable.Range(0, 30).Select(i => new CloseBar(symbol, start.AddMinutes(i), 100m + i % 5 * 0.1m)).ToArray();
+        var regime = MarketRegimeClassifier.Classify(symbol, bars.Select(bar => bar.ClosePrice.Value).ToArray(), bars[^1].CloseTimeUtc);
+        var result = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, null, artifact: artifact);
+        Assert.True(result.HasCalibratedProbability);
+        Assert.InRange(result.MlWinProbability, 0.01m, 0.99m);
+        Assert.Equal(artifact.Metadata.ModelId, result.ModelId);
+        Assert.Null(result.AvailabilityReason);
+        var incompatible = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Sell, null, artifact: artifact);
+        Assert.False(incompatible.HasCalibratedProbability);
+        Assert.Equal("ML_ARTIFACT_CONTEXT_MISMATCH", incompatible.AvailabilityReason);
+    }
+
+    [Fact]
+    public void LateEvaluationCannotUseAModelCreatedAfterItsFeatureBar()
+    {
+        var export = MlDecisionArtifactTests.Train();
+        var artifact = MlDecisionArtifact.LoadVerified(export.Payload.Span, export.Sha256);
+        var symbol = new CryptoTrading.Domain.Primitives.Symbol("BTCUSDT");
+        var start = DateTimeOffset.Parse("2026-09-01T02:30:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var bars = Enumerable.Range(0, 30).Select(i => new CloseBar(symbol, start.AddMinutes(i), 100m + i % 5 * 0.1m)).ToArray();
+        var regime = MarketRegimeClassifier.Classify(symbol, bars.Select(bar => bar.ClosePrice.Value).ToArray(), start.AddHours(2));
+        var result = MlNetSystem1DecisionEngine.Evaluate(bars, regime, OrderSide.Buy, null, artifact: artifact);
+        Assert.False(result.HasCalibratedProbability);
+        Assert.Equal("ML_ARTIFACT_NOT_POINT_IN_TIME", result.AvailabilityReason);
+    }
+
+    [Fact]
+    public void WalkForwardCannotUseOneCurrentBookValueAsHistoricalBookEvidence()
+    {
+        var export = MlDecisionArtifactTests.Train(usesBook: true);
+        var artifact = MlDecisionArtifact.LoadVerified(export.Payload.Span, export.Sha256);
+        var symbol = new CryptoTrading.Domain.Primitives.Symbol("BTCUSDT");
+        var start = DateTimeOffset.Parse("2026-09-01T04:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+        var bars = Enumerable.Range(0, 60).Select(i => new CloseBar(symbol, start.AddMinutes(i), 100m + i % 5 * 0.1m)).ToArray();
+        var windows = WalkForwardPlan.Create(bars.Length, 20, 10, 10);
+        var report = MlNetSystem1DecisionEngine.EvaluateWalkForwardCalibration(bars, windows, orderBookImbalance: 0.8m, artifact: artifact);
+        Assert.Equal(0, report.TotalEvaluations);
+        Assert.False(report.BrierScoreThresholdMet);
+    }
+
+    [Fact]
+    public void WalkForwardWithoutCalibratedArtifactCannotClaimCalibrationSuccess()
     {
         var (_, bars) = SyntheticMarketDataset.CreateBtcUsdtV1();
         var windows = WalkForwardPlan.Create(bars.Count, trainingBars: 60, outOfSampleBars: 20, stepBars: 20);
@@ -164,15 +233,8 @@ public sealed class MlNetSystem1DecisionEngineTests
             orderBookImbalance: 0.05m,
             targetBrierThreshold: 0.15m);
 
-        Assert.True(report.TotalEvaluations > 0, "Walk-forward evaluation must generate OOS samples.");
-        Assert.InRange(report.BrierScore, 0.0m, 0.15m);
-        Assert.True(report.BrierScoreThresholdMet, $"Brier score {report.BrierScore} must meet threshold <= 0.15.");
-        Assert.Equal(5, report.ReliabilityBins.Count);
-        Assert.InRange(report.ExpectedCalibrationError, 0.0m, 0.35m);
-        Assert.All(report.ReliabilityBins, bin =>
-        {
-            Assert.InRange(bin.MeanConfidence, bin.LowerBound, bin.UpperBound);
-            Assert.InRange(bin.EmpiricalWinRate, 0.0m, 1.0m);
-        });
+        Assert.Equal(0, report.TotalEvaluations);
+        Assert.False(report.BrierScoreThresholdMet);
+        Assert.Empty(report.ReliabilityBins);
     }
 }
