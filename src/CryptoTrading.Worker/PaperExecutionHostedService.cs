@@ -102,7 +102,7 @@ internal sealed class PaperExecutionHostedService(
     internal static PaperMarketTick? ToTick(BinanceBookTicker ticker, string expectedSymbol, DateTimeOffset now)
     {
         if (ticker is null || !string.Equals(ticker.Symbol, expectedSymbol, StringComparison.Ordinal) ||
-            ticker.BidPrice <= 0m || ticker.AskPrice < ticker.BidPrice)
+            ticker.BidPrice <= 0m || ticker.AskPrice < ticker.BidPrice || ticker.BidQuantity < 0m || ticker.AskQuantity < 0m)
         {
             return null;
         }
@@ -117,7 +117,8 @@ internal sealed class PaperExecutionHostedService(
             ticker.BidPrice,
             ticker.AskPrice,
             (ticker.BidPrice + ticker.AskPrice) / 2m,
-            ticker.ObservedAtUtc);
+            ticker.ObservedAtUtc,
+            new Domain.Primitives.Quantity(Math.Min(ticker.BidQuantity, ticker.AskQuantity)));
     }
 }
 

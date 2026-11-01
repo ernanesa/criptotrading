@@ -18,6 +18,7 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
     private readonly Lock gate = new();
     private WebSocket? socket;
     private Task? pump;
+    private Task? connection;
     private Task? disposal;
     private Lease? current;
     private ExceptionDispatchInfo? failure;
@@ -47,16 +48,26 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
         catch { client.Dispose(); throw; }
     }
 
-    [SuppressMessage("Reliability", "CA2025:Do not pass IDisposable instances into unawaited tasks", Justification = "The receive task owns the socket until DisposeCoreAsync awaits it before disposing the socket.")]
-    public async Task ConnectAsync(Uri uri, CancellationToken cancellationToken)
+    public Task ConnectAsync(Uri uri, CancellationToken cancellationToken)
     {
-        var connected = await connect(uri, cancellationToken).ConfigureAwait(false);
         lock (gate)
         {
-            if (stopping || socket is not null)
+            if (stopping || connection is not null) throw new InvalidOperationException("Transport is stopped or already connected.");
+            return connection = ConnectCoreAsync(uri, cancellationToken);
+        }
+    }
+
+    [SuppressMessage("Reliability", "CA2025:Do not pass IDisposable instances into unawaited tasks", Justification = "The receive task owns the socket until DisposeCoreAsync awaits it before disposing the socket.")]
+    private async Task ConnectCoreAsync(Uri uri, CancellationToken cancellationToken)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stop.Token);
+        var connected = await connect(uri, lifetime.Token).ConfigureAwait(false);
+        lock (gate)
+        {
+            if (stopping || lifetime.IsCancellationRequested)
             {
                 connected.Dispose();
-                throw new InvalidOperationException("Transport is stopped or already connected.");
+                throw new OperationCanceledException(lifetime.Token);
             }
             socket = connected;
             pump = PumpAsync(connected);
@@ -109,6 +120,7 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
     {
         byte[]? scratch = null, message = null;
         var length = 0;
+        var fragmented = false;
         try
         {
             scratch = pool.Rent(ChunkSize);
@@ -117,7 +129,7 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
                 var result = await connected.ReceiveAsync(scratch.AsMemory(0, ChunkSize), stop.Token).ConfigureAwait(false);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
-                    if (length != 0) throw new IOException("WebSocket closed during a message.");
+                    if (fragmented) throw new IOException("WebSocket closed during a message.");
                     channel.Writer.TryComplete();
                     return;
                 }
@@ -138,7 +150,8 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
                 }
                 scratch.AsSpan(0, result.Count).CopyTo(message.AsSpan(length));
                 length = required;
-                if (!result.EndOfMessage) continue;
+                fragmented = !result.EndOfMessage;
+                if (fragmented) continue;
                 Lease? lease = new(pool, message, length);
                 message = null;
                 length = 0;
@@ -185,6 +198,7 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
     private async Task DisposeCoreAsync()
     {
         Task? pending;
+        Task? connecting;
         lock (gate)
         {
             stopping = true;
@@ -193,13 +207,22 @@ internal sealed class PooledWebSocketTransport : IBinanceWebSocketTransport
             current = null;
             while (channel.Reader.TryRead(out var queued)) queued.Dispose();
             pending = pump;
+            connecting = connection;
         }
         await stop.CancelAsync().ConfigureAwait(false);
         try { socket?.Abort(); }
         catch (ObjectDisposedException) { }
+        if (connecting is not null) await ObserveConnectionEndAsync(connecting).ConfigureAwait(false);
         if (pending is not null) await pending.ConfigureAwait(false);
         socket?.Dispose();
         stop.Dispose();
+    }
+
+    [SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "ConnectAsync already exposes the connection error to its caller; disposal only observes termination and must not mask the original failure.")]
+    private static async Task ObserveConnectionEndAsync(Task connecting)
+    {
+        try { await connecting.ConfigureAwait(false); }
+        catch (Exception) { }
     }
 
     private sealed class Lease(ArrayPool<byte> pool, byte[] buffer, int length) : IDisposable

@@ -136,6 +136,12 @@ public sealed record EffectiveCommissionSnapshot
                 return false;
             }
 
+            if (DiscountAssetValuationAtUtc > nowUtc || nowUtc - DiscountAssetValuationAtUtc.Value > maximumAge)
+            {
+                reason = "COMMISSION_BNB_VALUATION_STALE";
+                return false;
+            }
+
             standardRate *= 1m - DiscountRate.Value;
         }
 

@@ -93,6 +93,8 @@ public sealed class PaperShadowSession
                     new IdempotencyKey($"shadow-submit-{decision.BarIndex:D6}"));
                 fills = paper.Apply(tick).ToArray();
                 inPosition = fills.Length > 0;
+                if (fills.Length == 0)
+                    _ = paper.Cancel(new ClientOrderId($"shadow-{decision.BarIndex:D6}"), new IdempotencyKey($"shadow-no-fill-{decision.BarIndex:D6}"));
             }
             else if (decision.Signal == TrendFollowingSignal.ExitLong && inPosition)
             {
@@ -106,6 +108,8 @@ public sealed class PaperShadowSession
                     new IdempotencyKey($"shadow-submit-{decision.BarIndex:D6}"));
                 fills = paper.Apply(tick).ToArray();
                 inPosition = fills.Length == 0;
+                if (fills.Length == 0)
+                    _ = paper.Cancel(new ClientOrderId($"shadow-{decision.BarIndex:D6}"), new IdempotencyKey($"shadow-no-fill-{decision.BarIndex:D6}"));
             }
 
             var expectedFingerprint = ShadowRunRunner.Fingerprint(decision);

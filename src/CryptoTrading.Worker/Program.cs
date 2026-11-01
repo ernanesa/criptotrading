@@ -90,6 +90,8 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AutonomyInterval = builder.Configuration["WORKER_AUTONOMY_INTERVAL"] ?? "1m";
         options.AutonomyMlArtifactPath = builder.Configuration["WORKER_ML_ARTIFACT_PATH"];
         options.AutonomyMlArtifactSha256 = builder.Configuration["WORKER_ML_ARTIFACT_SHA256"];
+        options.AutonomyStopRiskSizingVersion = builder.Configuration["WORKER_STOP_RISK_SIZING_VERSION"];
+        options.AutonomyMaximumPlannedLossNotional = builder.Configuration.GetValue<decimal?>("WORKER_MAXIMUM_PLANNED_LOSS_NOTIONAL");
         options.AutonomyKlineLimit = builder.Configuration.GetValue("WORKER_AUTONOMY_KLINE_LIMIT", 100);
         var entryTargetRaw = builder.Configuration["WORKER_AUTONOMY_ENTRY_TARGET_NOTIONAL"]
             ?? builder.Configuration["WORKER_ENTRY_TARGET_NOTIONAL"];

@@ -58,6 +58,19 @@ public sealed class WorkerRuntimeOptions
     public string AutonomyEngineMode { get; set; } = "RegimeAdaptive";
     public string? AutonomyMlArtifactPath { get; set; }
     public string? AutonomyMlArtifactSha256 { get; set; }
+    public string? AutonomyStopRiskSizingVersion { get; set; }
+    public decimal? AutonomyMaximumPlannedLossNotional { get; set; }
+
+    internal CryptoTrading.Domain.Risk.StopRiskSizingPolicy? ResolveStopRiskSizing()
+    {
+        var hasVersion = !string.IsNullOrWhiteSpace(AutonomyStopRiskSizingVersion);
+        if (!hasVersion && AutonomyMaximumPlannedLossNotional is null) return null;
+        if (!hasVersion || AutonomyMaximumPlannedLossNotional is not > 0m ||
+            string.Equals(AutonomyEngineMode, "Baseline", StringComparison.OrdinalIgnoreCase))
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["Stop-risk sizing requires an explicit version, positive quote-notional budget and an adaptive decision mode."]);
+        return new(AutonomyStopRiskSizingVersion!.Trim(), AutonomyMaximumPlannedLossNotional.Value);
+    }
 
     internal void ValidateMlArtifact()
     {
@@ -161,6 +174,7 @@ public sealed class WorkerRuntimeOptions
     public void Validate()
     {
         ValidateMlArtifact();
+        _ = ResolveStopRiskSizing();
         var isPaper = string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase);
         var isTestnet = string.Equals(ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase);
         if (!isPaper && !isTestnet)

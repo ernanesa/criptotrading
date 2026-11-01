@@ -332,24 +332,34 @@ public sealed class BinanceUserDataStreamApiClient : IBinanceUserDataStreamClien
             throw new BinanceUserDataStreamProtocolException("WebSocket API closed before subscription acknowledgement.");
         }
 
-        using var document = JsonDocument.Parse(enumerator.Current);
+        return ParseSubscriptionAcknowledgement(enumerator.Current, requestId);
+    }
+
+    private static long ParseSubscriptionAcknowledgement(ReadOnlyMemory<byte> payload, Guid requestId)
+    {
+        JsonDocument document;
+        try { document = JsonDocument.Parse(payload); }
+        catch (JsonException error) { throw new BinanceUserDataStreamProtocolException("WebSocket API returned malformed subscription JSON.", error); }
+        using var documentLifetime = document;
         var root = document.RootElement;
-        if (!root.TryGetProperty("id", out var responseId) ||
-            !string.Equals(responseId.GetString(), requestId.ToString(), StringComparison.OrdinalIgnoreCase))
+        if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("id", out var responseId) ||
+            responseId.ValueKind != JsonValueKind.String || !responseId.TryGetGuid(out var parsedId) || parsedId != requestId)
         {
             throw new BinanceUserDataStreamProtocolException("WebSocket API returned an unexpected subscription response.");
         }
 
-        var status = root.GetProperty("status").GetInt32();
+        if (!root.TryGetProperty("status", out var statusValue) || statusValue.ValueKind != JsonValueKind.Number || !statusValue.TryGetInt32(out var status))
+            throw new BinanceUserDataStreamProtocolException("WebSocket API acknowledgement has no valid status.");
         if (status != 200)
         {
             throw new BinanceUserDataStreamProtocolException($"WebSocket API subscription failed with status {status}.");
         }
 
-        return root.TryGetProperty("result", out var result) &&
-            result.TryGetProperty("subscriptionId", out var subscriptionId)
-            ? subscriptionId.GetInt64()
-            : null;
+        if (!root.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Object ||
+            !result.TryGetProperty("subscriptionId", out var subscriptionId) || subscriptionId.ValueKind != JsonValueKind.Number ||
+            !subscriptionId.TryGetInt64(out var id) || id < 0)
+            throw new BinanceUserDataStreamProtocolException("WebSocket API acknowledgement has no valid subscription identity.");
+        return id;
     }
 
     private static BinanceUserDataEvent? ParseMessage(ReadOnlyMemory<byte> payload, DateTimeOffset receivedAtUtc)

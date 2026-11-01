@@ -115,9 +115,10 @@ public sealed class PooledWebSocketTransportTests
     }
 
     [Theory]
-    [InlineData(WebSocketMessageType.Binary)]
-    [InlineData(WebSocketMessageType.Close)]
-    public async Task UnexpectedTypeOrCloseInsideMessageFailsAndReleasesThePartialBuffer(WebSocketMessageType type)
+    [InlineData(WebSocketMessageType.Binary, false)]
+    [InlineData(WebSocketMessageType.Close, false)]
+    [InlineData(WebSocketMessageType.Close, true)]
+    public async Task UnexpectedTypeOrCloseInsideMessageFailsAndReleasesThePartialBuffer(WebSocketMessageType type, bool emptyFragment)
     {
         using var socket = new Socket();
         var pool = new TrackedPool();
@@ -126,7 +127,7 @@ public sealed class PooledWebSocketTransportTests
         var reader = transport.ReadMessagesAsync(TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
         try
         {
-            await socket.DeliverAsync("partial", false);
+            await socket.DeliverAsync(emptyFragment ? [] : Encoding.UTF8.GetBytes("partial"), false);
             await socket.DeliverAsync([], true, type);
             await Assert.ThrowsAsync<IOException>(() => reader.MoveNextAsync().AsTask());
         }
@@ -136,6 +137,35 @@ public sealed class PooledWebSocketTransportTests
             await transport.DisposeAsync().ConfigureAwait(true);
         }
         Assert.Equal(0, pool.Outstanding);
+    }
+
+    [Fact]
+    public async Task DisposeCancelsAndAwaitsAnInFlightConnection()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var transport = new PooledWebSocketTransport(async (_, token) =>
+        {
+            started.TrySetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token).ConfigureAwait(false); }
+            finally { ended.TrySetResult(); }
+            throw new InvalidOperationException("Unreachable connection completion.");
+        });
+        var connecting = transport.ConnectAsync(new Uri("wss://stream.binance.com/stream"), cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        try
+        {
+            await transport.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.True(ended.Task.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connecting);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            try { await connecting.ConfigureAwait(true); } catch (OperationCanceledException) { }
+            await transport.DisposeAsync().ConfigureAwait(true);
+        }
     }
 
     private sealed class TrackedPool : ArrayPool<byte>

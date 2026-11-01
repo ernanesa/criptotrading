@@ -3,8 +3,15 @@ using CryptoTrading.Domain.Primitives;
 
 namespace CryptoTrading.Exchange.Paper;
 
+public enum PaperLiquidityModel
+{
+    ObservedOnly,
+    CandleCloseApproximation
+}
+
 public sealed record PaperExchangeOptions
 {
+    public PaperLiquidityModel LiquidityModel { get; init; } = PaperLiquidityModel.ObservedOnly;
     public Percentage FeeRate { get; init; } = new(0.001m);
 
     public Percentage SlippageRate { get; init; } = new(0m);
@@ -27,6 +34,8 @@ public sealed record PaperExchangeOptions
 
     public void Validate()
     {
+        if (LiquidityModel is not (PaperLiquidityModel.ObservedOnly or PaperLiquidityModel.CandleCloseApproximation))
+            throw new ArgumentOutOfRangeException(nameof(LiquidityModel));
         if (FeeRate.Value >= 1m)
         {
             throw new ArgumentOutOfRangeException(nameof(FeeRate), "FeeRate must be lower than 100%.");
@@ -89,6 +98,8 @@ public sealed record PaperMarketTick
         DateTimeOffset occurredAtUtc,
         Quantity? availableQuantity = null)
     {
+        if (bid.Value <= 0m || ask.Value <= 0m || last.Value <= 0m)
+            throw new ArgumentOutOfRangeException(nameof(bid), "Paper tick prices must be strictly positive, including default structs.");
         if (bid.Value > ask.Value)
         {
             throw new ArgumentException("Bid cannot be greater than ask.", nameof(bid));
@@ -99,9 +110,9 @@ public sealed record PaperMarketTick
         Ask = ask;
         Last = last;
         OccurredAtUtc = occurredAtUtc;
-        if (availableQuantity is { Value: <= 0m })
+        if (availableQuantity is { Value: < 0m })
         {
-            throw new ArgumentOutOfRangeException(nameof(availableQuantity), "Available quantity must be greater than zero when supplied.");
+            throw new ArgumentOutOfRangeException(nameof(availableQuantity), "Available quantity cannot be negative.");
         }
 
         AvailableQuantity = availableQuantity;
@@ -120,7 +131,7 @@ public sealed record PaperMarketTick
     /// <summary>Relative bid/ask spread, measured against the quote midpoint.</summary>
     public decimal SpreadRate => (Ask.Value - Bid.Value) / ((Ask.Value + Bid.Value) / 2m);
 
-    /// <summary>Optional executable quantity on this tick; omitting it fills the remaining order quantity.</summary>
+    /// <summary>Shared liquidity for this observation; null fills only in explicit candle approximation mode.</summary>
     public Quantity? AvailableQuantity { get; }
 }
 
@@ -176,10 +187,12 @@ public sealed class PaperExchange : IPaperExchange
     private readonly TradingClock clock;
     private readonly PaperExchangeOptions options;
     private readonly Dictionary<ClientOrderId, PaperOrderState> orders = [];
+    private readonly Dictionary<Symbol, DateTimeOffset> lastAppliedTick = [];
     private readonly Dictionary<IdempotencyKey, CommandResult> commands = [];
     private readonly List<PaperFill> fills = [];
     private readonly Lock sync = new();
     private long fillSequence;
+    private long acceptanceSequence;
 
     public PaperExchange(PaperExchangeOptions? options = null, TimeProvider? timeProvider = null)
     {
@@ -248,7 +261,7 @@ public sealed class PaperExchange : IPaperExchange
             request.Quantity, request.LimitPrice, idempotencyKey, now);
         order.TransitionTo(OrderStatus.Validated, new IdempotencyKey($"{idempotencyKey}-validated"), now);
         order.TransitionTo(OrderStatus.Submitted, new IdempotencyKey($"{idempotencyKey}-submitted"), now);
-        var state = new PaperOrderState(order, now + options.SubmissionLatency);
+        var state = new PaperOrderState(order, now + options.SubmissionLatency, checked(++acceptanceSequence));
         orders.Add(request.ClientOrderId, state);
         var snapshot = ToSnapshot(state);
         commands.Add(idempotencyKey, new CommandResult(CommandKind.Submit, Fingerprint(request), snapshot));
@@ -308,11 +321,18 @@ public sealed class PaperExchange : IPaperExchange
     {
         ArgumentNullException.ThrowIfNull(tick);
         var created = new List<PaperFill>();
+        // The available source identity is its timestamp. Repeated/older quotes
+        // cannot replenish liquidity, even if the supplied values differ.
+        if (lastAppliedTick.TryGetValue(tick.Symbol, out var previous) && tick.OccurredAtUtc <= previous) return created;
+        lastAppliedTick[tick.Symbol] = tick.OccurredAtUtc;
         var remainingLiquidity = tick.AvailableQuantity?.Value;
 
-        // Stable client-ID priority is a simulation policy, not an exchange queue model.
+        // Local price/time approximation, not a reconstruction of Binance queue position.
         foreach (var state in orders.Values.Where(candidate => candidate.Order.Symbol == tick.Symbol && !IsTerminal(candidate.Order.Status))
-                     .OrderBy(candidate => candidate.Order.ClientOrderId.Value, StringComparer.Ordinal).ToArray())
+                     .OrderBy(candidate => candidate.Order.Type == OrderType.Market ? 0 : 1)
+                     .ThenBy(candidate => candidate.Order.Side)
+                     .ThenBy(candidate => candidate.Order.Side == OrderSide.Buy ? -(candidate.Order.LimitPrice?.Value ?? 0m) : candidate.Order.LimitPrice?.Value ?? 0m)
+                     .ThenBy(candidate => candidate.AcceptanceSequence).ToArray())
         {
             if (IsTerminal(state.Order.Status) || state.Remaining.Value <= 0m || !CanFill(state.Order, tick))
             {
@@ -348,6 +368,7 @@ public sealed class PaperExchange : IPaperExchange
                 continue;
             }
 
+            if (remainingLiquidity is null && options.LiquidityModel == PaperLiquidityModel.ObservedOnly) continue;
             var quantity = remainingLiquidity is { } available
                 ? new Quantity(Math.Min(state.Remaining.Value, available))
                 : state.Remaining;
@@ -466,11 +487,12 @@ public sealed class PaperExchange : IPaperExchange
         state.RejectionReason = reason;
     }
 
-    private sealed class PaperOrderState(Order order, DateTimeOffset executableAtUtc)
+    private sealed class PaperOrderState(Order order, DateTimeOffset executableAtUtc, long acceptanceSequence)
     {
         public Order Order { get; } = order;
 
         public DateTimeOffset ExecutableAtUtc { get; } = executableAtUtc;
+        public long AcceptanceSequence { get; } = acceptanceSequence;
 
         public PaperRejectionReason? RejectionReason { get; set; }
 

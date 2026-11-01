@@ -242,16 +242,16 @@ internal static class BinanceMarketDataParser
     private static BinanceKlineEvent ParseKline(string stream, JsonElement data, DateTimeOffset receivedAt)
     {
         var kline = data.GetProperty("k");
-        var quoteVolume = kline.TryGetProperty("q", out var qProp) && qProp.ValueKind == JsonValueKind.String
+        var quoteVolume = kline.TryGetProperty("q", out var qProp)
             ? BinanceUtf8Json.ReadDecimal(qProp)
             : 0m;
         var numTrades = kline.TryGetProperty("n", out var nProp) && nProp.ValueKind == JsonValueKind.Number
             ? nProp.GetInt64()
             : 0L;
-        var takerBuyBase = kline.TryGetProperty("V", out var vProp) && vProp.ValueKind == JsonValueKind.String
+        var takerBuyBase = kline.TryGetProperty("V", out var vProp)
             ? BinanceUtf8Json.ReadDecimal(vProp)
             : 0m;
-        var takerBuyQuote = kline.TryGetProperty("Q", out var tqProp) && tqProp.ValueKind == JsonValueKind.String
+        var takerBuyQuote = kline.TryGetProperty("Q", out var tqProp)
             ? BinanceUtf8Json.ReadDecimal(tqProp)
             : 0m;
 

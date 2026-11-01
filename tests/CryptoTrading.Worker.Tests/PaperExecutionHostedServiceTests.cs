@@ -10,6 +10,25 @@ namespace CryptoTrading.Worker.Tests;
 
 public sealed class PaperExecutionHostedServiceTests
 {
+    [Theory]
+    [InlineData(1, 2, 1)]
+    [InlineData(0, 2, 0)]
+    [InlineData(2, 0, 0)]
+    public void PaperTickUsesObservedBookLiquidityRatherThanRequestedOrderSize(int bidQuantity, int askQuantity, int expected)
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var tick = PaperExecutionHostedService.ToTick(new BinanceBookTicker("BTCUSDT", 100m, bidQuantity, 101m, askQuantity, now), "BTCUSDT", now);
+        Assert.NotNull(tick);
+        Assert.Equal((decimal)expected, tick.AvailableQuantity?.Value);
+    }
+
+    [Fact]
+    public void NegativeObservedBookQuantityCannotBecomePaperLiquidity()
+    {
+        var now = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        Assert.Null(PaperExecutionHostedService.ToTick(new BinanceBookTicker("BTCUSDT", 100m, -1m, 101m, 1m, now), "BTCUSDT", now));
+    }
+
     private static readonly Symbol BtcUsdt = new("BTCUSDT");
 
     [Fact]

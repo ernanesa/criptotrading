@@ -49,7 +49,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     decimal? EthBtcSpreadReturnBps = null,
     decimal? CanaryBasketReturnBps = null,
     decimal? CanaryBasketTrendSlope = null,
-    string MlTimeframe = "1m")
+    string MlTimeframe = "1m",
+    StopRiskSizingPolicy? StopRiskSizing = null)
 {
     public void Validate()
     {
@@ -1115,7 +1116,8 @@ public sealed class AdaptiveDecisionCycle
                 ? Math.Round(request.RiskPolicy.MaxOrderNotional * 0.90m, 2)
                 : request.RiskPolicy.MaxOrderNotional;
             var baseTarget = Math.Min(request.EntryTargetNotional, maxEntryOrderNotional);
-            var kellyMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.72m && orderBookImbalance >= 0.30m && microPriceDivergenceBps >= 0.35m)
+            // Conviction heuristic, not an estimated Kelly fraction.
+            var convictionMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.72m && orderBookImbalance >= 0.30m && microPriceDivergenceBps >= 0.35m)
                 ? 1.55m
                 : (decisionConfidence >= 0.82m && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
                     ? 1.35m
@@ -1125,7 +1127,7 @@ public sealed class AdaptiveDecisionCycle
                             ? 0.85m
                             : 1.06m;
             targetNotional = Math.Clamp(
-                Math.Round(baseTarget * kellyMultiplier, 2),
+                Math.Round(baseTarget * convictionMultiplier, 2),
                 Math.Min(10m, maxEntryOrderNotional),
                 maxEntryOrderNotional);
         }
@@ -1149,6 +1151,23 @@ public sealed class AdaptiveDecisionCycle
                     Math.Min(10m, request.RiskPolicy.MaxOrderNotional),
                     request.RiskPolicy.MaxOrderNotional);
             }
+            if (request.StopRiskSizing is { } sizing)
+            {
+                var commission = request.EffectiveCommission;
+                if (request.RiskPolicy.MaxSlippageBps is not { } slippageBound || commission is null ||
+                    !commission.TryGetConservativeRate(OrderSide.Buy, request.EvaluatedAtUtc, request.RiskPolicy.MaxMarketDataAge, out var buyReserve, out _) ||
+                    !commission.TryGetConservativeRate(OrderSide.Sell, request.EvaluatedAtUtc, request.RiskPolicy.MaxMarketDataAge, out var sellReserve, out _))
+                    return CreateNoTradeResult(regime, orchestration.Candidates, null,
+                        "STOP_RISK_SIZING_COST_BOUND_UNAVAILABLE", orderBookImbalance: orderBookImbalance, mlEval: mlEval, request: request);
+                var conservativeFeeBps = (buyReserve + sellReserve) * 10_000m;
+                if (slippageBound > (decimal.MaxValue - protectiveStopLossBps - conservativeFeeBps) / 2m)
+                    return CreateNoTradeResult(regime, orchestration.Candidates, null,
+                        "STOP_RISK_SIZING_COST_BOUND_UNAVAILABLE", mlEval: mlEval, request: request);
+                targetNotional = sizing.CapEntryNotional(targetNotional, protectiveStopLossBps, conservativeFeeBps, slippageBound * 2m);
+                if (targetNotional <= minTradableExposure)
+                    return CreateNoTradeResult(regime, orchestration.Candidates, null,
+                        "STOP_RISK_SIZING_BELOW_TRADABLE_EXPOSURE", mlEval: mlEval, request: request);
+            }
         }
 
         if (targetNotional <= 0m)
@@ -1163,12 +1182,10 @@ public sealed class AdaptiveDecisionCycle
 
         // 7. Portfolio Order Netting
         var referencePrice = latestBar.ClosePrice.Value;
-        var rawQuantity = decimal.Round(targetNotional / referencePrice, 8);
-        if (request.ExecutionMarket?.QuantityStepSize is { } stepSize && stepSize > 0m)
-        {
-            var steps = Math.Floor(decimal.Round(targetNotional / referencePrice, 8) / stepSize);
-            rawQuantity = steps * stepSize;
-        }
+        var rawQuantity = StopRiskSizingPolicy.FloorQuantity(targetNotional, referencePrice, request.ExecutionMarket?.QuantityStepSize);
+        if (isEntry && request.StopRiskSizing is not null && rawQuantity * referencePrice <= minTradableExposure)
+            return CreateNoTradeResult(regime, orchestration.Candidates, null,
+                "STOP_RISK_SIZING_BELOW_TRADABLE_EXPOSURE", mlEval: mlEval, request: request);
         if (rawQuantity <= 0m)
         {
             return CreateNoTradeResult(
@@ -1296,6 +1313,12 @@ public sealed class AdaptiveDecisionCycle
             if (plan.Plan is not null)
             {
                 var passiveNotional = plan.Plan.Quantity.Value * plan.Plan.LimitPrice.Value;
+                if (isEntry && request.StopRiskSizing is not null && passiveNotional > targetNotional)
+                    return CreateNoTradeResult(regime, orchestration.Candidates, nettingProposal,
+                        "STOP_RISK_SIZING_PLANNED_NOTIONAL_EXCEEDS_CAP", tacticRecommendation, mlEval: mlEval, request: request);
+                if (isEntry && request.StopRiskSizing is not null && passiveNotional <= minTradableExposure)
+                    return CreateNoTradeResult(regime, orchestration.Candidates, nettingProposal,
+                        "STOP_RISK_SIZING_BELOW_TRADABLE_EXPOSURE", tacticRecommendation, mlEval: mlEval, request: request);
                 var passiveExposure = plan.Plan.Side == OrderSide.Sell
                     ? Math.Max(request.Portfolio.GrossExposureNotional, passiveNotional)
                     : request.Portfolio.GrossExposureNotional;
@@ -1361,6 +1384,8 @@ public sealed class AdaptiveDecisionCycle
             MlModelId = mlEval.ModelId,
             mlEval.ModelArtifactSha256,
             MlModelTargetSide = mlEval.ModelTargetSide?.ToString(),
+            StopRiskSizingVersion = request.StopRiskSizing?.Version,
+            MaximumPlannedLossNotional = request.StopRiskSizing?.MaximumPlannedLossNotional,
             MlAvailabilityReason = mlEval.AvailabilityReason,
             mlEval.HasSsaEvidence,
             mlEval.IsNegativePriceShock,
@@ -1458,6 +1483,8 @@ public sealed class AdaptiveDecisionCycle
             MlModelId = mlEval?.ModelId,
             ModelArtifactSha256 = mlEval?.ModelArtifactSha256,
             MlModelTargetSide = mlEval?.ModelTargetSide?.ToString(),
+            StopRiskSizingVersion = request?.StopRiskSizing?.Version,
+            MaximumPlannedLossNotional = request?.StopRiskSizing?.MaximumPlannedLossNotional,
             MlAvailabilityReason = mlEval?.AvailabilityReason,
             HasSsaEvidence = mlEval?.HasSsaEvidence ?? false,
             IsNegativePriceShock = mlEval?.IsNegativePriceShock ?? false,

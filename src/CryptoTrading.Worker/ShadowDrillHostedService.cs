@@ -39,7 +39,8 @@ internal sealed class ShadowDrillHostedService(
         var strategy = new TrendFollowingStrategy(
             new TrendFollowingParameters("worker-shadow-drill", "1.0.0", symbol, 2, 3, 0m, 0m));
         // Synthetic prices must never affect the operational paper exchange.
-        var result = new PaperShadowSession(strategy, new PaperExchange()).Run(bars);
+        var result = new PaperShadowSession(strategy, new PaperExchange(new PaperExchangeOptions
+        { LiquidityModel = PaperLiquidityModel.CandleCloseApproximation })).Run(bars);
         var completedAt = DateTimeOffset.UtcNow;
         var reportPath = await reportWriter.AppendAsync(new ShadowRunReport(
             Guid.NewGuid().ToString("N"),

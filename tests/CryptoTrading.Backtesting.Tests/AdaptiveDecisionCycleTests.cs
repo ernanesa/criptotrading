@@ -2091,6 +2091,74 @@ public sealed class AdaptiveDecisionCycleTests
     }
 
     [Fact]
+    public void OptionalVersionedStopRiskSizingOnlyTightensNewEntryNotional()
+    {
+        var policy = new RiskPolicy("sizing-risk", 1000m, 5000m, 100m, 500m, TimeSpan.FromMinutes(5), maxSlippageBps: 10m);
+        var request = CreateDispatchableRequest() with
+        { RiskPolicy = policy, StopRiskSizing = new StopRiskSizingPolicy("sizing-v1", 1m) };
+        var result = CreateCycle().Evaluate(request);
+        Assert.False(result.IsNoTrade, result.NoTradeReason);
+        Assert.InRange(result.RecommendedNotional, 0.00000001m, 50m);
+        Assert.Contains("sizing-v1", result.DecisionTraceJson, StringComparison.Ordinal);
+        Assert.Equal(1000m, policy.MaxOrderNotional);
+    }
+
+    [Fact]
+    public void MissingSlippageBoundFailsClosedOnlyForNewEntriesUsingStopRiskSizing()
+    {
+        var request = CreateDispatchableRequest() with { StopRiskSizing = new StopRiskSizingPolicy("sizing-v1", 1m) };
+        var policy = new RiskPolicy("no-bound", 1000m, 5000m, 100m, 500m, TimeSpan.FromMinutes(5));
+        var result = CreateCycle().Evaluate(request with { RiskPolicy = policy });
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("STOP_RISK_SIZING_COST_BOUND_UNAVAILABLE", result.NoTradeReason);
+        var exit = new AdaptiveDecisionCycle().Evaluate(request with
+        { RiskPolicy = policy, Portfolio = CreatePortfolio(90m) with { PositionCostNotional = 100m }, Bars = Bars(Enumerable.Repeat(100m, 30).ToArray()) });
+        Assert.False(exit.IsNoTrade, exit.NoTradeReason);
+        Assert.Equal(OrderSide.Sell, exit.RecommendedSide);
+        Assert.InRange(exit.RecommendedNotional, 89m, 90m);
+    }
+
+    [Fact]
+    public void StopRiskCapCannotCreateAnEntryThatThePositionClassifierTreatsAsDust()
+    {
+        var request = CreateDispatchableRequest() with
+        {
+            StopRiskSizing = new StopRiskSizingPolicy("tiny-budget", 0.01m),
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(99.979m), new Price(99.981m), 10_000m, TestTime, quantityStepSize: 0.00000001m)
+        };
+        var result = CreateCycle().Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("STOP_RISK_SIZING_BELOW_TRADABLE_EXPOSURE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void UnrepresentableRoundTripSlippageFailsClosedInsteadOfOverflowing()
+    {
+        var policy = new RiskPolicy("huge-slip", 1000m, 5000m, 100m, 500m, TimeSpan.FromMinutes(5), maxSlippageBps: decimal.MaxValue);
+        var request = CreateDispatchableRequest() with
+        { RiskPolicy = policy, StopRiskSizing = new StopRiskSizingPolicy("sizing-v1", 1m) };
+        var result = CreateCycle().Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("STOP_RISK_SIZING_COST_BOUND_UNAVAILABLE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void QuantityStepCannotTurnAnAboveDustStopRiskCapIntoAnUnrecognizedPosition()
+    {
+        var policy = new RiskPolicy("coarse-step", 1000m, 5000m, 100m, 500m, TimeSpan.FromMinutes(5), maxSlippageBps: 10m);
+        var request = CreateDispatchableRequest() with
+        {
+            RiskPolicy = policy,
+            StopRiskSizing = new StopRiskSizingPolicy("sizing-v1", 0.11m),
+            Bars = WithWilderWarmup(Bars(1m, 1m, 1m, 1m, 1m, 0.9998m)),
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(0.9997m), new Price(0.9999m), 10_000m, TestTime, quantityStepSize: 1m, priceTickSize: 0.0001m)
+        };
+        var result = CreateCycle().Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("STOP_RISK_SIZING_BELOW_TRADABLE_EXPOSURE", result.NoTradeReason);
+    }
+
+    [Fact]
     public void DispersionRiskExitCannotBeOverruledByHoldingAProfitableStrongBidPosition()
     {
         var request = CreateDispatchableRequest() with

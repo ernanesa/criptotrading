@@ -1332,7 +1332,8 @@ internal sealed class AutonomyCycleHostedService(
                 EthBtcSpreadReturnBps: ethBtcSpreadReturnBps,
                 CanaryBasketReturnBps: canaryBasketReturnBps,
                 CanaryBasketTrendSlope: canaryBasketTrendSlope,
-                MlTimeframe: runtime.AutonomyInterval.Trim());
+                MlTimeframe: runtime.AutonomyInterval.Trim(),
+                StopRiskSizing: runtime.ResolveStopRiskSizing());
 
             if (durablePerformances is not null)
             {

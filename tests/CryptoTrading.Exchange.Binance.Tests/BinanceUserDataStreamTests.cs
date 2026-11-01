@@ -162,6 +162,63 @@ public sealed class BinanceUserDataStreamTests
     }
 
     [Fact]
+    public async Task LegacyReaderReconnectsAfterAReceiveFailureWithoutEndingTheAccountFeed()
+    {
+        var attempts = 0;
+        var client = new BinanceUserDataStreamClient(new BinanceUserDataStreamOptions
+        {
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectAttempts = 2
+        }, () => ++attempts == 1 ? new ReadFailureTransport() : new FakeTransport(
+            "{\"e\":\"outboundAccountPosition\",\"E\":1720000000124,\"u\":1720000000120,\"B\":[{\"a\":\"USDT\",\"f\":\"100\",\"l\":\"0\"}]}"));
+        await using var reader = client.ReadAsync("synthetic-listen-key", TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await reader.MoveNextAsync());
+        Assert.IsType<BinanceOutboundAccountPositionEvent>(reader.Current);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public async Task RepeatedLegacyReceiveFailuresExhaustTheConfiguredReconnectBound()
+    {
+        var attempts = 0;
+        var client = new BinanceUserDataStreamClient(new BinanceUserDataStreamOptions
+        {
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectDelay = TimeSpan.FromMilliseconds(2), MaxReconnectAttempts = 2
+        }, () => { attempts++; return new ReadFailureTransport(); });
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        await using var reader = client.ReadAsync("synthetic-listen-key", cancellation.Token).GetAsyncEnumerator(cancellation.Token);
+        var pending = reader.MoveNextAsync().AsTask();
+        try
+        {
+            Assert.False(await pending.WaitAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken));
+            Assert.Equal(3, attempts);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            try { await pending.ConfigureAwait(true); } catch (OperationCanceledException) { }
+        }
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("{\"id\":\"REQUEST_ID\"}")]
+    [InlineData("{\"id\":123,\"status\":200,\"result\":{\"subscriptionId\":7}}")]
+    [InlineData("{\"id\":\"REQUEST_ID\",\"status\":\"200\",\"result\":{\"subscriptionId\":7}}")]
+    public async Task InvalidSubscriptionAckIsAReconnectableProtocolFailure(string invalidAck)
+    {
+        var attempts = 0;
+        var client = new BinanceUserDataStreamApiClient(new BinanceUserDataStreamApiOptions
+        {
+            ApiKey = "synthetic-api-key", ApiSecret = "synthetic-api-secret",
+            InitialReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectDelay = TimeSpan.FromMilliseconds(1), MaxReconnectAttempts = 2
+        }, () => ++attempts == 1 ? new ModernFakeTransport(invalidAck) : new ModernFakeTransport());
+        await using var reader = client.ReadAsync("ignored", TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        Assert.True(await reader.MoveNextAsync());
+        Assert.Equal("connectionEstablished", Assert.IsType<BinanceUserDataStreamControlEvent>(reader.Current).EventType);
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
     public async Task ModernApiClientEmitsConnectionLostWhenWebSocketTransportClosesWithoutServerShutdown()
     {
         using var transport = new AbruptDisconnectFakeTransport();
@@ -326,7 +383,17 @@ public sealed class BinanceUserDataStreamTests
         }
     }
 
-    private sealed class ModernFakeTransport : IBinanceWebSocketTransport, IDisposable
+    private sealed class ReadFailureTransport : IBinanceWebSocketTransport
+    {
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return await Task.FromException<ReadOnlyMemory<byte>>(new IOException("synthetic receive failure")).ConfigureAwait(false);
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ModernFakeTransport(string? invalidAck = null) : IBinanceWebSocketTransport, IDisposable
     {
         private readonly List<ReadOnlyMemory<byte>> payloads = [];
 
@@ -336,7 +403,8 @@ public sealed class BinanceUserDataStreamTests
         {
             using var request = JsonDocument.Parse(payload.ToArray());
             var id = request.RootElement.GetProperty("id").GetGuid();
-            payloads.Add(Encoding.UTF8.GetBytes($"{{\"id\":\"{id}\",\"status\":200,\"result\":{{\"subscriptionId\":7}}}}"));
+            payloads.Add(Encoding.UTF8.GetBytes(invalidAck?.Replace("REQUEST_ID", id.ToString(), StringComparison.Ordinal)
+                ?? $"{{\"id\":\"{id}\",\"status\":200,\"result\":{{\"subscriptionId\":7}}}}"));
             payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"executionReport\",\"E\":1720000000123,\"s\":\"BTCUSDT\",\"i\":99,\"t\":8,\"c\":\"client-99\",\"S\":\"BUY\",\"o\":\"LIMIT\",\"x\":\"TRADE\",\"X\":\"FILLED\",\"l\":\"0.01\",\"z\":\"0.01\",\"L\":\"100.50\",\"n\":\"0.001\",\"N\":\"USDT\",\"q\":\"0.01\"}}"));
             payloads.Add(Encoding.UTF8.GetBytes("{\"subscriptionId\":7,\"event\":{\"e\":\"serverShutdown\",\"E\":1720000000124}}"));
             return ValueTask.CompletedTask;

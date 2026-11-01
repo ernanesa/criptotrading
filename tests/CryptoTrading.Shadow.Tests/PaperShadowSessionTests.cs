@@ -22,11 +22,11 @@ public sealed class PaperShadowSessionTests
         };
         var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
         var replayClock = new AdvancingTimeProvider(start);
-        var paper = new PaperExchange(timeProvider: replayClock);
+        var paper = new PaperExchange(new PaperExchangeOptions { LiquidityModel = PaperLiquidityModel.CandleCloseApproximation }, replayClock);
 
         var first = new PaperShadowSession(strategy, paper, replayClock: replayClock).Run(bars);
         var replayClock2 = new AdvancingTimeProvider(start);
-        var paper2 = new PaperExchange(timeProvider: replayClock2);
+        var paper2 = new PaperExchange(new PaperExchangeOptions { LiquidityModel = PaperLiquidityModel.CandleCloseApproximation }, replayClock2);
         var second = new PaperShadowSession(strategy, paper2, replayClock: replayClock2).Run(bars);
 
         Assert.NotEmpty(paper.Fills);
@@ -52,6 +52,37 @@ public sealed class PaperShadowSessionTests
     }
 
     [Fact]
+    public void CandleOnlyShadowCannotClaimObservedFillsUnderDefaultLiquidityModel()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var start = new DateTimeOffset(2026, 10, 20, 0, 0, 0, TimeSpan.Zero);
+        var bars = new[] { new CloseBar(symbol, start, 100m), new CloseBar(symbol, start.AddMinutes(1), 90m),
+            new CloseBar(symbol, start.AddMinutes(2), 80m), new CloseBar(symbol, start.AddMinutes(3), 120m),
+            new CloseBar(symbol, start.AddMinutes(4), 60m) };
+        var clock = new AdvancingTimeProvider(start);
+        var paper = new PaperExchange(timeProvider: clock);
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+        var result = new PaperShadowSession(strategy, paper, replayClock: clock).Run(bars);
+        Assert.Empty(paper.Fills);
+        Assert.Null(result.PaperResult);
+    }
+
+    [Fact]
+    public void RepeatedNoFillSignalsDoNotLeakOpenPaperOrders()
+    {
+        var symbol = new Symbol("BTCUSDT");
+        var start = new DateTimeOffset(2026, 10, 20, 0, 0, 0, TimeSpan.Zero);
+        var bars = Enumerable.Range(0, 100).Select(i => new CloseBar(symbol, start.AddMinutes(i),
+            (i % 4) switch { 0 => 100m, 1 => 90m, 2 => 80m, _ => 120m })).ToArray();
+        var clock = new AdvancingTimeProvider(start);
+        var paper = new PaperExchange(new PaperExchangeOptions { MaxOpenOrders = 1 }, clock);
+        var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
+        _ = new PaperShadowSession(strategy, paper, replayClock: clock).Run(bars);
+        Assert.Empty(paper.Fills);
+        Assert.Empty(paper.OpenOrders);
+    }
+
+    [Fact]
     public void ReportsRealizedPaperResultWhenFillsOccur()
     {
         var symbol = new Symbol("BTCUSDT");
@@ -66,7 +97,7 @@ public sealed class PaperShadowSessionTests
             new CloseBar(symbol, start.AddMinutes(4), 60m)
         };
         var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
-        var paper = new PaperExchange();
+        var paper = new PaperExchange(new PaperExchangeOptions { LiquidityModel = PaperLiquidityModel.CandleCloseApproximation });
 
         var result = new PaperShadowSession(strategy, paper).Run(bars);
 
@@ -145,7 +176,8 @@ public sealed class PaperShadowSessionTests
             new CloseBar(symbol, start.AddMinutes(3), 120m),
         };
         var strategy = new TrendFollowingStrategy(new TrendFollowingParameters("shadow", "1", symbol, 2, 3, 0m, 0m));
-        var result = new PaperShadowSession(strategy, new PaperExchange()).Run(bars);
+        var result = new PaperShadowSession(strategy,
+            new PaperExchange(new PaperExchangeOptions { LiquidityModel = PaperLiquidityModel.CandleCloseApproximation })).Run(bars);
 
         Assert.Equal(0, result.DivergenceCount);
     }

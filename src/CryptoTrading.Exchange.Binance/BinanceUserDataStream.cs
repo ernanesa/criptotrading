@@ -253,7 +253,6 @@ public sealed class BinanceUserDataStreamClient : IBinanceUserDataStreamClient
                 {
                     await transport.ConnectAsync(uri, cancellationToken).ConfigureAwait(false);
                     connected = true;
-                    attempt = 0;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -268,11 +267,19 @@ public sealed class BinanceUserDataStreamClient : IBinanceUserDataStreamClient
 
                 if (connected)
                 {
-                    await foreach (var payload in transport.ReadMessagesAsync(cancellationToken).ConfigureAwait(false))
+                    var reader = transport.ReadMessagesAsync(cancellationToken).GetAsyncEnumerator(cancellationToken);
+                    await using var readerLifetime = reader.ConfigureAwait(false);
+                    while (!cancellationToken.IsCancellationRequested)
                     {
-                        var parsed = BinanceUserDataParser.TryParse(payload, timeProvider.GetUtcNow());
+                        bool available;
+                        try { available = await reader.MoveNextAsync().ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { yield break; }
+                        catch (Exception error) when (error is IOException or WebSocketException) { break; }
+                        if (!available) break;
+                        var parsed = BinanceUserDataParser.TryParse(reader.Current, timeProvider.GetUtcNow());
                         if (parsed is not null)
                         {
+                            attempt = 0;
                             yield return parsed;
                         }
                     }

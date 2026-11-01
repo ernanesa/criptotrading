@@ -7,6 +7,83 @@ namespace CryptoTrading.Exchange.Paper.Tests;
 public sealed class PaperExchangeTests
 {
     [Fact]
+    public void UnknownTickLiquidityDoesNotInventACompleteFillByDefault()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(at));
+        exchange.Submit(BuyMarket("unknown-volume", 1m), new IdempotencyKey("unknown-volume"));
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at)));
+        Assert.Equal(OrderStatus.Submitted, exchange.GetOrder(new ClientOrderId("unknown-volume")).Status);
+    }
+
+    [Fact]
+    public void ExplicitZeroTickLiquidityIsKnownButCannotFill()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(at));
+        exchange.Submit(BuyMarket("zero-volume", 1m), new IdempotencyKey("zero-volume"));
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at, 0m)));
+    }
+
+    [Fact]
+    public void CandleCloseApproximationRequiresExplicitOptInAndNeverOverridesKnownZeroLiquidity()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(new PaperExchangeOptions { LiquidityModel = PaperLiquidityModel.CandleCloseApproximation }, new ManualTimeProvider(at));
+        exchange.Submit(BuyMarket("candle-only", 1m), new IdempotencyKey("candle-only"));
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at, 0m)));
+        Assert.Single(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at.AddSeconds(1))));
+    }
+
+    [Fact]
+    public void RepeatedOrRegressedTicksCannotSpendTheSameObservedLiquidityAgain()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(at));
+        var request = BuyMarket("dedup", 3m);
+        exchange.Submit(request, new IdempotencyKey("dedup"));
+        var tick = new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at, 1m);
+        Assert.Single(exchange.Apply(tick));
+        Assert.Empty(exchange.Apply(tick));
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at.AddSeconds(-1), 2m)));
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at, 2m)));
+        Assert.Equal(1m, exchange.GetOrder(request.ClientOrderId).FilledQuantity.Value);
+        Assert.Single(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at.AddSeconds(1), 2m)));
+        Assert.Equal(OrderStatus.Filled, exchange.GetOrder(request.ClientOrderId).Status);
+    }
+
+    [Fact]
+    public void DefaultPriceStructsCannotBypassPaperTickValidation()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new PaperMarketTick(new Symbol("BTCUSDT"), default, default, default, at, 1m));
+    }
+
+    [Fact]
+    public void SamePriceOrdersUseAcceptanceTimeInsteadOfLexicalClientOrderIds()
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(at));
+        var older = new PaperOrderRequest(new ClientOrderId("z-older"), "BTCUSDT", OrderSide.Buy, OrderType.Limit, 1m, 101m);
+        exchange.Submit(older, new IdempotencyKey("older"));
+        exchange.Submit(older, new IdempotencyKey("older"));
+        exchange.Submit(new(new ClientOrderId("a-later"), "BTCUSDT", OrderSide.Buy, OrderType.Limit, 1m, 101m), new IdempotencyKey("later"));
+        Assert.Equal(older.ClientOrderId, Assert.Single(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at, 1m))).ClientOrderId);
+    }
+
+    [Theory]
+    [InlineData(OrderSide.Buy)]
+    [InlineData(OrderSide.Sell)]
+    public void MoreCompetitiveLimitPriceHasPriorityWithinTheSameSide(OrderSide side)
+    {
+        var at = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var exchange = new PaperExchange(timeProvider: new ManualTimeProvider(at));
+        exchange.Submit(new(new ClientOrderId("a-passive"), "BTCUSDT", side, OrderType.Limit, 1m, side == OrderSide.Buy ? 101m : 100m), new IdempotencyKey("passive"));
+        exchange.Submit(new(new ClientOrderId("z-competitive"), "BTCUSDT", side, OrderType.Limit, 1m, side == OrderSide.Buy ? 102m : 99m), new IdempotencyKey("competitive"));
+        Assert.Equal(new ClientOrderId("z-competitive"), Assert.Single(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, at, 1m))).ClientOrderId);
+    }
+
+    [Fact]
     public void MarketOrderAppliesExplicitFeeAndSlippage()
     {
         var clock = new ManualTimeProvider(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
@@ -14,7 +91,7 @@ public sealed class PaperExchangeTests
         var request = BuyMarket("first", 2m);
         exchange.Submit(request, new IdempotencyKey("submit-1"));
 
-        var fills = exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, clock.GetUtcNow()));
+        var fills = exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, clock.GetUtcNow(), 2m));
 
         var fill = Assert.Single(fills);
         Assert.Equal(2m, fill.Quantity.Value);
@@ -50,8 +127,8 @@ public sealed class PaperExchangeTests
         var request = new PaperOrderRequest(new ClientOrderId("limit-slippage"), "BTCUSDT", side, OrderType.Limit, 1m, 100m);
         exchange.Submit(request, new IdempotencyKey("limit-slippage"));
         var tick = side == OrderSide.Buy
-            ? new PaperMarketTick("BTCUSDT", 99m, 100m, 99.5m, now)
-            : new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, now);
+            ? new PaperMarketTick("BTCUSDT", 99m, 100m, 99.5m, now, 1m)
+            : new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, now, 1m);
 
         Assert.Empty(exchange.Apply(tick));
         Assert.Equal(OrderStatus.Submitted, exchange.GetOrder(request.ClientOrderId).Status);
@@ -61,7 +138,7 @@ public sealed class PaperExchangeTests
     public void ReplayIsDeterministicForSameTicksAndTimeProvider()
     {
         var start = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var ticks = new[] { new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, start) };
+        var ticks = new[] { new PaperMarketTick("BTCUSDT", 100m, 101m, 100.5m, start, 1m) };
         var first = NewExchange(start);
         var second = NewExchange(start);
         var firstRequest = BuyMarket("replay-a", 1m);
@@ -126,7 +203,7 @@ public sealed class PaperExchangeTests
         exchange.Submit(BuyMarket("snapshot", 1m), new IdempotencyKey("snapshot"));
         var before = exchange.Fills;
 
-        exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, now));
+        exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, now, 1m));
 
         Assert.Empty(before);
         Assert.Single(exchange.Fills);
@@ -170,8 +247,8 @@ public sealed class PaperExchangeTests
         var request = BuyMarket("latency", 1m);
         exchange.Submit(request, new IdempotencyKey("submit-latency"));
 
-        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, start.AddSeconds(4))));
-        var fills = exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, start.AddSeconds(5)));
+        Assert.Empty(exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, start.AddSeconds(4), 1m)));
+        var fills = exchange.Apply(new PaperMarketTick("BTCUSDT", 100m, 101m, 100m, start.AddSeconds(5), 1m));
 
         Assert.Single(fills);
         Assert.Equal(OrderStatus.Filled, exchange.GetOrder(request.ClientOrderId).Status);

@@ -1199,3 +1199,55 @@ Este adendo supersede somente o status e os limites anteriores do #6; mantém os
 - **Integração SDK:** budget compartilhado como singleton por ambiente; factory de ordens injeta `TimeProvider`/clock/budget coerentes. `GetTradingState` aguarda sequencialmente e preserva skew. Rotas de `GetServerTime`/`Ping` corrigidas para v3. Market, Account, Order e Lifecycle passam pelo budget do wire.
 - **Validação registrada:** 25+ casos de budget, 2 SDK, cenários cross-process com relógios monotônicos distintos e serialização de Account; testes reais em dois processos, incluindo namespaces de tempo distintos, finalizaram com `Count=0`. REDs reproduzidos incluíram 7+4 auditorias e safety P2. FULL GREEN: 274 Binance e 267 Worker em Release. Build global Release anterior aos dois últimos fixes: 0 warnings/0 errors; compilação final após eles está pendente.
 - **Estado e limites:** não houve trade, nova autenticação padrão ou commit do agente. `NO_TRADE` e suspensão `PRETRADE` permanecem inalterados. Seguem pendentes #7 WebSocket, #10 Paper/complementos e validação global. `plan/traceability.yaml` ausente na branch-base; traceability continua **not verified**. Não recriar documentos ou manifestos a partir de memória, nem inferir prontidão de produção.
+
+### Fechamento final da auditoria — base recebida `e4f43dc` (2026-11-01)
+
+Este adendo completa os registros de execução de **#7**, **#10** e dos complementos de sizing. Preserva integralmente os achados originais #1–13 e os adendos históricos anteriores; não reescreve diagnósticos nem converte limitações de pesquisa em autorização de execução. O HEAD `e4f43dc` foi fornecido pelo usuário, preservando os commits anteriores; o delta atual após esse HEAD foi implementado pelo agente escritor. Não há commits do agente. Nenhuma ordem ou mutação financeira foi executada na Binance; os testes criptográficos usaram somente dados sintéticos. Não foi criada nova sessão AgentManager nem worktree; subagentes internos foram usados para leitura, auditoria e documentação; o agente consolidador foi o único escritor de código.
+
+#### #7 — recepção WebSocket e parsing: concluído
+
+Auditorias Terra `medium` e `low` concluídas; os achados foram fechados. O transporte usa reader dedicado, lease de buffer `ArrayPool` e canais bounded de capacidade 32. Overflow não descarta silenciosamente dados: produz `IOException`, invalida o estado e requer reconexão/ressincronização. Payload emprestado permanece válido até `Next`/`Dispose`; os buffers são limpos no retorno. O limite lógico de mensagem é 1 MiB. Keep-alive é configurado para intervalo 20 s e timeout 10 s; `Dispose` aguarda a conexão pendente após cancelá-la.
+
+Foram corrigidos: P1 de I/O legado/reconexão e ACK tipado de protocolo malformado; P2 de fragmento vazio seguido de fechamento e conexão pendente; P1 em que o contador de retry era zerado no sucesso TCP antes de qualquer evento: agora só reinicia após evento válido; falhas consecutivas respeitam o limite configurado. Parsing UTF-8 usa `JsonDocument` diretamente sobre o payload, `Utf8Parser` e formatter UTF-8 exato para round-trip numérico, sem `GetString` para números. NaN e valores não nulos inexatos são rejeitados. Campos opcionais Kline `q/V/Q`: presentes aceitam escalar entre aspas ou numérico; ausentes valem zero; inválidos são rejeitados. A alocação escalar medida após warmup foi zero em 1.000 iterações; isso não significa zero alocação do processo inteiro nem substitui benchmark de produção.
+
+#### #10 — Paper e Shadow: concluído, sem alegação de matching real
+
+`PaperLiquidityModel` é **observed-only** e é o padrão: liquidez ausente resulta em zero fill. A aproximação explícita por fechamento de candle só pode ser selecionada em demo/shadow drill, ainda sob `NoTrade`; não equivale a execução observada. Quantidade máxima usa pool conservador de bid/ask real, limitada pelo Worker, e não é quantidade de ordem. A fila local é price-time por lado, com sequência de aceitação, idempotência e sem alegação de fila real anterior no mercado. Deduplicação temporal monotônica por símbolo ignora timestamps repetidos/regredidos; eventos distintos no mesmo timestamp também são ignorados conservadoramente. `PaperTickPrice` default é rejeitado. Cancelamento no Shadow não gera fill nem acumula ordens; resultado Shadow em modo estrito sem volume é `null`.
+
+Validação registrada: 36 testes Paper, 19 Shadow e 277 Worker cobrem os comportamentos descritos. Auditoria aprovou após quatro findings corrigidos.
+
+#### Complemento — política opcional de sizing por risco de stop
+
+`StopRiskSizingPolicy` é opcional e `null` por padrão. A ativação exige versão e orçamento configurados juntos por `WORKER_STOP_RISK_SIZING_VERSION` e `WORKER_MAXIMUM_PLANNED_LOSS_NOTIONAL`; ambos devem ser positivos. O cálculo é adaptativo somente para reduzir notionals-alvo de novas entradas: não altera a hard risk policy, P&L realizado, exits ou garantia de perda máxima. A unidade é derivada do budget dividido por distância do stop ATR existente (100–250 bps), custos conservadores não descontados de maker/taker para compra e venda, incluindo taxa especial, e duas vezes o hard maximum slippage, tudo normalizado por 10.000. Aplica cap e floor de quote 8. Sem limites de custo conhecidos, a decisão é `NoTrade`.
+
+Valuation fresca de BNB é obrigatória em `TryEffective`; o sizer usa taxa conservadora e ignora descontos. Quantidade é truncada ao step antes do floor e do ceiling pós-plano. Cap e quantidade efetiva pós-lote/pós-plano abaixo do dust (até 5) levam a `NoTrade`; overflow de slippage também falha fechado. Exits permanecem inalterados. `kellyMultiplier` foi renomeado para heurística de conviction, sem retunar multiplicadores.
+
+#### Validação final e lacunas
+
+| Gate | Resultado registrado |
+|---|---|
+| Build `CryptoTrading.slnx`, Release, `--no-restore`, warnings-as-errors | Passou; 0 warnings, 0 errors. |
+| Suite completa Release | 1.431/1.431; 0 skips. |
+| PostgreSQL 18 real | 53/53, Debug, via harness isolado; credenciais efêmeras geradas e não logadas. Docker local e Compose encerrados; volume preservado. |
+| Paper chaos | Script `PAPER_CHAOS_RUNS=3`: 3 repetições passaram. Artefato: `artifacts/chaos/paper-soak-chaos-20261101T155401Z-1924808.md`. Escopo local/in-memory, sem Binance nem promoção durável. |
+| Traceability | **Falhou / not verified**: `plan/traceability.yaml` preexistente ausente e quatro documentos-fontes ausentes desde a branch que removeu `docs`. Não inventar nem restaurar requisitos canônicos a partir de memória. |
+| Native AOT / trimming | **Not verified**: restore offline com runtime `linux-x64`, `PublishAot=true`, source `/tmp/kilo` e ignore failed sources falhou em `NU1101` para `ILCompiler`, `ILLink` e runtime packs não cacheados. Não houve download/rede extra. Restore normal offline e Release foram refeitos sem flags AOT ou novas dependências. |
+| Fontes financeiras externas, calibração de alpha e integração Binance real | **Not verified**. Não houve promoção. |
+
+O chaos executado não substitui persistência durável, reconciliação/OMS, soak de produção ou evidência de promoção. Recursos R&D condicionais de OBI persistente, anchored VWAP, absorption, markout e post-only não foram automaticamente autorizados como estratégias; comportamento aprovado foi mantido sem expandir escopo. `NO_TRADE`, SafeMode/KillSwitch e suspensão pré-trade permanecem inalterados. **As listas de pendências intermediárias acima estão superseded por este fechamento: os 13 achados e complementos de sizing aplicáveis foram implementados/auditados; permanecem apenas lacunas de validação (traceability/AOT/real exchange/alpha), sem produção pronta.**
+
+Uso do sizing (opt-in; sem valores padrão): configurar **ambas** as variáveis `WORKER_STOP_RISK_SIZING_VERSION` e `WORKER_MAXIMUM_PLANNED_LOSS_NOTIONAL` com valores positivos e revisados pelo operador; deixar ambas ausentes mantém sizing desativado (`null`), e configuração parcial/inválida deve permanecer fail-closed.
+
+### Investigação do bloqueio de rastreabilidade
+
+Os cinco arquivos exigidos pelo gate foram localizados íntegros no pai `42ce739dd0b0d2c45dd03e990194c00b53c394a6` da remoção `0f6e8ab`. A baseline está marcada `planning-baseline`, usa schema 2, tem última revisão em `825e889` (2026-09-20) e não contém itens `Done`. É origem de **recuperação**, não atualidade validada. Cabe ao responsável decidir entre restaurar a baseline legada ou reconciliar fontes atuais; restaurá-la indiscriminadamente não provaria os 13 itens `Done`.
+
+| Arquivo | Blob | Bytes |
+|---|---|---:|
+| [`plan/traceability.yaml`](../../tree/42ce739dd0b0d2c45dd03e990194c00b53c394a6/plan/traceability.yaml) | `566dec6d868212184743ba03d4ad53c9df82dbe4` | 11.288 |
+| [`plan/17-backlog.md`](../../tree/42ce739dd0b0d2c45dd03e990194c00b53c394a6/plan/17-backlog.md) | `9b92ff7332c1a9a2473fa15535d345aa5447ece6` | 19.590 |
+| [`plan/18-acceptance-criteria.md`](../../tree/42ce739dd0b0d2c45dd03e990194c00b53c394a6/plan/18-acceptance-criteria.md) | `85a01dd5f769425247500b1254bb3dbfd85bafab` | 17.305 |
+| [`plan/02-functional-requirements.md`](../../tree/42ce739dd0b0d2c45dd03e990194c00b53c394a6/plan/02-functional-requirements.md) | `f3ca511176f9ea0290bbf57c1b55d44a93aa4f9f` | 13.133 |
+| [`plan/03-non-functional-requirements.md`](../../tree/42ce739dd0b0d2c45dd03e990194c00b53c394a6/plan/03-non-functional-requirements.md) | `d2d1405755dd0ceaacd77f9830f5501ca80802f2` | 5.239 |
+
+Nada foi restaurado; nenhum outro arquivo, código, gate ou estado foi alterado. Não foram executados testes nem acessadas rede ou credenciais. Os resultados registrados de build, 1.431 testes, 53 testes PostgreSQL e chaos permanecem os descritos acima, sem reexecução.

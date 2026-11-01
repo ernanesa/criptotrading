@@ -33,8 +33,8 @@ public sealed class PaperTickPumpTests
         var pump = new PaperTickPump(exchange);
         Submit(exchange, now);
 
-        Assert.Equal(0, pump.Apply(Tick(now)));
-        Assert.Equal(1, pump.Apply(Tick(now.AddSeconds(2))));
+        Assert.Equal(0, pump.Apply(Tick(now, 0.01m)));
+        Assert.Equal(1, pump.Apply(Tick(now.AddSeconds(2), 0.01m)));
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public sealed class PaperTickPumpTests
         var pump = new PaperTickPump(exchange);
         Submit(exchange, now);
 
-        var produced = pump.Apply(Tick(now.AddSeconds(2)));
+        var produced = pump.Apply(Tick(now.AddSeconds(2), 0.01m));
 
         Assert.Equal(1, produced);
         var summary = pump.Summarize();
@@ -74,7 +74,7 @@ public sealed class PaperTickPumpTests
         Submit(exchange, now);
         var before = pump.Fills;
 
-        pump.Apply(Tick(now));
+        pump.Apply(Tick(now, 0.01m));
 
         Assert.Empty(before);
         Assert.Single(pump.Fills);
@@ -86,8 +86,8 @@ public sealed class PaperTickPumpTests
             new PaperOrderRequest(new ClientOrderId("pump-1"), BtcUsdt, OrderSide.Buy, OrderType.Market, new Quantity(0.01m)),
             new IdempotencyKey("pump-1"));
 
-    private static PaperMarketTick Tick(DateTimeOffset at) =>
-        new(BtcUsdt, new Price(100m), new Price(100m), new Price(100m), at);
+    private static PaperMarketTick Tick(DateTimeOffset at, decimal availableQuantity = 0m) =>
+        new(BtcUsdt, new Price(100m), new Price(100m), new Price(100m), at, availableQuantity);
 
     private sealed class MutableClock(DateTimeOffset now) : TimeProvider
     {

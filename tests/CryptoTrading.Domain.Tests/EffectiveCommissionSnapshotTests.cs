@@ -63,6 +63,22 @@ public sealed class EffectiveCommissionSnapshotTests
         Assert.NotEqual(Snapshot(Now).CanonicalPayloadHash, snapshot.CanonicalPayloadHash);
     }
 
+    [Theory]
+    [InlineData(-301)]
+    [InlineData(1)]
+    public void CurrentCommissionCannotUseStaleOrFutureBnbValuation(int offsetSeconds)
+    {
+        var snapshot = new EffectiveCommissionSnapshot(new Symbol("BTCUSDT"), "testnet", "account",
+            new CommissionRateSet(.001m, .002m, 0m, 0m), new CommissionRateSet(0m, 0m, 0m, 0m),
+            new CommissionRateSet(0m, 0m, 0m, 0m), true, true, "BNB", .25m, true, Now,
+            discountAssetQuotePrice: 600m, discountAssetValuationAtUtc: Now.AddSeconds(offsetSeconds),
+            discountAssetValuationSource: "synthetic-test-quote");
+        Assert.False(snapshot.TryGetEffectiveRate(OrderSide.Buy, true, Now, TimeSpan.FromMinutes(5), out _, out var reason));
+        Assert.Equal("COMMISSION_BNB_VALUATION_STALE", reason);
+        Assert.True(snapshot.TryGetConservativeRate(OrderSide.Buy, Now, TimeSpan.FromMinutes(5), out var reserve, out _));
+        Assert.Equal(.002m, reserve);
+    }
+
     [Fact]
     public void ZeroDiscountRateWithNullAssetDoesNotRequireValuation()
     {
