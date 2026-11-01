@@ -481,6 +481,22 @@ public sealed class BinanceLocalOrderBookTests
         Assert.Empty(book.Bids);
     }
 
+    [Theory]
+    [InlineData(5)]
+    [InlineData(33)]
+    [InlineData(1000)]
+    public void MixedScaleDepthPreservesTheOriginalPriceOrderedDecimalAccumulation(int levels)
+    {
+        var book = new BinanceLocalOrderBook("BTCUSDT");
+        var bids = Enumerable.Range(0, 40).Reverse()
+            .Select(i => Level(1m - i * 0.0001m, i == 0 ? 1e28m : 0.6m)).ToArray();
+        book.ApplySnapshot(new("BTCUSDT", 100, bids, [Level(2m, 1e28m)]));
+        book.ApplyDelta(new("btcusdt@depth@100ms", "BTCUSDT", 1, DateTimeOffset.UnixEpoch, 101, 101, null, [], []));
+        decimal expected = 0m;
+        foreach (var level in book.Bids.Take(levels)) expected += level.Price * level.Quantity;
+        Assert.Equal(expected, book.CalculateTopDepthLiquidityNotional(levels));
+    }
+
     private static BinanceLocalOrderBook DeepBook(int maxLevels = 80)
     {
         var book = new BinanceLocalOrderBook("BTCUSDT", maxLevels: maxLevels);

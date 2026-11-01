@@ -4,13 +4,15 @@ using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
 
-public sealed class BinanceSpotMarketClientTests
+public sealed class BinanceSpotMarketClientTests : IDisposable
 {
+    private readonly BinanceTestBudget budget = new();
+    public void Dispose() => budget.Dispose();
     [Fact]
     public async Task GetServerTimeDeserializesOfficialPayload()
     {
         using var httpClient = CreateHttpClient("{\"serverTime\":1720000000123}");
-        var client = new BinanceSpotMarketClient(httpClient);
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
         var result = await client.GetServerTimeAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1720000000123, result.ServerTime);
@@ -20,8 +22,8 @@ public sealed class BinanceSpotMarketClientTests
     public async Task GetKlinesParsesPublicHistoricalRowsAndBounds()
     {
         using var handler = new RecordingHandler("[[1720000000000,\"60000.00\",\"61000.00\",\"59000.00\",\"60500.00\",\"12.5\",1720086399999,\"756250.00\",100,\"605000.00\",10,\"0\"]]");
-        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
-        var client = new BinanceSpotMarketClient(httpClient);
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.binance.com/api/") };
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         var result = await client.GetKlinesAsync(
             " btcusdt ",
@@ -40,9 +42,9 @@ public sealed class BinanceSpotMarketClientTests
     {
         using var handler = new RecordingHandler(
             "{\"symbol\":\"BTCUSDT\",\"bidPrice\":\"60000.00\",\"bidQty\":\"0.25\",\"askPrice\":\"60001.00\",\"askQty\":\"0.10\"}");
-        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.binance.com/api/") };
         var before = DateTimeOffset.UtcNow;
-        var client = new BinanceSpotMarketClient(httpClient);
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         var result = await client.GetBookTickerAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -60,8 +62,8 @@ public sealed class BinanceSpotMarketClientTests
     {
         using var handler = new RecordingHandler(
             "[{\"a\":17,\"p\":\"600.12\",\"q\":\"1.5\",\"f\":91,\"l\":92,\"T\":1720000000000,\"m\":true,\"M\":true}]");
-        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
-        var client = new BinanceSpotMarketClient(httpClient);
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.binance.com/api/") };
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
         var end = DateTimeOffset.FromUnixTimeMilliseconds(1_720_000_000_001);
 
         var result = await client.GetAggregateTradesAsync("bnbusdt", end, 1000, cancellationToken: TestContext.Current.CancellationToken);
@@ -79,7 +81,7 @@ public sealed class BinanceSpotMarketClientTests
     public async Task GetKlinesRejectsInvalidRequestBeforeNetwork(string interval)
     {
         using var httpClient = CreateHttpClient("[]");
-        var client = new BinanceSpotMarketClient(httpClient);
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         await Assert.ThrowsAsync<ArgumentException>(() => client.GetKlinesAsync("BTCUSDT", interval, cancellationToken: TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => client.GetKlinesAsync("BTCUSDT", "1d", limit: 1001, cancellationToken: TestContext.Current.CancellationToken));
@@ -89,8 +91,8 @@ public sealed class BinanceSpotMarketClientTests
     public async Task ExchangeInfoNormalizesSymbol()
     {
         using var handler = new RecordingHandler("{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8}]}");
-        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
-        var client = new BinanceSpotMarketClient(httpClient);
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.binance.com/api/") };
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         var result = await client.GetExchangeInfoAsync(" btcusdt ", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -104,7 +106,7 @@ public sealed class BinanceSpotMarketClientTests
     {
         using var httpClient = CreateHttpClient(
             "{\"timezone\":\"UTC\",\"serverTime\":1,\"symbols\":[{\"symbol\":\"BTCUSDT\",\"status\":\"TRADING\",\"baseAsset\":\"BTC\",\"quoteAsset\":\"USDT\",\"baseAssetPrecision\":8,\"quoteAssetPrecision\":8,\"filters\":[{\"filterType\":\"PRICE_FILTER\",\"minPrice\":\"0.01\",\"maxPrice\":\"100000\",\"tickSize\":\"0.01\"},{\"filterType\":\"LOT_SIZE\",\"minQty\":\"0.0001\",\"maxQty\":\"9000\",\"stepSize\":\"0.0001\"},{\"filterType\":\"MIN_NOTIONAL\",\"minNotional\":\"10\"}],\"orderTypes\":[\"LIMIT\",\"LIMIT_MAKER\",\"MARKET\"]}]}");
-        var client = new BinanceSpotMarketClient(httpClient);
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         var rules = await client.GetTradingRulesAsync("btcusdt", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -117,7 +119,7 @@ public sealed class BinanceSpotMarketClientTests
     public async Task NonSuccessDoesNotExposeResponseBody()
     {
         using var httpClient = CreateHttpClient("{\"code\":-1003,\"msg\":\"secret-like response\"}", HttpStatusCode.TooManyRequests);
-        var client = new BinanceSpotMarketClient(httpClient);
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         var exception = await Assert.ThrowsAsync<BinanceApiException>(() => client.PingAsync(cancellationToken: TestContext.Current.CancellationToken));
 
@@ -133,7 +135,7 @@ public sealed class BinanceSpotMarketClientTests
     public async Task InvalidSymbolIsRejectedBeforeNetwork(string symbol)
     {
         using var httpClient = CreateHttpClient("{}");
-        var client = new BinanceSpotMarketClient(httpClient);
+        var client = new BinanceSpotMarketClient(httpClient, new BinanceClientOptions(), requestBudget: budget.Instance);
 
         await Assert.ThrowsAsync<ArgumentException>(() => client.GetExchangeInfoAsync(symbol, cancellationToken: TestContext.Current.CancellationToken));
     }
@@ -142,9 +144,9 @@ public sealed class BinanceSpotMarketClientTests
     public async Task GetKlinesReusesShortLivedCacheWithinConfiguredWindow()
     {
         using var handler = new CountingHandler("[[1720000000000,\"60000.00\",\"61000.00\",\"59000.00\",\"60500.00\",\"12.5\",1720086399999,\"756250.00\",100,\"605000.00\",10,\"0\"]]");
-        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.binance.com/api/") };
         var options = new BinanceClientOptions { KlineCacheDuration = TimeSpan.FromSeconds(1.5) };
-        var client = new BinanceSpotMarketClient(httpClient, options);
+        var client = new BinanceSpotMarketClient(httpClient, options, requestBudget: budget.Instance);
 
         var first = await client.GetKlinesAsync("BTCUSDT", "1m", limit: 100, cancellationToken: TestContext.Current.CancellationToken);
         var second = await client.GetKlinesAsync("BTCUSDT", "1m", limit: 100, cancellationToken: TestContext.Current.CancellationToken);
@@ -158,9 +160,9 @@ public sealed class BinanceSpotMarketClientTests
     public async Task GetBookTickerReusesShortLivedCacheWithinConfiguredWindow()
     {
         using var handler = new CountingHandler("{\"symbol\":\"BTCUSDT\",\"bidPrice\":\"60000.00\",\"bidQty\":\"0.25\",\"askPrice\":\"60001.00\",\"askQty\":\"0.10\"}");
-        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://test.invalid/api/") };
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.binance.com/api/") };
         var options = new BinanceClientOptions { BookTickerCacheDuration = TimeSpan.FromSeconds(1.5) };
-        var client = new BinanceSpotMarketClient(httpClient, options);
+        var client = new BinanceSpotMarketClient(httpClient, options, requestBudget: budget.Instance);
 
         var first = await client.GetBookTickerAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
         var second = await client.GetBookTickerAsync("BTCUSDT", cancellationToken: TestContext.Current.CancellationToken);
@@ -190,7 +192,7 @@ public sealed class BinanceSpotMarketClientTests
     {
         var httpClient = new HttpClient(new RecordingHandler(payload, statusCode))
         {
-            BaseAddress = new Uri("https://test.invalid/api/"),
+            BaseAddress = new Uri("https://api.binance.com/api/"),
             DefaultRequestHeaders = { UserAgent = { new ProductInfoHeaderValue("CryptoTrading", "test") } }
         };
         return httpClient;

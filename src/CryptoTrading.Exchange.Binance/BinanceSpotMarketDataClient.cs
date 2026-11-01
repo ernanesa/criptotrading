@@ -196,46 +196,20 @@ public interface IBinanceWebSocketTransport : IAsyncDisposable
     ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) =>
         throw new NotSupportedException("This transport is receive-only.");
 
+    /// <summary>Current payload is borrowed until the next advance or reader/transport disposal; parse or copy it before then.</summary>
     IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(CancellationToken cancellationToken);
 }
 
 internal sealed class ClientWebSocketTransport : IBinanceWebSocketTransport
 {
-    private readonly ClientWebSocket client = new();
+    private readonly PooledWebSocketTransport transport = new(PooledWebSocketTransport.ConnectClientAsync);
 
-    public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => client.ConnectAsync(uri, cancellationToken);
+    public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => transport.ConnectAsync(uri, cancellationToken);
 
     public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) =>
-        client.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+        transport.SendAsync(payload, cancellationToken);
 
-    public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        var buffer = new byte[16 * 1024];
-        using var message = new MemoryStream();
-        while (client.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
-        {
-            var result = await client.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                yield break;
-            }
+    public IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(CancellationToken cancellationToken) => transport.ReadMessagesAsync(cancellationToken);
 
-            BinanceWebSocketLimits.EnsureWithinLimit(message.Length, result.Count);
-            await message.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken).ConfigureAwait(false);
-            if (!result.EndOfMessage)
-            {
-                continue;
-            }
-
-            yield return message.ToArray();
-            message.SetLength(0);
-        }
-    }
-
-    public ValueTask DisposeAsync()
-    {
-        client.Dispose();
-        return ValueTask.CompletedTask;
-    }
+    public ValueTask DisposeAsync() => transport.DisposeAsync();
 }

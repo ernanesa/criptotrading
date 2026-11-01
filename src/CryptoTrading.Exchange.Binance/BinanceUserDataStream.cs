@@ -110,20 +110,29 @@ public sealed class BinanceUserDataStreamLifecycleClient : IBinanceUserDataStrea
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly HttpClient httpClient;
     private readonly BinanceUserDataStreamRestOptions options;
+    private readonly BinanceRequestBudget requestBudget;
 
     public BinanceUserDataStreamLifecycleClient(
         HttpClient httpClient,
-        BinanceUserDataStreamRestOptions options)
+        BinanceUserDataStreamRestOptions options,
+        BinanceRequestBudget? requestBudget = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.requestBudget = requestBudget ?? BinanceRequestBudget.Shared;
         this.options.Validate();
     }
+
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
+    public BinanceUserDataStreamLifecycleClient(HttpClient httpClient,
+        Microsoft.Extensions.Options.IOptions<BinanceUserDataStreamRestOptions> options,
+        BinanceRequestBudget? requestBudget = null)
+        : this(httpClient, options?.Value ?? throw new ArgumentNullException(nameof(options)), requestBudget) { }
 
     public async Task<string> CreateListenKeyAsync(CancellationToken cancellationToken = default)
     {
         using var request = CreateRequest(HttpMethod.Post);
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "create user-data stream").ConfigureAwait(false);
         var payload = await response.Content.ReadFromJsonAsync<ListenKeyResponse>(JsonOptions, cancellationToken).ConfigureAwait(false)
             ?? throw new JsonException("Binance returned an empty listen-key response.");
@@ -135,7 +144,7 @@ public sealed class BinanceUserDataStreamLifecycleClient : IBinanceUserDataStrea
     {
         ValidateListenKey(listenKey);
         using var request = CreateRequest(HttpMethod.Put, listenKey);
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "keepalive user-data stream").ConfigureAwait(false);
     }
 
@@ -143,7 +152,7 @@ public sealed class BinanceUserDataStreamLifecycleClient : IBinanceUserDataStrea
     {
         ValidateListenKey(listenKey);
         using var request = CreateRequest(HttpMethod.Delete, listenKey);
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "close user-data stream").ConfigureAwait(false);
     }
 
@@ -401,44 +410,19 @@ internal static class BinanceUserDataParser
     }
 
     private static decimal Decimal(JsonElement root, string name) =>
-        decimal.Parse(Required(root, name), NumberStyles.Number, CultureInfo.InvariantCulture);
+        BinanceUtf8Json.ReadDecimal(root.GetProperty(name));
 }
 
 internal sealed class UserDataClientWebSocketTransport : IBinanceWebSocketTransport
 {
-    private readonly ClientWebSocket client = new();
+    private readonly PooledWebSocketTransport transport = new(PooledWebSocketTransport.ConnectClientAsync);
 
-    public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => client.ConnectAsync(uri, cancellationToken);
+    public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => transport.ConnectAsync(uri, cancellationToken);
 
     public ValueTask SendAsync(ReadOnlyMemory<byte> payload, CancellationToken cancellationToken) =>
-        client.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken);
+        transport.SendAsync(payload, cancellationToken);
 
-    public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
-    {
-        var buffer = new byte[16 * 1024];
-        using var message = new MemoryStream();
-        while (client.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
-        {
-            var result = await client.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                yield break;
-            }
+    public IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(CancellationToken cancellationToken) => transport.ReadMessagesAsync(cancellationToken);
 
-            BinanceWebSocketLimits.EnsureWithinLimit(message.Length, result.Count);
-            await message.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken).ConfigureAwait(false);
-            if (result.EndOfMessage)
-            {
-                yield return message.ToArray();
-                message.SetLength(0);
-            }
-        }
-    }
-
-    public ValueTask DisposeAsync()
-    {
-        client.Dispose();
-        return ValueTask.CompletedTask;
-    }
+    public ValueTask DisposeAsync() => transport.DisposeAsync();
 }

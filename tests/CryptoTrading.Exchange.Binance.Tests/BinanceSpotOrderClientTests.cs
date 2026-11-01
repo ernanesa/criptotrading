@@ -8,8 +8,10 @@ using Xunit;
 namespace CryptoTrading.Exchange.Binance.Tests;
 
 [Collection(TelemetryActivityFixture.Name)]
-public sealed class BinanceSpotOrderClientTests
+public sealed class BinanceSpotOrderClientTests : IDisposable
 {
+    private readonly BinanceTestBudget budget = new();
+    public void Dispose() => budget.Dispose();
     private static readonly DateTimeOffset FixedNow = new(2026, 9, 20, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
@@ -178,7 +180,7 @@ public sealed class BinanceSpotOrderClientTests
         100.50m);
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test owns the handler lifetime for the duration of the client assertions.")]
-    private static BinanceSpotOrderClient CreateClient(RecordingHandler handler, bool enableExecution) =>
+    private BinanceSpotOrderClient CreateClient(RecordingHandler handler, bool enableExecution) =>
         new(
             new HttpClient(handler),
             new BinanceSpotOrderClientOptions
@@ -188,7 +190,7 @@ public sealed class BinanceSpotOrderClientTests
                 ApiSecret = "test-api-secret",
                 EnableOrderExecution = enableExecution
             },
-            new FixedTimeProvider(FixedNow));
+            new FixedTimeProvider(FixedNow), requestBudget: budget.Instance);
 
     private static void AssertSignatureIsValid(HttpRequestMessage request, string secret)
     {

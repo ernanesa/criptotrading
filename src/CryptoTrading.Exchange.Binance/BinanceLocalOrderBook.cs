@@ -175,11 +175,7 @@ public sealed class BinanceLocalOrderBook
     private static (decimal Quantity, decimal Notional) SideTotals(Dictionary<decimal, decimal> side, int levels, bool isBid)
     {
         decimal quantity = 0m, notional = 0m;
-        if (levels >= side.Count)
-        {
-            foreach (var pair in side) { quantity += pair.Value; notional += pair.Key * pair.Value; }
-            return (quantity, notional);
-        }
+        levels = Math.Min(levels, side.Count);
         if (levels <= 32)
         {
             Span<DepthLevel> top = stackalloc DepthLevel[levels];
@@ -202,8 +198,14 @@ public sealed class BinanceLocalOrderBook
             var count = 0;
             foreach (var pair in side) rented[count++] = new(pair.Key, pair.Value);
             Array.Sort(rented, 0, count);
-            var start = isBid ? count - levels : 0;
-            for (var i = start; i < start + levels; i++) { quantity += rented[i].Quantity; notional += rented[i].Price * rented[i].Quantity; }
+            // Preserve the original price order: decimal addition can round
+            // differently when magnitudes force a reduction of scale.
+            for (var i = 0; i < levels; i++)
+            {
+                var level = rented[isBid ? count - 1 - i : i];
+                quantity += level.Quantity;
+                notional += level.Price * level.Quantity;
+            }
             return (quantity, notional);
         }
         finally { ArrayPool<DepthLevel>.Shared.Return(rented); }

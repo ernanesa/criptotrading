@@ -6,8 +6,10 @@ using Xunit;
 
 namespace CryptoTrading.Exchange.Binance.Tests;
 
-public sealed class BinanceSpotAccountClientTests
+public sealed class BinanceSpotAccountClientTests : IDisposable
 {
+    private readonly BinanceTestBudget budget = new();
+    public void Dispose() => budget.Dispose();
     private static readonly DateTimeOffset FixedNow = new(2026, 9, 19, 12, 0, 0, TimeSpan.Zero);
 
     [Fact]
@@ -127,7 +129,7 @@ public sealed class BinanceSpotAccountClientTests
             // cache expiry instead of tripping the drift guard.
             ClockSyncCacheDuration = TimeSpan.FromHours(1)
         };
-        var client = new BinanceSpotAccountClient(httpClient, options, timeProvider: clock);
+        var client = new BinanceSpotAccountClient(httpClient, options, timeProvider: clock, requestBudget: budget.Instance);
 
         var first = await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
         var second = await client.GetAccountFiltersAsync("btcusdt", TestContext.Current.CancellationToken);
@@ -159,7 +161,7 @@ public sealed class BinanceSpotAccountClientTests
             ApiSecret = "test-api-secret",
             AccountFiltersCacheDuration = TimeSpan.Zero
         };
-        var client = new BinanceSpotAccountClient(httpClient, options, timeProvider: new FixedTimeProvider(FixedNow));
+        var client = new BinanceSpotAccountClient(httpClient, options, timeProvider: new FixedTimeProvider(FixedNow), requestBudget: budget.Instance);
 
         await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
         await client.GetAccountFiltersAsync("BTCUSDT", TestContext.Current.CancellationToken);
@@ -244,7 +246,7 @@ public sealed class BinanceSpotAccountClientTests
             RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
             ApiKey = "test-api-key",
             ApiSecret = "test-api-secret"
-        }, timeProvider: new SkewingTimeProvider(clock, skewMilliseconds));
+        }, timeProvider: new SkewingTimeProvider(clock, skewMilliseconds), requestBudget: budget.Instance);
 
         var state = await client.GetTradingStateAsync("BTCUSDT", "BTC", TestContext.Current.CancellationToken);
 
@@ -499,7 +501,7 @@ public sealed class BinanceSpotAccountClientTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The test handler owns the HttpClient lifetime for the duration of each test.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000",
         Justification = "The returned client owns the HttpClient for the duration of the test.")]
-    private static BinanceSpotAccountClient CreateClient(RecordingHandler handler, bool allowTestnetWithdrawCapability = false)
+    private BinanceSpotAccountClient CreateClient(RecordingHandler handler, bool allowTestnetWithdrawCapability = false)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://testnet.binance.vision/api/") };
         var options = new BinanceAuthenticatedClientOptions
@@ -510,7 +512,7 @@ public sealed class BinanceSpotAccountClientTests
             ClockDriftTolerance = TimeSpan.FromSeconds(5),
             AllowTestnetWithdrawCapability = allowTestnetWithdrawCapability
         };
-        return new BinanceSpotAccountClient(httpClient, options, timeProvider: new FixedTimeProvider(FixedNow));
+        return new BinanceSpotAccountClient(httpClient, options, timeProvider: new FixedTimeProvider(FixedNow), requestBudget: budget.Instance);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Globalization", "CA1308", Justification = "Binance signatures are conventionally represented as lowercase hexadecimal.")]

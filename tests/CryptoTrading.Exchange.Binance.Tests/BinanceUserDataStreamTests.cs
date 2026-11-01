@@ -56,7 +56,7 @@ public sealed class BinanceUserDataStreamTests
     }
 
     [Fact]
-    public async Task ManagesListenKeyLifecycleWithoutExposingMutationEndpoints()
+    public async Task UnverifiedLegacyListenKeyCostsFailClosedBeforeHttp()
     {
         using var handler = new LifecycleHandler();
         using var httpClient = new HttpClient(handler)
@@ -71,16 +71,10 @@ public sealed class BinanceUserDataStreamTests
                 ApiKey = "testnet-key"
             });
 
-        var listenKey = await client.CreateListenKeyAsync(cancellationToken: TestContext.Current.CancellationToken);
-        await client.KeepAliveListenKeyAsync(listenKey, cancellationToken: TestContext.Current.CancellationToken);
-        await client.CloseListenKeyAsync(listenKey, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal([HttpMethod.Post, HttpMethod.Put, HttpMethod.Delete], handler.Methods);
-        Assert.All(handler.Requests, request =>
-        {
-            Assert.Equal("testnet-key", request.Headers.GetValues("X-MBX-APIKEY").Single());
-            Assert.Contains("userDataStream", request.RequestUri!.ToString(), StringComparison.Ordinal);
-        });
+        await Assert.ThrowsAsync<BinanceRequestBudgetRejectedException>(() => client.CreateListenKeyAsync(TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<BinanceRequestBudgetRejectedException>(() => client.KeepAliveListenKeyAsync("synthetic-listen-key", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<BinanceRequestBudgetRejectedException>(() => client.CloseListenKeyAsync("synthetic-listen-key", TestContext.Current.CancellationToken));
+        Assert.Empty(handler.Methods);
     }
 
     [Fact]

@@ -11,6 +11,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
     private readonly HttpClient httpClient;
     private readonly BinanceClientOptions options;
     private readonly TimeProvider timeProvider;
+    private readonly BinanceRequestBudget requestBudget;
     private readonly ConcurrentDictionary<string, CachedKlineEntry> cachedKlines = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CachedBookTickerEntry> cachedBookTickers = new(StringComparer.OrdinalIgnoreCase);
 
@@ -25,29 +26,33 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
     public BinanceSpotMarketClient(
         HttpClient httpClient,
         BinanceClientOptions options,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        BinanceRequestBudget? requestBudget = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.requestBudget = requestBudget ?? BinanceRequestBudget.Shared;
     }
 
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public BinanceSpotMarketClient(
         HttpClient httpClient,
-        IOptions<BinanceClientOptions> options)
-        : this(httpClient, options?.Value ?? new BinanceClientOptions())
+        IOptions<BinanceClientOptions> options,
+        BinanceRequestBudget? requestBudget = null,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, options?.Value ?? new BinanceClientOptions(), timeProvider, requestBudget)
     {
     }
 
     public async Task PingAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.GetAsync(new Uri("ping", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await GetBudgetedAsync(new Uri("v3/ping", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "ping", cancellationToken).ConfigureAwait(false);
     }
 
     public Task<BinanceServerTime> GetServerTimeAsync(CancellationToken cancellationToken = default) =>
-        GetAsync<BinanceServerTime>("time", cancellationToken);
+        GetAsync<BinanceServerTime>("v3/time", cancellationToken);
 
     public async Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
         string symbol,
@@ -99,7 +104,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
             query.Add($"endTime={endTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)}");
         }
 
-        using var response = await httpClient.GetAsync(new Uri($"v3/klines?{string.Join('&', query)}", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await GetBudgetedAsync(new Uri($"v3/klines?{string.Join('&', query)}", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "klines", cancellationToken).ConfigureAwait(false);
         using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(contentStream, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -165,7 +170,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
             endpoint += $"&endTime={endTime.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture)}";
         }
 
-        using var response = await httpClient.GetAsync(new Uri(endpoint, UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await GetBudgetedAsync(new Uri(endpoint, UriKind.Relative), cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "aggTrades", cancellationToken).ConfigureAwait(false);
         using var contentStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(contentStream, cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -224,7 +229,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
             return cached.Ticker;
         }
 
-        using var response = await httpClient.GetAsync(
+        using var response = await GetBudgetedAsync(
             new Uri($"v3/ticker/bookTicker?symbol={Uri.EscapeDataString(normalizedSymbol)}", UriKind.Relative),
             cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "bookTicker", cancellationToken).ConfigureAwait(false);
@@ -340,7 +345,7 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
             throw new ArgumentOutOfRangeException(nameof(limit), "Order book depth limit must be between 1 and 5000.");
         }
 
-        using var response = await httpClient.GetAsync(
+        using var response = await GetBudgetedAsync(
             new Uri($"v3/depth?symbol={Uri.EscapeDataString(normalizedSymbol)}&limit={limit.ToString(CultureInfo.InvariantCulture)}", UriKind.Relative),
             cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, "depth", cancellationToken).ConfigureAwait(false);
@@ -385,11 +390,17 @@ public sealed class BinanceSpotMarketClient : IBinanceSpotMarketClient, IBinance
 
     private async Task<T> GetAsync<T>(string endpoint, CancellationToken cancellationToken)
     {
-        using var response = await httpClient.GetAsync(new Uri(endpoint, UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await GetBudgetedAsync(new Uri(endpoint, UriKind.Relative), cancellationToken).ConfigureAwait(false);
         await EnsureSuccessAsync(response, endpoint, cancellationToken).ConfigureAwait(false);
 
         var value = await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false);
         return value ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
+    }
+
+    private async Task<HttpResponseMessage> GetBudgetedAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+        return await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnsureSuccessAsync(

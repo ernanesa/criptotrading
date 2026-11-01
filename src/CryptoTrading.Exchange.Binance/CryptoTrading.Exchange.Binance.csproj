@@ -4,6 +4,7 @@
     <TargetFramework>net11.0</TargetFramework>
     <RootNamespace>CryptoTrading.Exchange.Binance</RootNamespace>
     <AssemblyName>CryptoTrading.Exchange.Binance</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

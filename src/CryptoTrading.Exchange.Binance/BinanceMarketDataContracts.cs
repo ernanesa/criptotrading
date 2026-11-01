@@ -243,16 +243,16 @@ internal static class BinanceMarketDataParser
     {
         var kline = data.GetProperty("k");
         var quoteVolume = kline.TryGetProperty("q", out var qProp) && qProp.ValueKind == JsonValueKind.String
-            ? decimal.Parse(qProp.GetString()!, CultureInfo.InvariantCulture)
+            ? BinanceUtf8Json.ReadDecimal(qProp)
             : 0m;
         var numTrades = kline.TryGetProperty("n", out var nProp) && nProp.ValueKind == JsonValueKind.Number
             ? nProp.GetInt64()
             : 0L;
         var takerBuyBase = kline.TryGetProperty("V", out var vProp) && vProp.ValueKind == JsonValueKind.String
-            ? decimal.Parse(vProp.GetString()!, CultureInfo.InvariantCulture)
+            ? BinanceUtf8Json.ReadDecimal(vProp)
             : 0m;
         var takerBuyQuote = kline.TryGetProperty("Q", out var tqProp) && tqProp.ValueKind == JsonValueKind.String
-            ? decimal.Parse(tqProp.GetString()!, CultureInfo.InvariantCulture)
+            ? BinanceUtf8Json.ReadDecimal(tqProp)
             : 0m;
 
         return new BinanceKlineEvent(
@@ -312,8 +312,8 @@ internal static class BinanceMarketDataParser
     }
 
     private static decimal ParseDecimal(JsonElement element, string propertyName) =>
-        decimal.Parse(element.GetProperty(propertyName).GetString() ?? throw new JsonException($"Missing numeric property '{propertyName}'."), CultureInfo.InvariantCulture);
+        BinanceUtf8Json.ReadDecimal(element.GetProperty(propertyName));
 
     private static decimal ParseDecimal(JsonElement element) =>
-        decimal.Parse(element.GetString() ?? throw new JsonException("Missing numeric level value."), CultureInfo.InvariantCulture);
+        BinanceUtf8Json.ReadDecimal(element);
 }

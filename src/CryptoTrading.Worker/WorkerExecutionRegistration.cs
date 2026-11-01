@@ -88,7 +88,9 @@ internal static class WorkerExecutionRegistration
             var inner = new BinanceSpotOrderClient(
                 serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("BinanceSpotOrder"),
                 orderOptions,
-                clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>());
+                timeProvider: serviceProvider.GetRequiredService<TimeProvider>(),
+                clock: serviceProvider.GetRequiredService<IBinanceClockDriftEstimator>(),
+                requestBudget: serviceProvider.GetRequiredService<BinanceRequestBudget>());
             return new BinancePreTradeValidatedOrderClient(
                 inner,
                 serviceProvider.GetRequiredService<IBinanceSymbolTradingRulesProvider>(),

@@ -21,6 +21,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
     private readonly TimeProvider timeProvider;
     private readonly BinanceRequestRetryPolicy retryPolicy;
     private readonly BinanceRateLimitGate rateLimitGate;
+    private readonly BinanceRequestBudget requestBudget;
     private volatile CachedAccountEntry? cachedAccount;
     private readonly ConcurrentDictionary<string, CachedCommissionEntry> cachedCommissions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BinanceAccountFilters> cachedFilters = new(StringComparer.OrdinalIgnoreCase);
@@ -40,7 +41,8 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
         IBinanceClockDriftEstimator? clock = null,
         TimeProvider? timeProvider = null,
         BinanceRequestRetryPolicy? retryPolicy = null,
-        BinanceRateLimitGate? rateLimitGate = null)
+        BinanceRateLimitGate? rateLimitGate = null,
+        BinanceRequestBudget? requestBudget = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
@@ -49,6 +51,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.retryPolicy = retryPolicy ?? new BinanceRequestRetryPolicy();
         this.rateLimitGate = rateLimitGate ?? new BinanceRateLimitGate();
+        this.requestBudget = requestBudget ?? BinanceRequestBudget.Shared;
     }
 
     [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
@@ -56,8 +59,11 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
         HttpClient httpClient,
         IOptions<BinanceAuthenticatedClientOptions> options,
         IBinanceClockDriftEstimator? clock = null,
-        BinanceRequestRetryPolicy? retryPolicy = null)
-        : this(httpClient, options?.Value ?? throw new ArgumentNullException(nameof(options)), clock, retryPolicy: retryPolicy)
+        BinanceRequestRetryPolicy? retryPolicy = null,
+        BinanceRateLimitGate? rateLimitGate = null,
+        BinanceRequestBudget? requestBudget = null,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, options?.Value ?? throw new ArgumentNullException(nameof(options)), clock, timeProvider, retryPolicy, rateLimitGate, requestBudget)
     {
     }
 
@@ -157,14 +163,10 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
         // The two endpoints are independent reads. Their completion timestamps are
         // recorded so the caller can detect a stale pairing instead of assuming
         // the result is a single consistent instant.
-        var accountCompletedAt = default(DateTimeOffset);
-        var ordersCompletedAt = default(DateTimeOffset);
-        var accountTask = ReadTrackedAsync(GetAccountAsync(cancellationToken), at => accountCompletedAt = at);
-        var ordersTask = ReadTrackedAsync(GetOpenOrdersAsync(null, cancellationToken), at => ordersCompletedAt = at);
-        await Task.WhenAll(accountTask, ordersTask).ConfigureAwait(false);
-
-        var account = await accountTask.ConfigureAwait(false);
-        var orders = await ordersTask.ConfigureAwait(false);
+        var account = await GetAccountAsync(cancellationToken).ConfigureAwait(false);
+        var accountCompletedAt = timeProvider.GetUtcNow();
+        var orders = await GetOpenOrdersAsync(null, cancellationToken).ConfigureAwait(false);
+        var ordersCompletedAt = timeProvider.GetUtcNow();
         var skew = accountCompletedAt >= ordersCompletedAt
             ? accountCompletedAt - ordersCompletedAt
             : ordersCompletedAt - accountCompletedAt;
@@ -188,13 +190,6 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
         return new BinanceAccountTradingState(
             orders.Count, symbolOrderCount, position, observedAt, account.CanTrade,
             skew <= MaxAccountObservationSkew);
-    }
-
-    private async Task<T> ReadTrackedAsync<T>(Task<T> read, Action<DateTimeOffset> recordCompletedAt)
-    {
-        var value = await read.ConfigureAwait(false);
-        recordCompletedAt(timeProvider.GetUtcNow());
-        return value;
     }
 
     private static decimal ParseExact(string? raw)
@@ -305,7 +300,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
     {
         await rateLimitGate.WaitAsync(timeProvider, cancellationToken).ConfigureAwait(false);
         var sentAt = timeProvider.GetUtcNow();
-        using var response = await httpClient.GetAsync(new Uri("v3/time", UriKind.Relative), cancellationToken).ConfigureAwait(false);
+        using var response = await GetBudgetedAsync(new Uri("v3/time", UriKind.Relative), cancellationToken).ConfigureAwait(false);
         var receivedAt = timeProvider.GetUtcNow();
         if (!response.IsSuccessStatusCode)
         {
@@ -342,7 +337,7 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
             using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"{endpoint}?{query}&signature={signature}", UriKind.Relative));
             request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
 
-            using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
                 var observedAt = timeProvider.GetUtcNow();
@@ -366,6 +361,12 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
             return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken).ConfigureAwait(false)
                 ?? throw new JsonException($"Binance returned an empty response for '{endpoint}'.");
         }
+    }
+
+    private async Task<HttpResponseMessage> GetBudgetedAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+        return await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, string endpoint)

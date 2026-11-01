@@ -8,6 +8,22 @@ namespace CryptoTrading.Exchange.Binance.Tests;
 public sealed class BinanceServiceCollectionExtensionsTests
 {
     [Fact]
+    public void AllClientFamiliesRegisterOneSharedBudgetAndReactiveGate()
+    {
+        var services = new ServiceCollection();
+        services.AddBinanceSpotMarketClient();
+        services.AddBinanceSpotAccountClient();
+        services.AddBinanceUserDataStreamLifecycleClient();
+        Assert.Single(services, descriptor => descriptor.ServiceType == typeof(BinanceRequestBudget));
+        Assert.Single(services, descriptor => descriptor.ServiceType == typeof(BinanceRateLimitGate));
+        using var provider = services.BuildServiceProvider();
+        using var first = provider.CreateScope();
+        using var second = provider.CreateScope();
+        Assert.Same(first.ServiceProvider.GetRequiredService<BinanceRequestBudget>(), second.ServiceProvider.GetRequiredService<BinanceRequestBudget>());
+        Assert.Same(first.ServiceProvider.GetRequiredService<BinanceRateLimitGate>(), second.ServiceProvider.GetRequiredService<BinanceRateLimitGate>());
+    }
+
+    [Fact]
     public void AuthenticatedClientRegistrationLoadsPrivateCredentialFiles()
     {
         using var secrets = new TemporarySecretDirectory();

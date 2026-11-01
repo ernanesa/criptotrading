@@ -559,12 +559,14 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
     private readonly Uri restBaseAddress;
     private readonly TimeProvider timeProvider;
     private readonly IBinanceClockDriftEstimator clock;
+    private readonly BinanceRequestBudget requestBudget;
 
     public BinanceSpotOrderClient(
         HttpClient httpClient,
         BinanceSpotOrderClientOptions options,
         TimeProvider? timeProvider = null,
-        IBinanceClockDriftEstimator? clock = null)
+        IBinanceClockDriftEstimator? clock = null,
+        BinanceRequestBudget? requestBudget = null)
     {
         this.httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
@@ -572,6 +574,7 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         restBaseAddress = this.options.GetRestBaseAddress();
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.clock = clock ?? new BinanceClockDriftEstimator(this.timeProvider);
+        this.requestBudget = requestBudget ?? BinanceRequestBudget.Shared;
     }
 
     public async Task<BinanceSpotOrderResult> SubmitAsync(
@@ -899,7 +902,7 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
             new Uri(restBaseAddress, $"{endpoint}?{query}&signature={signature}"));
         request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
 
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new BinanceApiException(response.StatusCode, endpoint);
@@ -927,7 +930,7 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
             new Uri(restBaseAddress, $"{endpoint}?{query}&signature={signature}"));
         request.Headers.TryAddWithoutValidation("X-MBX-APIKEY", options.ApiKey);
 
-        using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             throw new BinanceApiException(response.StatusCode, endpoint);
@@ -980,7 +983,8 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         }
 
         var sentAt = timeProvider.GetUtcNow();
-        using var response = await httpClient.GetAsync(new Uri(restBaseAddress, "v3/time"), cancellationToken).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(restBaseAddress, "v3/time"));
+        using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         var receivedAt = timeProvider.GetUtcNow();
         if (!response.IsSuccessStatusCode)
         {

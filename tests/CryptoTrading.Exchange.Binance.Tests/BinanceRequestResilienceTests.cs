@@ -4,8 +4,10 @@ using Xunit;
 namespace CryptoTrading.Exchange.Binance.Tests;
 
 [Collection(TelemetryActivityFixture.Name)]
-public sealed class BinanceRequestResilienceTests
+public sealed class BinanceRequestResilienceTests : IDisposable
 {
+    private readonly BinanceTestBudget budget = new();
+    public void Dispose() => budget.Dispose();
     [Fact]
     public void ExponentialBackoffIsBoundedAndHonorsServerRetryAfter()
     {
@@ -210,7 +212,7 @@ public sealed class BinanceRequestResilienceTests
                 ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
             },
             timeProvider,
-            clock);
+            clock, requestBudget: budget.Instance);
 
         var result = await client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-fast-1", 100.50m),
@@ -248,7 +250,7 @@ public sealed class BinanceRequestResilienceTests
             ApiSecret = "test-api-secret",
             EnableOrderExecution = true,
             ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
-        }, timeProvider, clock);
+        }, timeProvider, clock, requestBudget: budget.Instance);
 
         var error = await Assert.ThrowsAsync<BinanceOrderSubmissionAmbiguousException>(() => client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-rate-limit", 100.50m),
@@ -293,7 +295,7 @@ public sealed class BinanceRequestResilienceTests
             MaxRetries = 2,
             InitialRetryDelay = TimeSpan.FromMilliseconds(1),
             MaxRetryDelay = TimeSpan.FromMilliseconds(2)
-        }));
+        }), requestBudget: budget.Instance);
 
         await Assert.ThrowsAsync<BinanceApiException>(() => client.GetAccountAsync(TestContext.Current.CancellationToken));
 
@@ -329,7 +331,7 @@ public sealed class BinanceRequestResilienceTests
             MaxRetries = 1,
             InitialRetryDelay = TimeSpan.FromSeconds(10),
             MaxRetryDelay = TimeSpan.FromSeconds(10)
-        }));
+        }), requestBudget: budget.Instance);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pending = client.GetAccountAsync(cancellation.Token);
         try
@@ -367,7 +369,7 @@ public sealed class BinanceRequestResilienceTests
             ApiKey = "test-api-key",
             ApiSecret = "test-api-secret",
             ClockSyncCacheDuration = TimeSpan.FromSeconds(30)
-        }, clock, timeProvider);
+        }, clock, timeProvider, requestBudget: budget.Instance);
 
         await Assert.ThrowsAsync<BinanceApiException>(() => client.GetAccountAsync(TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetAccountAsync(TestContext.Current.CancellationToken));
@@ -390,7 +392,7 @@ public sealed class BinanceRequestResilienceTests
             RestBaseAddress = new Uri("https://testnet.binance.vision/api/"),
             ApiKey = "test-api-key",
             ApiSecret = "test-api-secret"
-        });
+        }, requestBudget: budget.Instance);
 
         await Assert.ThrowsAsync<BinanceApiException>(() => client.SynchronizeClockAsync(TestContext.Current.CancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.SynchronizeClockAsync(TestContext.Current.CancellationToken));

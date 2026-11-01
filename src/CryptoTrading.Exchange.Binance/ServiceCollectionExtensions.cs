@@ -1,6 +1,7 @@
 using CryptoTrading.Configuration;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace CryptoTrading.Exchange.Binance;
@@ -35,6 +36,7 @@ public static class ServiceCollectionExtensions
         Action<BinanceClientOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        AddSharedRequestControls(services);
 
         services.AddOptions<BinanceClientOptions>()
             .Configure(options =>
@@ -73,6 +75,7 @@ public static class ServiceCollectionExtensions
         Action<BinanceAuthenticatedClientOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        AddSharedRequestControls(services);
 
         services.AddSingleton<IBinanceClockDriftEstimator, BinanceClockDriftEstimator>();
         services.AddOptions<BinanceAuthenticatedClientOptions>()
@@ -107,6 +110,7 @@ public static class ServiceCollectionExtensions
         Action<BinanceUserDataStreamRestOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        AddSharedRequestControls(services);
 
         services.AddOptions<BinanceUserDataStreamRestOptions>()
             .Configure(options => configure?.Invoke(options))
@@ -133,5 +137,12 @@ public static class ServiceCollectionExtensions
         });
 
         return services;
+    }
+
+    private static void AddSharedRequestControls(IServiceCollection services)
+    {
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<BinanceRateLimitGate>();
+        services.TryAddSingleton<BinanceRequestBudget>(_ => BinanceRequestBudget.Shared);
     }
 }
