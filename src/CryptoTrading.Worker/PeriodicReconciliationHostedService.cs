@@ -14,6 +14,7 @@ internal sealed class PeriodicReconciliationHostedService(
     CryptoTrading.Observability.TradingAlertDispatcher alertDispatcher,
     IAsyncOperationalControl operationalControl,
     CryptoTrading.Domain.Runtime.IRuntimeSupervisor runtimeSupervisor,
+    ReconciliationOperationalControlResetAuthorizer resetAuthorizer,
     ILogger<PeriodicReconciliationHostedService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -23,15 +24,51 @@ internal sealed class PeriodicReconciliationHostedService(
             return;
         }
 
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(options.Value.ReconciliationIntervalMinutes));
         var isFirstTick = true;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (!isFirstTick && !await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+                if (!isFirstTick)
                 {
-                    break;
+                    var isRecoverable = operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
+                                        ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot) &&
+                                        !resetAuthorizer.IsCircuitBreakerTripped(DateTimeOffset.UtcNow);
+
+                    var targetWait = isRecoverable
+                        ? TimeSpan.FromSeconds(Math.Clamp(options.Value.SafeModeRecoveryIntervalSeconds, 5, 300))
+                        : TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440));
+
+                    var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                    while (!stoppingToken.IsCancellationRequested && System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp) < targetWait)
+                    {
+                        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
+                        var remaining = targetWait - elapsed;
+                        var slice = remaining > TimeSpan.FromSeconds(5)
+                            ? TimeSpan.FromSeconds(5)
+                            : (remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                        if (slice > TimeSpan.Zero)
+                        {
+                            await Task.Delay(slice, stoppingToken).ConfigureAwait(false);
+                        }
+
+                        var activeRecoverable = operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
+                                                ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot) &&
+                                                !resetAuthorizer.IsCircuitBreakerTripped(DateTimeOffset.UtcNow);
+
+                        if (activeRecoverable)
+                        {
+                            var recoveryWait = TimeSpan.FromSeconds(Math.Clamp(options.Value.SafeModeRecoveryIntervalSeconds, 5, 300));
+                            if (targetWait > recoveryWait)
+                            {
+                                targetWait = recoveryWait;
+                            }
+                        }
+                        else if (targetWait < TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440)))
+                        {
+                            targetWait = TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440));
+                        }
+                    }
                 }
                 isFirstTick = false;
 
@@ -69,9 +106,16 @@ internal sealed class PeriodicReconciliationHostedService(
                         var authorization = new OperationalControlResetAuthorization(
                             "account-reconciliation",
                             $"reconciliation-auto-recovery:{result.CorrelationId}");
-                        _ = await operationalControl.ResetAsync(resetCommand, authorization, stoppingToken).ConfigureAwait(false);
-                        PeriodicReconciliationLog.AutoRecovered(logger, result.CorrelationId.ToString());
-                        await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, stoppingToken).ConfigureAwait(false);
+                        try
+                        {
+                            _ = await operationalControl.ResetAsync(resetCommand, authorization, stoppingToken).ConfigureAwait(false);
+                            PeriodicReconciliationLog.AutoRecovered(logger, result.CorrelationId.ToString());
+                            await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, stoppingToken).ConfigureAwait(false);
+                        }
+                        catch (OperationalControlResetDeniedException)
+                        {
+                            PeriodicReconciliationLog.AutoRecoveryFlappingBreakerTripped(logger, operationalControl.Snapshot.Reason ?? "Unknown");
+                        }
                     }
                     else if (operationalControl.Snapshot.Mode == OperationalMode.SafeMode)
                     {
@@ -125,6 +169,9 @@ internal static partial class PeriodicReconciliationLog
 
     [LoggerMessage(LogLevel.Information, "Periodic reconciliation evaluated SafeMode; auto-recovery held for operator intervention. ChangedBy={ChangedBy} Reason={Reason}")]
     public static partial void AutoRecoveryHeld(ILogger logger, string changedBy, string reason);
+
+    [LoggerMessage(LogLevel.Warning, "Periodic reconciliation auto-recovery flapping circuit breaker tripped. SafeMode held for operator intervention. Reason={Reason}")]
+    public static partial void AutoRecoveryFlappingBreakerTripped(ILogger logger, string reason);
 
     [LoggerMessage(LogLevel.Warning, "Periodic reconciliation blocked new entries. CorrelationId={CorrelationId} ReportPath={ReportPath}")]
     public static partial void Blocked(ILogger logger, string correlationId, string reportPath);

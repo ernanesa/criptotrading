@@ -248,9 +248,16 @@ internal sealed class AccountStreamHostedService(
                 var authorization = new OperationalControlResetAuthorization(
                     "account-reconciliation",
                     $"reconciliation-auto-recovery:{result.CorrelationId}");
-                _ = await operationalControl.ResetAsync(resetCommand, authorization, cancellationToken).ConfigureAwait(false);
-                AccountStreamLog.AutoRecovered(logger, result.CorrelationId.ToString());
-                await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    _ = await operationalControl.ResetAsync(resetCommand, authorization, cancellationToken).ConfigureAwait(false);
+                    AccountStreamLog.AutoRecovered(logger, result.CorrelationId.ToString());
+                    await runtimeSupervisor.ObserveOperationalControlAsync(operationalControl.Snapshot, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationalControlResetDeniedException)
+                {
+                    AccountStreamLog.AutoRecoveryFlappingBreakerTripped(logger, operationalControl.Snapshot.Reason ?? "Unknown");
+                }
             }
         }
         else
@@ -363,6 +370,9 @@ internal static partial class AccountStreamLog
 
     [LoggerMessage(LogLevel.Information, "Account stream reconciliation auto-recovered SafeMode to Normal. CorrelationId={CorrelationId}")]
     public static partial void AutoRecovered(ILogger logger, string correlationId);
+
+    [LoggerMessage(LogLevel.Warning, "Account stream auto-recovery flapping circuit breaker tripped. SafeMode held for operator intervention. Reason={Reason}")]
+    public static partial void AutoRecoveryFlappingBreakerTripped(ILogger logger, string reason);
 
     [LoggerMessage(LogLevel.Warning, "Account stream entered SafeMode. Reason={Reason}")]
     public static partial void SafeMode(ILogger logger, string reason);

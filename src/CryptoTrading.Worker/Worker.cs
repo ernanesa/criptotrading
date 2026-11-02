@@ -11,6 +11,7 @@ internal sealed partial class TradingWorker(
     DiskSpaceSafetyGuard diskGuard,
     IOperationalControl operationalControl,
     IRuntimeSupervisor runtimeSupervisor,
+    ReconciliationOperationalControlResetAuthorizer resetAuthorizer,
     ILogger<TradingWorker> logger,
     IRuntimeSupervisorInitializer? runtimeInitializer = null) : BackgroundService
 {
@@ -42,6 +43,34 @@ internal sealed partial class TradingWorker(
                                  !noTrade &&
                                  opSnapshot.Mode == OperationalMode.Normal;
 
+            string? noTradeReason = null;
+            var autoRecoveryEligible = false;
+            if (noTrade)
+            {
+                if (opSnapshot.BlocksNewEntries)
+                {
+                    noTradeReason = opSnapshot.Reason ?? opSnapshot.Mode.ToString();
+                    autoRecoveryEligible = ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(opSnapshot) &&
+                                           !resetAuthorizer.IsCircuitBreakerTripped(now);
+                }
+                else if (runtimeOptions.NoTrade)
+                {
+                    noTradeReason = "CONFIG_NO_TRADE";
+                }
+                else if (runtimeOptions.ExecutionMode != "TESTNET")
+                {
+                    noTradeReason = $"EXECUTION_MODE_{runtimeOptions.ExecutionMode}";
+                }
+                else if (!diskResult.IsHealthy)
+                {
+                    noTradeReason = diskResult.FailureReason ?? "DISK_SPACE_UNHEALTHY";
+                }
+                else
+                {
+                    noTradeReason = "UNKNOWN_RESTRICTION";
+                }
+            }
+
             var probeSnapshot = new WorkerProbeSnapshot(
                 ProcessAlive: true,
                 UpdatedAtUtc: now,
@@ -50,7 +79,9 @@ internal sealed partial class TradingWorker(
                 NoTrade: noTrade,
                 PersistenceHealthy: true,
                 DiskSpaceHealthy: diskResult.IsHealthy,
-                FinancialReady: financialReady);
+                FinancialReady: financialReady,
+                NoTradeReason: noTradeReason,
+                AutoRecoveryEligible: autoRecoveryEligible);
 
             try
             {

@@ -137,6 +137,23 @@ public sealed class FailureClassifierTests
         Assert.Equal("DB_UNIQUE_VIOLATION_23505", result.ReasonCode);
     }
 
+    [Theory]
+    [InlineData("RATE_RESPONSE_OBSERVATION_PENDING")]
+    [InlineData("RATE_BUDGET_REJECTED")]
+    [InlineData("RATE_BUDGET_EXHAUSTED")]
+    [InlineData("RATE_LIMIT_COOLDOWN_ACTIVE")]
+    public void ClassifyRateBudgetAndObservationExceptionsReturnsTransientRateLimit(string messageToken)
+    {
+        var ex = new InvalidOperationException($"Error occurred: {messageToken}");
+        var result = FailureClassifier.Classify(ex);
+
+        Assert.Equal(FailureSeverity.Transient, result.Severity);
+        Assert.Equal(RuntimeState.Degraded, result.TargetState);
+        Assert.Equal("RATE_LIMIT_EXCEEDED", result.ReasonCode);
+        Assert.Equal("BackoffRateLimit", result.Action);
+        Assert.Equal(TimeSpan.FromSeconds(1), result.SuggestedBackoff);
+    }
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "Test helper only.")]
     private sealed class FakeSqlException(string sqlState) : Exception("DB Error")
     {

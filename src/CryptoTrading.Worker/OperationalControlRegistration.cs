@@ -27,7 +27,13 @@ internal static class OperationalControlRegistration
                 ?? throw new InvalidOperationException("The in-memory operational audit sink must support async append."));
         }
 
-        _ = services.AddSingleton<IOperationalControlResetAuthorizer, ReconciliationOperationalControlResetAuthorizer>();
+        _ = services.AddSingleton<ReconciliationOperationalControlResetAuthorizer>(serviceProvider =>
+        {
+            var options = serviceProvider.GetService<Microsoft.Extensions.Options.IOptions<WorkerRuntimeOptions>>()?.Value;
+            return new ReconciliationOperationalControlResetAuthorizer(options?.MaxAutoRecoveriesPerHour ?? 3);
+        });
+        _ = services.AddSingleton<IOperationalControlResetAuthorizer>(serviceProvider =>
+            serviceProvider.GetRequiredService<ReconciliationOperationalControlResetAuthorizer>());
         _ = services.AddSingleton<IOperationalControl>(serviceProvider =>
             new InMemoryOperationalControl(
                 serviceProvider.GetRequiredService<IOperationalControlResetAuthorizer>(),

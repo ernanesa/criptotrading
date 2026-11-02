@@ -137,6 +137,19 @@ public static class FailureClassifier
                 "UNAUTHORIZED_RESET_ATTEMPT");
         }
 
+        if (exception.Message.Contains("RATE_RESPONSE_OBSERVATION_PENDING", StringComparison.OrdinalIgnoreCase) ||
+            exception.Message.Contains("RATE_BUDGET_REJECTED", StringComparison.OrdinalIgnoreCase) ||
+            exception.Message.Contains("RATE_BUDGET_EXHAUSTED", StringComparison.OrdinalIgnoreCase) ||
+            exception.Message.Contains("RATE_LIMIT_COOLDOWN_ACTIVE", StringComparison.OrdinalIgnoreCase))
+        {
+            return new FailureClassification(
+                FailureSeverity.Transient,
+                RuntimeState.Degraded,
+                "BackoffRateLimit",
+                "RATE_LIMIT_EXCEEDED",
+                TimeSpan.FromSeconds(1));
+        }
+
         if (exception.Message.Contains("withdrawals enabled", StringComparison.OrdinalIgnoreCase) ||
             exception.Message.Contains("KILL_SWITCH", StringComparison.OrdinalIgnoreCase))
         {

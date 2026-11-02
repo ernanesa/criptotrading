@@ -760,22 +760,17 @@ internal sealed class AutonomyCycleHostedService(
         var replanTask = cancellationStore is not null
             ? cancellationStore.ReadReplanCandidatesAsync(100, cancellationToken)
             : Task.FromResult<IReadOnlyList<ExecutionReplanCandidate>>([]);
-        var accountTask = accountClient.GetAccountAsync(cancellationToken);
-        var commissionTask = accountClient.GetCommissionAsync(symbol, cancellationToken);
-
-        await Task.WhenAll(replanTask, accountTask, commissionTask).ConfigureAwait(false);
-
         var candidates = await replanTask.ConfigureAwait(false);
+        var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
+        var commission = await accountClient.GetCommissionAsync(symbol, cancellationToken).ConfigureAwait(false);
         ExecutionReplanCandidate? replanCandidate = candidates.LastOrDefault(c =>
             string.Equals(c.Symbol.Value, symbol, StringComparison.OrdinalIgnoreCase));
 
-        var account = await accountTask.ConfigureAwait(false);
         if (!account.CanTrade)
         {
             throw new InvalidOperationException("Binance account does not currently allow trading.");
         }
 
-        var commission = await commissionTask.ConfigureAwait(false);
         var discountValuation = await ResolveDiscountValuationAsync(
             commission,
             symbol,

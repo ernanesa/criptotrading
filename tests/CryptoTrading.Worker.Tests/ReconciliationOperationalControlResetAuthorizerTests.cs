@@ -100,7 +100,7 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     }
 
     [Fact]
-    public void IsAuthorizedWhenSafeModeEnteredByPeriodicReconciliationReturnsFalse()
+    public void IsAuthorizedWhenSafeModeEnteredByPeriodicReconciliationFailureReturnsTrue()
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -121,21 +121,47 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
 
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
-        Assert.False(result);
+        Assert.True(result);
     }
 
     [Theory]
     [InlineData("A2 failure: HTTP_TRANSIENT (severity=Transient, consecutive=3)")]
     [InlineData("A2 failure: SOCKET_CLOSED (severity=Transient, consecutive=4)")]
     [InlineData("A2 failure: NETWORK_TIMEOUT_TRANSIENT (severity=Transient, consecutive=2)")]
-    [InlineData("A2 failure: UNKNOWN_SYSTEM_FAILURE (severity=Unknown, consecutive=0)")]
     [InlineData("A2 failure: RATE_LIMIT_EXCEEDED (severity=Transient, consecutive=1)")]
     [InlineData("A2 failure: OPERATION_CANCELED (severity=Transient, consecutive=1)")]
     [InlineData("A2 failure: DB_TRANSIENT_SQLSTATE_40001 (severity=Transient, consecutive=1)")]
     [InlineData("Binance kline quality gate rejected the REST snapshot: OutOfOrder.")]
     [InlineData("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.")]
     [InlineData("A2 failure: Stale market data snapshot (severity=Transient, consecutive=1)")]
-    public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsFalse(string reason)
+    public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsTrue(string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: "autonomy-cycle",
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
+    [Theory]
+    [InlineData("A2 failure: UNKNOWN_SYSTEM_FAILURE (severity=Unknown, consecutive=0)")]
+    [InlineData("A2 failure: DATA_OR_STATE_DRIFT_UNSAFE (severity=Unsafe, consecutive=0)")]
+    public void IsAuthorizedWhenSafeModeEnteredByAutonomyUnknownOrUnsafeReturnsFalse(string reason)
     {
         var current = new OperationalControlSnapshot(
             OperationalMode.SafeMode,
@@ -157,6 +183,41 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
         var result = _authorizer.IsAuthorized(current, command, authorization);
 
         Assert.False(result);
+    }
+
+    [Fact]
+    public void IsAuthorizedCircuitBreakerTripsWhenExceedingMaxResetsPerHour()
+    {
+        var authorizer = new ReconciliationOperationalControlResetAuthorizer(maxResetsPerHour: 2);
+        var baseTime = DateTimeOffset.UtcNow;
+
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: baseTime.AddMinutes(-5),
+            ChangedBy: "account-stream",
+            Reason: "ACCOUNT_STREAM_DISCONNECTED");
+
+        // 1st reset succeeds
+        var cmd1 = new OperationalControlCommand("account-reconciliation", "Reset 1", IdempotencyKey.New(), baseTime.AddMinutes(-4));
+        var auth1 = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:run-1");
+        Assert.True(authorizer.IsAuthorized(current, cmd1, auth1));
+
+        // 2nd reset succeeds
+        var cmd2 = new OperationalControlCommand("account-reconciliation", "Reset 2", IdempotencyKey.New(), baseTime.AddMinutes(-2));
+        var auth2 = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:run-2");
+        Assert.True(authorizer.IsAuthorized(current, cmd2, auth2));
+
+        // 3rd reset within same hour fails due to circuit breaker
+        var cmd3 = new OperationalControlCommand("account-reconciliation", "Reset 3", IdempotencyKey.New(), baseTime.AddMinutes(-1));
+        var auth3 = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:run-3");
+        Assert.False(authorizer.IsAuthorized(current, cmd3, auth3));
+        Assert.True(authorizer.IsCircuitBreakerTripped(baseTime));
+
+        // Advance time by 61 minutes: oldest reset expires from 1-hour window, recovery succeeds again
+        var cmd4 = new OperationalControlCommand("account-reconciliation", "Reset 4", IdempotencyKey.New(), baseTime.AddMinutes(58));
+        var auth4 = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:run-4");
+        Assert.True(authorizer.IsAuthorized(current, cmd4, auth4));
     }
 
     [Fact]

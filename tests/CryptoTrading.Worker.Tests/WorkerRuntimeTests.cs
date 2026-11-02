@@ -551,6 +551,24 @@ public sealed class WorkerRuntimeTests
         Assert.Throws<OptionsValidationException>(() => invalidInterval.Validate());
     }
 
+    [Theory]
+    [InlineData(4)]
+    [InlineData(3601)]
+    public void SafeModeRecoveryIntervalSecondsValidationFailsWhenOutOfRange(int intervalSeconds)
+    {
+        var options = new WorkerRuntimeOptions { SafeModeRecoveryIntervalSeconds = intervalSeconds };
+        Assert.Throws<OptionsValidationException>(() => options.Validate());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(61)]
+    public void MaxAutoRecoveriesPerHourValidationFailsWhenOutOfRange(int maxResets)
+    {
+        var options = new WorkerRuntimeOptions { MaxAutoRecoveriesPerHour = maxResets };
+        Assert.Throws<OptionsValidationException>(() => options.Validate());
+    }
+
     [Fact]
     public void AutonomySymbolsResolvesAndValidatesAllowedUniverse()
     {

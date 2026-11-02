@@ -199,6 +199,55 @@ public sealed class WorkerProbeAndDiskGuardTests
         Assert.Equal(OperationalMode.Normal, opControl.Snapshot.Mode);
     }
 
+    [Fact]
+    public async Task WorkerProbeSnapshotSerializationPreservesNoTradeReasonAndAutoRecoveryEligible()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"probe-test-{Guid.NewGuid():N}.json");
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var snapshot = new WorkerProbeSnapshot(
+                ProcessAlive: true,
+                UpdatedAtUtc: now,
+                RuntimeState: "SafeMode",
+                ExecutionMode: "TESTNET",
+                NoTrade: true,
+                PersistenceHealthy: true,
+                DiskSpaceHealthy: true,
+                FinancialReady: false,
+                NoTradeReason: "A2 failure: RATE_LIMIT_EXCEEDED (severity=Transient, consecutive=3)",
+                AutoRecoveryEligible: true);
+
+            await WorkerHealthProbe.WriteProbeSnapshotAsync(tempFile, snapshot, TestContext.Current.CancellationToken);
+            var loaded = await WorkerHealthProbe.ReadProbeSnapshotAsync(tempFile, TestContext.Current.CancellationToken);
+
+            Assert.NotNull(loaded);
+            Assert.True(loaded.NoTrade);
+            Assert.Equal("A2 failure: RATE_LIMIT_EXCEEDED (severity=Transient, consecutive=3)", loaded.NoTradeReason);
+            Assert.True(loaded.AutoRecoveryEligible);
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
+            {
+                File.Delete(tempFile);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkerProbeSnapshotDeserializesOldJsonWithoutNewFieldsWithDefaults()
+    {
+        const string oldJson = "{\"processAlive\":true,\"updatedAtUtc\":\"2026-11-01T18:00:00Z\",\"runtimeState\":\"Ready\",\"executionMode\":\"TESTNET\",\"noTrade\":false,\"persistenceHealthy\":true,\"diskSpaceHealthy\":true,\"financialReady\":true}";
+        var snapshot = System.Text.Json.JsonSerializer.Deserialize<WorkerProbeSnapshot>(oldJson);
+
+        Assert.NotNull(snapshot);
+        Assert.True(snapshot.ProcessAlive);
+        Assert.False(snapshot.NoTrade);
+        Assert.Null(snapshot.NoTradeReason);
+        Assert.False(snapshot.AutoRecoveryEligible);
+    }
+
     private sealed class AllowAllResetAuthorizer : IOperationalControlResetAuthorizer
     {
         public bool IsAuthorized(

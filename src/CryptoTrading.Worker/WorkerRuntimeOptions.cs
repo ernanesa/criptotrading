@@ -146,6 +146,12 @@ public sealed class WorkerRuntimeOptions
     /// <summary>Periodic read-only reconciliation interval after startup, in minutes.</summary>
     public int ReconciliationIntervalMinutes { get; set; } = 15;
 
+    /// <summary>Periodic read-only reconciliation interval when in recoverable SafeMode, in seconds (default 30 seconds).</summary>
+    public int SafeModeRecoveryIntervalSeconds { get; set; } = 30;
+
+    /// <summary>Maximum automatic SafeMode recoveries allowed per rolling hour before locking for operator review.</summary>
+    public int MaxAutoRecoveriesPerHour { get; set; } = 3;
+
     public string ReconciliationReportDirectory { get; set; } = "artifacts/reconciliation";
 
     /// <summary>Append-only local runtime lifecycle journal path.</summary>
@@ -403,6 +409,18 @@ public sealed class WorkerRuntimeOptions
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
                 ["WORKER_RECONCILIATION_INTERVAL_MINUTES must be between 1 and 1440."]);
+        }
+
+        if (SafeModeRecoveryIntervalSeconds is < 5 or > 3_600)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_SAFEMODE_RECOVERY_INTERVAL_SECONDS must be between 5 and 3600."]);
+        }
+
+        if (MaxAutoRecoveriesPerHour is < 1 or > 60)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_MAX_AUTO_RECOVERIES_PER_HOUR must be between 1 and 60."]);
         }
 
         if (ReconciliationEnabled && string.IsNullOrWhiteSpace(ReconciliationReportDirectory))

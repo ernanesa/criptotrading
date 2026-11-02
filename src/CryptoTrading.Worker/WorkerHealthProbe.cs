@@ -14,7 +14,9 @@ public sealed record WorkerProbeSnapshot(
     [property: JsonPropertyName("noTrade")] bool NoTrade,
     [property: JsonPropertyName("persistenceHealthy")] bool PersistenceHealthy,
     [property: JsonPropertyName("diskSpaceHealthy")] bool DiskSpaceHealthy,
-    [property: JsonPropertyName("financialReady")] bool FinancialReady);
+    [property: JsonPropertyName("financialReady")] bool FinancialReady,
+    [property: JsonPropertyName("noTradeReason")] string? NoTradeReason = null,
+    [property: JsonPropertyName("autoRecoveryEligible")] bool AutoRecoveryEligible = false);
 
 public static class WorkerHealthProbe
 {
