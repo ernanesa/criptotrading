@@ -277,7 +277,71 @@ public sealed class BinanceMarketDataClientTests
         Assert.Equal(memTicker.BestAskPrice, spanTicker.BestAskPrice);
     }
 
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Reliability", "CA2000", Justification = "The client owns the transport for the duration of this test.")]
+    public async Task DisconnectsWithStreamTimeoutWhenSocketRemainsSilentBeyondReadTimeout()
+    {
+        var transport = new SilentHangingTransport();
+        var client = new BinanceSpotMarketDataClient(
+            new BinanceMarketDataOptions
+            {
+                WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+                InitialReconnectDelay = TimeSpan.FromMilliseconds(1),
+                MaxReconnectDelay = TimeSpan.FromMilliseconds(1),
+                StreamReadTimeout = TimeSpan.FromMilliseconds(50),
+                MaxReconnectAttempts = 1
+            },
+            () => transport);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var enumerator = client.ReadAsync(
+            [new BinanceMarketSubscription("BTCUSDT", BinanceMarketStreamKind.BookTicker)],
+            cancellationToken: cts.Token).GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        var disconnected = Assert.IsType<BinanceMarketStreamDisconnectedEvent>(enumerator.Current);
+        Assert.Equal(BinanceMarketDisconnectReason.StreamTimeout, disconnected.Reason);
+    }
+
+    [Fact]
+    public void BinanceMarketDataOptionsAllowsDisablingStreamReadTimeout()
+    {
+        var optionsZero = new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+            StreamReadTimeout = TimeSpan.Zero
+        };
+        optionsZero.Validate();
+
+        var optionsInfinite = new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+            StreamReadTimeout = Timeout.InfiniteTimeSpan
+        };
+        optionsInfinite.Validate();
+
+        var optionsNegative = new BinanceMarketDataOptions
+        {
+            WebSocketBaseAddress = new Uri("wss://stream.testnet.binance.vision/stream"),
+            StreamReadTimeout = TimeSpan.FromSeconds(-5)
+        };
+        Assert.Throws<ArgumentOutOfRangeException>(() => optionsNegative.Validate());
+    }
+
 #pragma warning disable CA1812 // Test transport is instantiated through the interface queue.
+    private sealed class SilentHangingTransport : IBinanceWebSocketTransport
+    {
+        public Task ConnectAsync(Uri uri, CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public async IAsyncEnumerable<ReadOnlyMemory<byte>> ReadMessagesAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+            yield break;
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
     private sealed class CancelledConnectTransport(Action? onConnect = null) : IBinanceWebSocketTransport
     {
         public Task ConnectAsync(Uri uri, CancellationToken cancellationToken)

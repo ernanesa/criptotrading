@@ -75,21 +75,52 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
 
                 if (connected)
                 {
-                    var enumerator = transport.ReadMessagesAsync(cancellationToken)
-                        .GetAsyncEnumerator(cancellationToken);
+                    using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    var enumerator = transport.ReadMessagesAsync(sessionCts.Token)
+                        .GetAsyncEnumerator(sessionCts.Token);
                     try
                     {
                         while (!cancellationToken.IsCancellationRequested)
                         {
                             ReadOnlyMemory<byte> item;
+                            Task<bool>? moveNextTask = null;
                             try
                             {
-                                if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                                moveNextTask = enumerator.MoveNextAsync().AsTask();
+                                var hasNext = options.StreamReadTimeout > TimeSpan.Zero
+                                    ? await moveNextTask.WaitAsync(options.StreamReadTimeout, timeProvider, cancellationToken).ConfigureAwait(false)
+                                    : await moveNextTask.ConfigureAwait(false);
+                                if (!hasNext)
                                 {
                                     break;
                                 }
 
                                 item = enumerator.Current;
+                            }
+                            catch (TimeoutException) when (!cancellationToken.IsCancellationRequested)
+                            {
+                                // Zombie stream detected: socket remained open but no message arrived within StreamReadTimeout.
+                                disconnectReason = BinanceMarketDisconnectReason.StreamTimeout;
+                                await sessionCts.CancelAsync().ConfigureAwait(false);
+                                if (moveNextTask is not null)
+                                {
+                                    try
+                                    {
+                                        await moveNextTask.WaitAsync(TimeSpan.FromSeconds(3), timeProvider, CancellationToken.None).ConfigureAwait(false);
+                                    }
+                                    catch (OperationCanceledException)
+                                    {
+                                    }
+                                    catch (TimeoutException)
+                                    {
+                                    }
+#pragma warning disable CA1031 // Aborting a timed out stream read can throw any transport-specific exception; we must not leak it during cleanup.
+                                    catch (Exception)
+                                    {
+                                    }
+#pragma warning restore CA1031
+                                }
+                                break;
                             }
                             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                             {

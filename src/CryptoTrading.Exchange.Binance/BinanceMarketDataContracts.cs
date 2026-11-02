@@ -62,7 +62,8 @@ public enum BinanceMarketDisconnectReason
 {
     TransportClosed,
     ReadFailure,
-    ServerShutdown
+    ServerShutdown,
+    StreamTimeout
 }
 
 public sealed record BinanceMarketStreamDisconnectedEvent(DateTimeOffset ReceivedAt, BinanceMarketDisconnectReason Reason)

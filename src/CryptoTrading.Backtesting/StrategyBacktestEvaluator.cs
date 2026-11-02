@@ -54,7 +54,8 @@ public sealed record StrategyBacktestOptions
         decimal annualRiskFreeRate = 0m,
         int executionDelayBars = 1,
         decimal minimumOrderNotionalQuote = 0m,
-        decimal? maximumPositionNotionalAtBuyQuote = null)
+        decimal? maximumPositionNotionalAtBuyQuote = null,
+        CryptoTrading.Domain.Execution.RealisticFillModelParameters? realisticFills = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(initialCapital);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(periodsPerYear);
@@ -82,6 +83,7 @@ public sealed record StrategyBacktestOptions
         ExecutionDelayBars = executionDelayBars;
         MinimumOrderNotionalQuote = minimumOrderNotionalQuote;
         MaximumPositionNotionalAtBuyQuote = maximumPositionNotionalAtBuy;
+        RealisticFills = realisticFills;
     }
 
     public decimal InitialCapital { get; }
@@ -93,6 +95,7 @@ public sealed record StrategyBacktestOptions
     public int ExecutionDelayBars { get; }
     public decimal MinimumOrderNotionalQuote { get; }
     public decimal MaximumPositionNotionalAtBuyQuote { get; }
+    public CryptoTrading.Domain.Execution.RealisticFillModelParameters? RealisticFills { get; }
 
     private static void ValidateRate(decimal value, string parameterName, decimal maximum)
     {
@@ -521,7 +524,8 @@ public static class StrategyBacktestEvaluator
         trade = null!;
         outcome = StrategyExecutionOutcome.NoTrade;
         var referencePrice = fillBar.ClosePrice.Value;
-        var adverseRate = options.HalfSpreadRate + options.SlippageRate;
+        var slippageRate = options.SlippageRate;
+        var adverseRate = options.HalfSpreadRate + slippageRate;
         if (signal.Action is StrategyExecutionAction.EnterLong or StrategyExecutionAction.BuyBaseQuantity)
         {
             if (signal.Action == StrategyExecutionAction.EnterLong && position > 0m)
@@ -530,10 +534,42 @@ public static class StrategyBacktestEvaluator
                 return false;
             }
 
+            var estQuantity = signal.Action == StrategyExecutionAction.EnterLong
+                ? cash / (referencePrice * (1m + adverseRate + options.FeeRate))
+                : signal.BaseQuantity!.Value;
+
+            CryptoTrading.Domain.Execution.RealisticFillEvaluationResult? realisticBuy = null;
+            if (options.RealisticFills is not null)
+            {
+                realisticBuy = CryptoTrading.Domain.Execution.RealisticFillModel.EvaluateBuyFill(
+                    referencePrice,
+                    fillBar.HighPrice.Value,
+                    fillBar.LowPrice.Value,
+                    fillBar.Volume,
+                    fillBar.QuoteVolume,
+                    options.SlippageRate,
+                    estQuantity,
+                    options.RealisticFills);
+
+                if (!realisticBuy.IsFillable)
+                {
+                    outcome = StrategyExecutionOutcome.RejectedInsufficientLiquidity;
+                    return false;
+                }
+
+                slippageRate = realisticBuy.EffectiveSlippageRate;
+                adverseRate = options.HalfSpreadRate + slippageRate;
+            }
+
             var executedPrice = referencePrice * (1m + adverseRate);
+            if (options.RealisticFills is not null && options.RealisticFills.EnforceIntraBarPriceRange && fillBar.HighPrice.Value > 0m)
+            {
+                executedPrice = Math.Min(executedPrice, fillBar.HighPrice.Value);
+            }
             var maxAffordableQuantity = cash / (executedPrice * (1m + options.FeeRate));
             var positionNotionalHeadroom = Math.Max(0m, options.MaximumPositionNotionalAtBuyQuote - (position * referencePrice));
-            var maximumExecutableQuantity = Math.Min(maxAffordableQuantity, positionNotionalHeadroom / executedPrice);
+            var volumeCap = realisticBuy?.MaximumExecutableQuantity ?? decimal.MaxValue;
+            var maximumExecutableQuantity = Math.Min(Math.Min(maxAffordableQuantity, positionNotionalHeadroom / executedPrice), volumeCap);
             var requestedQuantity = signal.Action == StrategyExecutionAction.EnterLong
                 ? maximumExecutableQuantity
                 : signal.BaseQuantity!.Value;
@@ -553,7 +589,7 @@ public static class StrategyBacktestEvaluator
 
             var fee = executedNotional * options.FeeRate;
             var spreadCost = quantity * referencePrice * options.HalfSpreadRate;
-            var slippageCost = quantity * referencePrice * options.SlippageRate;
+            var slippageCost = quantity * referencePrice * slippageRate;
             cash -= executedNotional + fee;
             position += quantity;
             var isPartial = signal.Action == StrategyExecutionAction.BuyBaseQuantity && quantity < requestedQuantity;
@@ -587,7 +623,34 @@ public static class StrategyBacktestEvaluator
                 return false;
             }
 
+            if (options.RealisticFills is not null)
+            {
+                var realisticSell = CryptoTrading.Domain.Execution.RealisticFillModel.EvaluateSellFill(
+                    referencePrice,
+                    fillBar.HighPrice.Value,
+                    fillBar.LowPrice.Value,
+                    fillBar.Volume,
+                    fillBar.QuoteVolume,
+                    options.SlippageRate,
+                    quantity,
+                    options.RealisticFills);
+
+                if (!realisticSell.IsFillable)
+                {
+                    outcome = StrategyExecutionOutcome.RejectedInsufficientLiquidity;
+                    return false;
+                }
+
+                slippageRate = realisticSell.EffectiveSlippageRate;
+                adverseRate = options.HalfSpreadRate + slippageRate;
+                quantity = Math.Min(quantity, realisticSell.MaximumExecutableQuantity);
+            }
+
             var executedPrice = referencePrice * (1m - adverseRate);
+            if (options.RealisticFills is not null && options.RealisticFills.EnforceIntraBarPriceRange && fillBar.LowPrice.Value > 0m)
+            {
+                executedPrice = Math.Max(executedPrice, fillBar.LowPrice.Value);
+            }
             var executedNotional = quantity * executedPrice;
             if (executedNotional < options.MinimumOrderNotionalQuote)
             {
@@ -597,7 +660,7 @@ public static class StrategyBacktestEvaluator
 
             var fee = executedNotional * options.FeeRate;
             var spreadCost = quantity * referencePrice * options.HalfSpreadRate;
-            var slippageCost = quantity * referencePrice * options.SlippageRate;
+            var slippageCost = quantity * referencePrice * slippageRate;
             cash += executedNotional - fee;
             position -= quantity;
             var isPartial = signal.Action == StrategyExecutionAction.SellBaseQuantity && quantity < requestedQuantity;

@@ -821,7 +821,10 @@ public sealed class AdaptiveDecisionCycle
                 ? 0.05m
                 : (fundingBps >= 3.5m ? -0.04m : 0m))
             : 0m;
-        var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus + leaderBonus + fundingBonus, 0.05m, 0.99m);
+        var absorptionBonus = isEntry && indicators.LowerShadowRatio >= 0.45m && indicators.CvdImbalance >= 0.10m
+            ? 0.05m
+            : 0m;
+        var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus + leaderBonus + fundingBonus + absorptionBonus, 0.05m, 0.99m);
         var decisionConfidence = isEntry && bars.Count >= 20 && mlEval.HasCalibratedProbability
             ? Math.Round(Math.Clamp((baseConfidence * 0.58m) + (mlEval.MlWinProbability * 0.42m), 0.05m, 0.99m), 4)
             : Math.Round(baseConfidence, 4);
@@ -860,7 +863,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -901,7 +905,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -917,7 +922,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -933,7 +939,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -949,7 +956,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -967,7 +975,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -984,7 +993,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -1002,7 +1012,23 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
+            }
+
+            if (isEntry && indicators.UpperShadowRatio >= 0.50m && indicators.LowerShadowRatio <= 0.20m && indicators.CvdImbalance <= -0.10m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "CANDLE_UPPER_WICK_REJECTION_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && indicators.CvdImbalance < -0.05m)
@@ -1016,7 +1042,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && isAltcoin && isLeaderRetreating)
@@ -1033,7 +1060,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && isCanaryBasketRetreating)
@@ -1047,7 +1075,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && isAltcoin && symbolReturnBps >= 45.0m && catchUpDivergenceBps is <= -45.0m && indicators.Rsi >= 72m)
@@ -1061,7 +1090,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -1079,7 +1109,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && request.MarketBreadthRatio is { } breadth && breadth < 0.40m)
@@ -1093,7 +1124,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && request.MaxOpenPositionCorrelation is { } maxCorr && maxCorr >= 0.85m)
@@ -1107,7 +1139,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry &&
@@ -1125,7 +1158,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && regime.Regime == MarketRegime.MeanRevertingRange &&
@@ -1141,7 +1175,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && (decisionConfidence < 0.60m || (mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.50m)))
@@ -1155,7 +1190,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (isEntry && expectedNetEdgeBps <= 0m)
@@ -1169,7 +1205,8 @@ public sealed class AdaptiveDecisionCycle
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
-                    request: request);
+                    request: request,
+                    indicators: indicators);
             }
 
             if (!isEntry &&
@@ -1534,6 +1571,9 @@ public sealed class AdaptiveDecisionCycle
             AbsoluteBarVolumeImbalance = indicators.AbsoluteBarVolumeImbalance,
             DownsideDeviationBps = indicators.DownsideDeviationBps,
             IlliquiditySpikeRatio = indicators.IlliquiditySpikeRatio,
+            LowerShadowRatio = indicators.LowerShadowRatio,
+            UpperShadowRatio = indicators.UpperShadowRatio,
+            BodyToRangeRatio = indicators.BodyToRangeRatio,
             HoldingMinutes = hasOpenPosition && request.PositionOpenedAtUtc is not null ? (decimal?)Math.Round(holdingMinutes, 2) : null,
             DecayedTargetProfitBps = hasOpenPosition ? (decimal?)decayedTargetProfitBps : null,
             LastClosedTradeWasStopLoss = request.LastClosedTradeWasStopLoss,
@@ -1593,7 +1633,8 @@ public sealed class AdaptiveDecisionCycle
         decimal? orderBookImbalance = null,
         MlNetSystem1Evaluation? mlEval = null,
         decimal? expectedNetEdgeBps = null,
-        AdaptiveDecisionCycleRequest? request = null)
+        AdaptiveDecisionCycleRequest? request = null,
+        TechnicalIndicatorSnapshot? indicators = null)
     {
         var trace = JsonSerializer.Serialize(new
         {
@@ -1637,6 +1678,9 @@ public sealed class AdaptiveDecisionCycle
             CanaryBasketTrendSlope = request?.CanaryBasketTrendSlope,
             LastClosedTradeWasStopLoss = request?.LastClosedTradeWasStopLoss ?? false,
             PerpetualFundingRateBps = request?.PerpetualFundingRateBps,
+            LowerShadowRatio = indicators?.LowerShadowRatio,
+            UpperShadowRatio = indicators?.UpperShadowRatio,
+            BodyToRangeRatio = indicators?.BodyToRangeRatio,
             Candidates = candidates.Select(c => new
             {
                 c.StrategyId,

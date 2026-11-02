@@ -12,6 +12,8 @@ public sealed class BinanceMarketDataOptions
 
     public int MaxReconnectAttempts { get; set; }
 
+    public TimeSpan StreamReadTimeout { get; set; } = TimeSpan.FromSeconds(90);
+
     internal Uri GetWebSocketBaseAddress()
     {
         var defaultAddress = Environment switch
@@ -47,6 +49,11 @@ public sealed class BinanceMarketDataOptions
         if (MaxReconnectAttempts < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(MaxReconnectAttempts), "Maximum reconnect attempts cannot be negative.");
+        }
+
+        if (StreamReadTimeout < TimeSpan.Zero && StreamReadTimeout != Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(nameof(StreamReadTimeout), "Stream read timeout cannot be negative (use TimeSpan.Zero or Timeout.InfiniteTimeSpan to disable).");
         }
     }
 }

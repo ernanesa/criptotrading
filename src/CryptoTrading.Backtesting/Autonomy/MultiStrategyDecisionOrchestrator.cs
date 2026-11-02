@@ -296,6 +296,12 @@ public static class MultiStrategyDecisionOrchestrator
                    indicators.Rsi <= 32m &&
                    indicators.VwapDeviationBps <= -10m &&
                    entryZScore <= -1.05m &&
+                   bars[^1].ClosePrice.Value >= bars[^2].ClosePrice.Value) ||
+                  (bars.Count >= 20 &&
+                   regime.Regime == MarketRegime.MeanRevertingRange &&
+                   indicators.LowerShadowRatio >= 0.45m &&
+                   indicators.CvdImbalance >= 0.10m &&
+                   entryZScore <= -0.90m &&
                    bars[^1].ClosePrice.Value >= bars[^2].ClosePrice.Value)))
         {
             meanRevSignal = MeanReversionSignal.EnterLong;
@@ -548,13 +554,16 @@ public readonly record struct TechnicalIndicatorSnapshot(
     decimal CvdImbalance = 0m,
     decimal AbsoluteBarVolumeImbalance = 0m,
     decimal DownsideDeviationBps = 0m,
-    decimal IlliquiditySpikeRatio = 1.0m)
+    decimal IlliquiditySpikeRatio = 1.0m,
+    decimal LowerShadowRatio = 0m,
+    decimal UpperShadowRatio = 0m,
+    decimal BodyToRangeRatio = 1.0m)
 {
     public bool IsWilderReady { get; init; }
     public bool IsAdxReady { get; init; }
 
     public static TechnicalIndicatorSnapshot Empty(decimal closePrice) =>
-        new(0m, 0m, 0m, 0m, 0m, 50m, closePrice, 0m, 1.0m, 0m, 0m, 0m, 1.0m);
+        new(0m, 0m, 0m, 0m, 0m, 50m, closePrice, 0m, 1.0m, 0m, 0m, 0m, 1.0m, 0m, 0m, 1.0m);
 }
 
 public static class TechnicalIndicatorCalculator
@@ -725,8 +734,21 @@ public static class TechnicalIndicatorCalculator
             : 0m;
         var lastBar = bars[^1];
         var lastBarOpen = lastBar.OpenPrice.Value;
+        var lastBarClose = lastBar.ClosePrice.Value;
+        var lastBarHigh = lastBar.HighPrice.Value;
+        var lastBarLow = lastBar.LowPrice.Value;
+        var lastBarRange = lastBarHigh - lastBarLow;
+        var lowerShadowRatio = lastBarRange > 0m
+            ? Math.Clamp(Math.Round((Math.Min(lastBarOpen, lastBarClose) - lastBarLow) / lastBarRange, 4), 0m, 1m)
+            : 0m;
+        var upperShadowRatio = lastBarRange > 0m
+            ? Math.Clamp(Math.Round((lastBarHigh - Math.Max(lastBarOpen, lastBarClose)) / lastBarRange, 4), 0m, 1m)
+            : 0m;
+        var bodyToRangeRatio = lastBarRange > 0m
+            ? Math.Clamp(Math.Round(Math.Abs(lastBarClose - lastBarOpen) / lastBarRange, 4), 0m, 1m)
+            : 1.0m;
         var lastBarIlliq = (lastBarOpen > 0m && lastBar.Volume > 0m)
-            ? Math.Abs(lastBar.ClosePrice.Value - lastBarOpen) / lastBarOpen / lastBar.Volume
+            ? Math.Abs(lastBarClose - lastBarOpen) / lastBarOpen / lastBar.Volume
             : 0m;
         var priorAvgIlliq = priorIlliqCount > 0 ? priorIlliqSum / priorIlliqCount : 0m;
         var illiquiditySpikeRatio = (priorAvgIlliq > 0m && lastBar.Volume > 0m)
@@ -746,7 +768,10 @@ public static class TechnicalIndicatorCalculator
             cvdImbalance,
             absoluteBarVolumeImbalance,
             downsideDeviationBps,
-            illiquiditySpikeRatio)
+            illiquiditySpikeRatio,
+            lowerShadowRatio,
+            upperShadowRatio,
+            bodyToRangeRatio)
         {
             IsWilderReady = n - 1 >= period,
             IsAdxReady = dxCount >= period
