@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiClient } from '../api/client';
 import { Navigation, type NavTab } from '../components/Navigation';
@@ -29,7 +29,7 @@ describe('RealtimeTradingView (US-101)', () => {
     );
     expect(screen.getByTestId('realtime-trading-view')).toBeInTheDocument();
     expect(screen.getByText('BTC / USDT')).toBeInTheDocument();
-    expect(screen.getByText('SPOT TESTNET')).toBeInTheDocument();
+    expect(screen.getByText('SPOT · AMBIENTE NÃO VERIFICADO')).toBeInTheDocument();
     expect(screen.getByText(/Saldos e Ativos da Conta/)).toBeInTheDocument();
     expect(screen.getByText('Ordens Abertas no Livro (OMS)')).toBeInTheDocument();
     expect(screen.getByText('Ordens indisponíveis')).toBeInTheDocument();
@@ -37,6 +37,51 @@ describe('RealtimeTradingView (US-101)', () => {
 });
 
 describe('FinancialPerformanceView (Capital & PnL)', () => {
+  it('renders nullable period P&L as unavailable instead of zero or a render error', async () => {
+    vi.spyOn(apiClient, 'getPortfolioPerformance').mockResolvedValue({
+      totalNavUsd: 500,
+      initialCapitalUsd: null,
+      initialCapitalAvailabilityReason: 'Unknown',
+      cashBalanceUsd: null,
+      positionsValueUsd: null,
+      totalProfitUsd: 2,
+      totalProfitPct: null,
+      totalProfitPctAvailabilityReason: 'Unknown',
+      totalRealizedPnlUsd: 0,
+      totalUnrealizedPnlUsd: 2,
+      totalFeesPaidUsd: 0,
+      totalTradesCount: 0,
+      winRatePercentage: 0,
+      profitFactor: null,
+      profitFactorAvailabilityReason: 'Unknown',
+      feesAreComplete: true,
+      unvaluedFeeAmounts: [],
+      scopeSymbol: 'BTCUSDT',
+      quoteAsset: 'USDT',
+      asOfUtc: '2026-11-02T00:00:00Z',
+      periods: [
+        {
+          periodName: 'Dia',
+          profitUsd: null,
+          profitPercentage: null,
+          realizedProfitUsd: 0,
+          unrealizedProfitUsd: null,
+          feesPaidUsd: 0,
+          tradesCount: 0,
+          winRatePercentage: 0,
+          snapshotAvailability: 'Available',
+        },
+      ],
+    });
+    render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <FinancialPerformanceView />
+      </QueryClientProvider>,
+    );
+    const row = await screen.findByRole('row', { name: /^Dia / });
+    expect(within(row).getAllByText('Indisponível')).toHaveLength(4);
+  });
+
   it('does not render invented zero balances before auditable P&L data is available', () => {
     render(
       <QueryClientProvider client={createTestQueryClient()}>
@@ -83,6 +128,15 @@ describe('FinancialPerformanceView (Capital & PnL)', () => {
     expect((await screen.findAllByText('Indisponível')).length).toBeGreaterThan(0);
     expect(screen.getByText(/P&L parcial/)).toBeInTheDocument();
     expect(screen.queryByText(/0\.00%/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação manual USD/BRL' }), { target: { value: '2' } });
+    expect(screen.getByText('R$ 1.000,00')).toBeInTheDocument();
+    expect(screen.getByText(/Conversões em BRL são simulações/)).toBeInTheDocument();
+    for (const value of ['0', '-1', '', '1e309']) {
+      fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação manual USD/BRL' }), { target: { value } });
+      expect(screen.getByRole('alert')).toHaveTextContent('Cotação inválida');
+      expect(screen.queryByText('R$ 1.000,00')).not.toBeInTheDocument();
+      expect(screen.queryByText(/NaN|Infinity|∞/)).not.toBeInTheDocument();
+    }
   });
 });
 
@@ -116,14 +170,51 @@ describe('BenchmarkDashboardView (Brazilian Benchmarks)', () => {
     );
     expect(screen.getByTestId('benchmark-dashboard-view')).toBeInTheDocument();
     expect(screen.getByText('Benchmarks Financeiros & Macroeconômicos Brasileiros')).toBeInTheDocument();
-    expect(screen.getByText('Alpha s/ CDI (em BRL)')).toBeInTheDocument();
-    expect(screen.getByText('Equivalente do CDI')).toBeInTheDocument();
+    expect(screen.queryByText(/Alpha s\/ CDI|Equivalente do CDI/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Comparação indisponível: a API não fornece séries históricas alinhadas.'),
+    ).toBeInTheDocument();
     expect(screen.getByText(/IN RFB nº 1.888\/2019/)).toBeInTheDocument();
 
     // Switch horizon to 3 Meses
     const threeMonthsBtn = screen.getByText('3 Meses');
     fireEvent.click(threeMonthsBtn);
     expect(screen.getByText('Horizonte: 63 dias úteis')).toBeInTheDocument();
+  });
+
+  it('uses exchange rate only for an explicitly hypothetical capital conversion', () => {
+    const { container } = render(
+      <QueryClientProvider client={createTestQueryClient()}>
+        <BenchmarkDashboardView />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelector('svg title')).not.toBeInTheDocument();
+    expect(screen.getByText(/Taxas fixas hipotéticas/)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação do Dólar em Reais' }), { target: { value: '5' } });
+    expect(screen.getByTestId('simulated-capital-usd')).toHaveTextContent('20.000');
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação do Dólar em Reais' }), {
+      target: { value: '10' },
+    });
+    expect(screen.getByTestId('simulated-capital-usd')).toHaveTextContent('10.000');
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação do Dólar em Reais' }), {
+      target: { value: '-1' },
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Cotação inválida');
+    expect(screen.getByTestId('simulated-capital-usd')).toHaveTextContent('Indisponível');
+    expect(screen.queryByText(/Alpha|Equivalente do CDI|Poder de compra preservado/)).not.toBeInTheDocument();
+    for (const value of ['0', '-1', '', '1e309']) {
+      fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação do Dólar em Reais' }), { target: { value } });
+      expect(screen.getByRole('alert')).toHaveTextContent('Cotação inválida');
+      expect(screen.getByTestId('simulated-capital-usd')).toHaveTextContent('Indisponível');
+    }
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Capital Inicial Simulado em Reais' }), {
+      target: { value: '1e308' },
+    });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Cotação do Dólar em Reais' }), {
+      target: { value: '0.01' },
+    });
+    expect(screen.getByTestId('simulated-capital-usd')).toHaveTextContent('Indisponível');
+    expect(screen.queryByText(/NaN|Infinity|∞/)).not.toBeInTheDocument();
   });
 });
 

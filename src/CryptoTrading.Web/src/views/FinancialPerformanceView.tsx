@@ -3,13 +3,20 @@ import { Calendar, CheckCircle2, Clock, DollarSign, Layers, Percent, TrendingUp,
 import type React from 'react';
 import { useState } from 'react';
 import { apiClient } from '../api/client';
+import { QueryStatus } from '../components/QueryStatus';
 
 export const FinancialPerformanceView: React.FC = () => {
-  const [usdBrl, setUsdBrl] = useState<number>(5.65);
+  const [usdInput, setUsdInput] = useState('5.65');
+  const usdBrl = Number(usdInput);
+  const validRate = usdInput.trim() !== '' && Number.isFinite(usdBrl) && usdBrl > 0;
+  const toBrl = (value: number | null): number | null => {
+    const result = value === null || !validRate ? null : value * usdBrl;
+    return result !== null && Number.isFinite(result) ? result : null;
+  };
 
   const performanceQuery = useQuery({
     queryKey: ['portfolioPerformance'],
-    queryFn: apiClient.getPortfolioPerformance,
+    queryFn: ({ signal }) => apiClient.getPortfolioPerformance({ signal }),
     refetchInterval: 5000,
   });
 
@@ -17,7 +24,7 @@ export const FinancialPerformanceView: React.FC = () => {
 
   if (!perf) {
     const availabilityMessage = performanceQuery.isError
-      ? 'Dados de P&L indisponíveis. A API não forneceu snapshots históricos suficientes para calcular o período com segurança.'
+      ? 'Dados de P&L indisponíveis. Não foi possível concluir a consulta à API.'
       : 'Carregando snapshots de P&L auditáveis...';
 
     return (
@@ -47,15 +54,15 @@ export const FinancialPerformanceView: React.FC = () => {
   const positionsValueUsd = perf.positionsValueUsd;
 
   const totalProfitUsd = perf.totalProfitUsd;
-  const totalProfitBrl = totalProfitUsd * usdBrl;
+  const totalProfitBrl = toBrl(totalProfitUsd);
   const totalProfitPct = perf.totalProfitPct;
   const totalFeesPaidUsd = perf.totalFeesPaidUsd;
   const totalTradesCount = perf.totalTradesCount;
   const winRatePercentage = perf.winRatePercentage;
   const profitFactor = perf.profitFactor;
 
-  const currentNavBrl = currentNavUsd * usdBrl;
-  const initialCapitalBrl = initialCapitalUsd === null ? null : initialCapitalUsd * usdBrl;
+  const currentNavBrl = toBrl(currentNavUsd);
+  const initialCapitalBrl = toBrl(initialCapitalUsd);
   const cashAndPositions =
     cashBalanceUsd !== null && positionsValueUsd !== null
       ? `Caixa USDT: $${cashBalanceUsd.toFixed(2)} • Cripto: $${positionsValueUsd.toFixed(2)}`
@@ -65,13 +72,14 @@ export const FinancialPerformanceView: React.FC = () => {
     .filter((period) => period.snapshotAvailability === undefined || period.snapshotAvailability === 'Available')
     .map((period) => ({
       ...period,
-      profitBrl: period.profitUsd === null ? null : period.profitUsd * usdBrl,
+      profitBrl: toBrl(period.profitUsd),
     }));
   const hasUnavailableHistory = periods.length !== perf.periods.length;
   const hasPartialPerformance = !perf.feesAreComplete || initialCapitalUsd === null || totalProfitPct === null;
 
   return (
     <div className="space-y-6" data-testid="financial-performance-view">
+      <QueryStatus label="Performance" query={performanceQuery} observedAt={perf.asOfUtc} />
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
@@ -80,26 +88,32 @@ export const FinancialPerformanceView: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-100">Patrimônio, Capital Investido & Lucro (P&L)</h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Acompanhamento transparente do total aportado, patrimônio líquido em tempo real (NAV) e lucro no Dia, na
-            Semana, no Mês e no Ano sem valores fictícios ou simulados.
+            Valores dos snapshots contábeis fornecidos pela API. Conversões em BRL são simulações com cotação manual,
+            não resultados cambiais realizados.
           </p>
         </div>
 
-        {/* Simulador de Câmbio PTAX */}
+        {/* Manual exchange-rate assumption, not an official quote. */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-2 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800 text-xs">
-            <span className="text-slate-400">Dólar PTAX (R$):</span>
+            <span className="text-slate-400">USD/BRL simulado (R$):</span>
             <input
               type="number"
               step="0.05"
-              aria-label="Cotação do Dólar PTAX"
-              value={usdBrl}
-              onChange={(e) => setUsdBrl(Number(e.target.value) || 1)}
+              min="0.01"
+              aria-label="Cotação manual USD/BRL"
+              aria-invalid={!validRate}
+              value={usdInput}
+              onChange={(e) => setUsdInput(e.target.value)}
               className="w-20 bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-right text-slate-100 font-mono focus:outline-none focus:border-emerald-500"
             />
           </div>
         </div>
       </div>
+
+      {!validRate && (
+        <p role="alert">Cotação inválida: informe um número finito maior que zero. Conversões em BRL indisponíveis.</p>
+      )}
 
       {/* Painel Principal de Capital e Patrimônio */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -129,7 +143,9 @@ export const FinancialPerformanceView: React.FC = () => {
             <Layers className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-emerald-400 font-mono">
-            R$ {currentNavBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {currentNavBrl === null
+              ? 'Indisponível'
+              : `R$ ${currentNavBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           </div>
           <div className="text-xs text-emerald-400/90 font-mono mt-1">
             $ {currentNavUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })} USD
@@ -155,9 +171,12 @@ export const FinancialPerformanceView: React.FC = () => {
                   : `${totalProfitPct.toFixed(2)}%`}
             </span>
           </div>
-          <div className={`text-2xl font-bold font-mono ${totalProfitBrl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-            {totalProfitBrl >= 0 ? '+R$ ' : '-R$ '}
-            {Math.abs(totalProfitBrl).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          <div
+            className={`text-2xl font-bold font-mono ${totalProfitBrl !== null && totalProfitBrl >= 0 ? 'text-emerald-400' : 'text-slate-300'}`}
+          >
+            {totalProfitBrl === null
+              ? 'Indisponível'
+              : `${totalProfitBrl >= 0 ? '+R$ ' : '-R$ '}${Math.abs(totalProfitBrl).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}
           </div>
           <div className={`text-xs font-mono mt-1 ${totalProfitUsd >= 0 ? 'text-emerald-400/90' : 'text-rose-400/90'}`}>
             {totalProfitUsd >= 0 ? '+$' : '-$'}
@@ -255,9 +274,11 @@ export const FinancialPerformanceView: React.FC = () => {
                   <div className="flex justify-between">
                     <span>Lucro Não-Realizado:</span>
                     <span className="text-cyan-400 font-mono">
-                      {p.unrealizedProfitUsd >= 0
-                        ? `+$${p.unrealizedProfitUsd.toFixed(2)}`
-                        : `-$${Math.abs(p.unrealizedProfitUsd).toFixed(2)}`}
+                      {p.unrealizedProfitUsd === null
+                        ? 'Indisponível'
+                        : p.unrealizedProfitUsd >= 0
+                          ? `+$${p.unrealizedProfitUsd.toFixed(2)}`
+                          : `-$${Math.abs(p.unrealizedProfitUsd).toFixed(2)}`}
                     </span>
                   </div>
                   <div className="flex justify-between">
@@ -295,7 +316,9 @@ export const FinancialPerformanceView: React.FC = () => {
             <TrendingUp className="w-4 h-4 text-emerald-400" />
             <h2 className="text-sm font-semibold text-slate-200">Demonstrativo de Resultado de Negociação (DRE)</h2>
           </div>
-          <span className="text-xs text-slate-400 font-mono">Binance Spot • PTAX R$ {usdBrl.toFixed(2)}</span>
+          <span className="text-xs text-slate-400 font-mono">
+            Binance Spot • Câmbio manual simulado {validRate ? `R$ ${usdBrl.toFixed(2)}` : 'Indisponível'}
+          </span>
         </div>
 
         <div className="overflow-x-auto">
@@ -351,9 +374,11 @@ export const FinancialPerformanceView: React.FC = () => {
                         : `-$${Math.abs(p.realizedProfitUsd).toFixed(2)}`}
                     </td>
                     <td className="py-3 px-3 text-right text-cyan-400">
-                      {p.unrealizedProfitUsd >= 0
-                        ? `+$${p.unrealizedProfitUsd.toFixed(2)}`
-                        : `-$${Math.abs(p.unrealizedProfitUsd).toFixed(2)}`}
+                      {p.unrealizedProfitUsd === null
+                        ? 'Indisponível'
+                        : p.unrealizedProfitUsd >= 0
+                          ? `+$${p.unrealizedProfitUsd.toFixed(2)}`
+                          : `-$${Math.abs(p.unrealizedProfitUsd).toFixed(2)}`}
                     </td>
                     <td className="py-3 px-3 text-right text-rose-400">-${p.feesPaidUsd.toFixed(2)}</td>
                     <td className="py-3 px-3 text-right text-slate-300">{p.tradesCount}</td>

@@ -1,19 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
-import {
-  AlertCircle,
-  ArrowUpRight,
-  BarChart3,
-  Calendar,
-  CheckCircle2,
-  DollarSign,
-  FileText,
-  Landmark,
-  Percent,
-  TrendingUp,
-} from 'lucide-react';
+import { AlertCircle, Calendar, FileText, Landmark } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
-import { apiClient } from '../api/client';
 
 interface BenchmarkMetric {
   id: string;
@@ -25,21 +12,17 @@ interface BenchmarkMetric {
   badgeColor: string;
 }
 
-const formatReturn = (value: number | null): string =>
-  value === null ? 'Indisponível' : `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`;
-
 export const BenchmarkDashboardView: React.FC = () => {
   const [selectedPeriodDays, setSelectedPeriodDays] = useState<number>(252); // 1 ano (252 dias úteis)
-  const [initialInvestmentBrl, setInitialInvestmentBrl] = useState<number>(100000);
-  const [usdRate, setUsdRate] = useState<number>(5.65);
+  const [capitalInput, setCapitalInput] = useState('100000');
+  const [usdInput, setUsdInput] = useState('5.65');
+  const initialInvestmentBrl = Number(capitalInput);
+  const usdRate = Number(usdInput);
+  const validCapital = capitalInput.trim() !== '' && Number.isFinite(initialInvestmentBrl) && initialInvestmentBrl > 0;
+  const validRate = usdInput.trim() !== '' && Number.isFinite(usdRate) && usdRate > 0;
+  const simulatedCapitalUsd = validCapital && validRate ? initialInvestmentBrl / usdRate : Number.NaN;
 
-  const performanceQuery = useQuery({
-    queryKey: ['portfolioPerformance'],
-    queryFn: apiClient.getPortfolioPerformance,
-    refetchInterval: 5000,
-  });
-
-  // Dados macroeconômicos brasileiros de referência (anualizados)
+  // Fixed hypothetical annual rates, not current market observations.
   const cdiAnnual = 0.1075; // 10.75% a.a.
   const selicAnnual = 0.1075; // 10.75% a.a.
   const ipcaAnnual = 0.045; // 4.50% a.a.
@@ -54,14 +37,6 @@ export const BenchmarkDashboardView: React.FC = () => {
   const tesouroPeriodReturn = (1 + tesouroIpcaAnnual) ** yearFraction - 1;
   const ibovPeriodReturn = (1 + ibovAnnual) ** yearFraction - 1;
   const usdPeriodVariation = (1 + usdVariationAnnual) ** yearFraction - 1;
-
-  // Performance REAL auditada das estratégias do robô no mesmo período
-  const totalProfitPct = performanceQuery.data?.totalProfitPct ?? null;
-  const botUsdReturn = totalProfitPct === null ? null : (totalProfitPct / 100) * yearFraction;
-  const botBrlReturn = botUsdReturn === null ? null : (1 + botUsdReturn) * (1 + usdPeriodVariation) - 1;
-  const botAlphaOverCdiBrl = botBrlReturn === null ? null : botBrlReturn - cdiPeriodReturn;
-  const botPercentOfCdi = botBrlReturn === null || cdiPeriodReturn <= 0 ? null : (botBrlReturn / cdiPeriodReturn) * 100;
-  const botRealReturnOverIpca = botBrlReturn === null ? null : (1 + botBrlReturn) / (1 + ipcaPeriodReturn) - 1;
 
   const benchmarks: BenchmarkMetric[] = [
     {
@@ -93,11 +68,11 @@ export const BenchmarkDashboardView: React.FC = () => {
     },
     {
       id: 'tesouro_ipca',
-      name: 'Tesouro IPCA+ (NTN-B 2029 - Juro Real + Inflação)',
+      name: 'Tesouro IPCA+ (hipótese simplificada)',
       category: 'Renda Fixa',
       currentRateAnnual: tesouroIpcaAnnual,
       returnInPeriod: tesouroPeriodReturn,
-      description: 'Título público soberano com rentabilidade real atrelada ao IPCA + cupom de ~6,25% a.a.',
+      description: 'Hipótese simplificada; não representa cotação, marcação a mercado ou resultado de um título.',
       badgeColor: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
     },
     {
@@ -111,11 +86,11 @@ export const BenchmarkDashboardView: React.FC = () => {
     },
     {
       id: 'dolar_ptax',
-      name: 'Dólar PTAX (USD / BRL)',
+      name: 'USD / BRL (cenário hipotético)',
       category: 'Câmbio',
       currentRateAnnual: usdVariationAnnual,
       returnInPeriod: usdPeriodVariation,
-      description: 'Variação cambial oficial da moeda americana frente ao Real.',
+      description: 'Hipótese de variação cambial, independente da cotação manual de conversão do capital.',
       badgeColor: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
     },
   ];
@@ -130,8 +105,8 @@ export const BenchmarkDashboardView: React.FC = () => {
             <h1 className="text-xl font-bold text-slate-100">Benchmarks Financeiros & Macroeconômicos Brasileiros</h1>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            Análise de custo de oportunidade, retorno real, Alpha e equivalência percentual do CDI convertidos em BRL e
-            USD.
+            Projeções ilustrativas independentes da performance realizada do robô. Não representam resultados
+            históricos.
           </p>
         </div>
 
@@ -142,8 +117,10 @@ export const BenchmarkDashboardView: React.FC = () => {
             <input
               type="number"
               aria-label="Capital Inicial Simulado em Reais"
-              value={initialInvestmentBrl}
-              onChange={(e) => setInitialInvestmentBrl(Number(e.target.value) || 0)}
+              min="0.01"
+              aria-invalid={!validCapital}
+              value={capitalInput}
+              onChange={(e) => setCapitalInput(e.target.value)}
               className="w-24 bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-right text-slate-100 font-mono focus:outline-none focus:border-emerald-500"
             />
           </div>
@@ -154,8 +131,10 @@ export const BenchmarkDashboardView: React.FC = () => {
               type="number"
               step="0.05"
               aria-label="Cotação do Dólar em Reais"
-              value={usdRate}
-              onChange={(e) => setUsdRate(Number(e.target.value) || 1)}
+              min="0.01"
+              aria-invalid={!validRate}
+              value={usdInput}
+              onChange={(e) => setUsdInput(e.target.value)}
               className="w-16 bg-slate-950 border border-slate-700 rounded px-2 py-0.5 text-right text-slate-100 font-mono focus:outline-none focus:border-emerald-500"
             />
           </div>
@@ -188,165 +167,31 @@ export const BenchmarkDashboardView: React.FC = () => {
         </div>
       </div>
 
-      {/* Cards de Destaque da Estratégia vs CDI/IPCA */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Alpha sobre o CDI */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span>Alpha s/ CDI (em BRL)</span>
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-              {formatReturn(botAlphaOverCdiBrl)}
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-emerald-400 font-mono">{formatReturn(botAlphaOverCdiBrl)}</div>
-          <div className="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
-            <TrendingUp className="w-3 h-3 text-emerald-400" />
-            <span>Excesso líquido sobre taxa livre de risco</span>
-          </div>
-        </div>
-
-        {/* Card 2: % Equivalente do CDI */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span>Equivalente do CDI</span>
-            <Percent className="w-3.5 h-3.5 text-cyan-400" />
-          </div>
-          <div className="text-2xl font-bold text-cyan-400 font-mono">
-            {botPercentOfCdi === null ? 'Indisponível' : `${botPercentOfCdi.toFixed(0)}%`}{' '}
-            {botPercentOfCdi !== null && <span className="text-sm font-normal text-slate-400">do CDI</span>}
-          </div>
-          <div className="text-[11px] text-slate-400 mt-2">
-            Supera o CDI de {(cdiPeriodReturn * 100).toFixed(2)}% no horizonte
-          </div>
-        </div>
-
-        {/* Card 3: Ganho Real (Acima da Inflação IPCA) */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span>Retorno Real (IPCA descontado)</span>
-            <ArrowUpRight className="w-3.5 h-3.5 text-amber-400" />
-          </div>
-          <div className="text-2xl font-bold text-amber-400 font-mono">{formatReturn(botRealReturnOverIpca)}</div>
-          <div className="text-[11px] text-slate-400 mt-2">Poder de compra preservado frente à inflação oficial</div>
-        </div>
-
-        {/* Card 4: Retorno Total BRL vs USD */}
-        <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 relative overflow-hidden">
-          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
-            <span>Retorno Total BRL / USD</span>
-            <DollarSign className="w-3.5 h-3.5 text-indigo-400" />
-          </div>
-          <div className="text-2xl font-bold text-slate-100 font-mono">
-            {botBrlReturn === null ? 'Indisponível' : `${(botBrlReturn * 100).toFixed(1)}%`}{' '}
-            {botBrlReturn !== null && <span className="text-xs text-indigo-400">(BRL)</span>}
-          </div>
-          <div className="text-[11px] text-slate-400 mt-2 font-mono">
-            {botUsdReturn === null
-              ? 'Indisponível'
-              : `${(botUsdReturn * 100).toFixed(1)}% USD • Câmbio R$ ${usdRate.toFixed(2)}`}
-          </div>
-        </div>
-      </div>
-
-      {/* Gráfico Comparativo de Trajetória Patrimonial Normalizada (Base 100) */}
-      <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-          <div>
-            <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-cyan-400" />
-              <span>Trajetória Patrimonial Acumulada (Base 100 = R$ 100.000 investidos)</span>
-            </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Comparativo direto: Estratégia Cripto em Reais vs Renda Fixa (CDI / Tesouro IPCA+) vs Inflação (IPCA) vs
-              IBOVESPA.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-3 text-xs">
-            <span className="flex items-center gap-1.5 text-emerald-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" />
-              {botBrlReturn === null ? 'Robô Cripto (BRL) — indisponível' : 'Robô Cripto (BRL)'}
-            </span>
-            <span className="flex items-center gap-1.5 text-cyan-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 inline-block" />
-              Tesouro IPCA+
-            </span>
-            <span className="flex items-center gap-1.5 text-indigo-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block" />
-              100% CDI
-            </span>
-            <span className="flex items-center gap-1.5 text-amber-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" />
-              IPCA (Inflação)
-            </span>
-            <span className="flex items-center gap-1.5 text-rose-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block" />
-              IBOVESPA
-            </span>
-          </div>
-        </div>
-
-        {/* SVG Comparativo */}
-        <div className="h-64 w-full bg-slate-950/70 rounded-lg border border-slate-800/80 p-4 flex flex-col justify-between">
-          <svg className="w-full h-full overflow-visible" viewBox="0 0 500 160">
-            <title>Comparativo Patrimonial: Robô vs CDI vs IPCA vs IBOVESPA</title>
-            {/* Grid horizontal */}
-            <line x1="0" y1="130" x2="500" y2="130" stroke="#334155" strokeDasharray="3 3" strokeWidth="0.5" />
-            <line x1="0" y1="90" x2="500" y2="90" stroke="#334155" strokeDasharray="3 3" strokeWidth="0.5" />
-            <line x1="0" y1="50" x2="500" y2="50" stroke="#334155" strokeDasharray="3 3" strokeWidth="0.5" />
-            <line x1="0" y1="10" x2="500" y2="10" stroke="#334155" strokeDasharray="3 3" strokeWidth="0.5" />
-
-            {/* Base 100 baseline */}
-            <line x1="0" y1="130" x2="500" y2="130" stroke="#475569" strokeWidth="1" />
-
-            {/* IPCA (Amarelo - curva suave ascendente de inflação) */}
-            <path
-              d="M 0 130 C 120 128, 250 126, 500 122"
-              fill="none"
-              stroke="#f59e0b"
-              strokeWidth="2"
-              strokeDasharray="4 2"
-            />
-
-            {/* CDI 100% (Índigo - curva estável sem volatilidade) */}
-            <path d="M 0 130 C 120 125, 250 118, 500 110" fill="none" stroke="#6366f1" strokeWidth="2.5" />
-
-            {/* Tesouro IPCA+ (Ciano - curva moderada) */}
-            <path d="M 0 130 C 120 123, 250 114, 500 105" fill="none" stroke="#06b6d4" strokeWidth="2" />
-
-            {/* IBOVESPA (Rose - oscilante com volatilidade) */}
-            <path
-              d="M 0 130 C 60 142, 140 118, 220 128 C 300 110, 380 122, 500 102"
-              fill="none"
-              stroke="#f43f5e"
-              strokeWidth="1.8"
-            />
-
-            {/* Robô Cripto: no auditable trajectory is available for this display. */}
-            {/* Pontos terminais */}
-            <circle cx="500" cy="102" r="3" fill="#f43f5e" />
-            <circle cx="500" cy="105" r="3" fill="#06b6d4" />
-            <circle cx="500" cy="110" r="3" fill="#6366f1" />
-            <circle cx="500" cy="122" r="3" fill="#f59e0b" />
-          </svg>
-
-          {/* Rótulos do Eixo X */}
-          <div className="flex justify-between text-[10px] text-slate-400 font-mono pt-2 border-t border-slate-800">
-            <span>Início (T0)</span>
-            <span>25% Período</span>
-            <span>50% Período</span>
-            <span>75% Período</span>
-            <span>Atual (T{selectedPeriodDays}d)</span>
-          </div>
-        </div>
-      </div>
+      <section className="bg-amber-950/30 border border-amber-800 rounded-xl p-5 text-sm text-amber-200">
+        <p>Comparação indisponível: a API não fornece séries históricas alinhadas.</p>
+        <p className="mt-2 text-xs">
+          Taxas fixas hipotéticas: projeções ilustrativas, sem cotações atuais, custos, impostos ou garantia de retorno.
+        </p>
+        <p className="mt-2 text-xs">
+          USD/BRL é uma hipótese manual para converter o capital, não a variação cambial do período nem uma cotação
+          PTAX.
+        </p>
+        <p className="mt-2" data-testid="simulated-capital-usd">
+          Capital equivalente simulado (USD):{' '}
+          {Number.isFinite(simulatedCapitalUsd)
+            ? `$ ${simulatedCapitalUsd.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}`
+            : 'Indisponível'}
+        </p>
+        {!validRate && <p role="alert">Cotação inválida: informe um número finito maior que zero.</p>}
+        {!validCapital && <p role="alert">Capital inválido: informe um número finito maior que zero.</p>}
+      </section>
 
       {/* Tabela Comparativa Detalhada dos Índices */}
       <div className="bg-slate-900/40 border border-slate-800 rounded-xl overflow-hidden">
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-slate-200">Régua Comparativa de Índices Macroeconômicos</h2>
+            <h2 className="text-sm font-semibold text-slate-200">Projeções ilustrativas de cenários macroeconômicos</h2>
           </div>
           <span className="text-xs text-slate-400">Horizonte: {selectedPeriodDays} dias úteis</span>
         </div>
@@ -357,45 +202,17 @@ export const BenchmarkDashboardView: React.FC = () => {
               <tr>
                 <th className="py-3 px-4 font-semibold">Índice / Benchmark</th>
                 <th className="py-3 px-3 font-semibold">Categoria</th>
-                <th className="py-3 px-3 font-semibold text-right">Taxa Anualizada</th>
-                <th className="py-3 px-3 font-semibold text-right">Retorno no Período</th>
-                <th className="py-3 px-3 font-semibold text-right">Excesso de Retorno (Alpha)</th>
-                <th className="py-3 px-3 font-semibold text-right">% do CDI</th>
+                <th className="py-3 px-3 font-semibold text-right">Hipótese Anual</th>
+                <th className="py-3 px-3 font-semibold text-right">Projeção no Horizonte</th>
                 <th className="py-3 px-4 font-semibold text-right">
-                  Simulação R$ {initialInvestmentBrl.toLocaleString('pt-BR')}
+                  Simulação R$ {validCapital ? initialInvestmentBrl.toLocaleString('pt-BR') : 'Indisponível'}
                 </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
-              {/* Linha do Robô Cripto (Destaque) */}
-              <tr className="bg-emerald-950/20 text-slate-100 font-semibold border-b border-emerald-500/20">
-                <td className="py-3 px-4 font-sans flex items-center gap-2 text-emerald-400">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Portfólio Cripto Autônomo (em BRL)</span>
-                </td>
-                <td className="py-3 px-3 font-sans">
-                  <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                    Ativo Alternativo
-                  </span>
-                </td>
-                <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(botBrlReturn)}</td>
-                <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(botBrlReturn)}</td>
-                <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(botAlphaOverCdiBrl)}</td>
-                <td className="py-3 px-3 text-right text-emerald-400">
-                  {botPercentOfCdi === null ? 'Indisponível' : `${botPercentOfCdi.toFixed(0)}%`}
-                </td>
-                <td className="py-3 px-4 text-right text-emerald-300">
-                  {botBrlReturn === null
-                    ? 'Indisponível'
-                    : `R$ ${(initialInvestmentBrl * (1 + botBrlReturn)).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`}
-                </td>
-              </tr>
-
               {/* Linhas dos Benchmarks */}
               {benchmarks.map((b) => {
                 const finalBrl = initialInvestmentBrl * (1 + b.returnInPeriod);
-                const alphaOverThis = botBrlReturn === null ? null : botBrlReturn - b.returnInPeriod;
-                const pctOfCdi = cdiPeriodReturn > 0 ? (b.returnInPeriod / cdiPeriodReturn) * 100 : 0;
 
                 return (
                   <tr key={b.id} className="hover:bg-slate-800/30 text-slate-300 transition-colors">
@@ -408,10 +225,10 @@ export const BenchmarkDashboardView: React.FC = () => {
                     </td>
                     <td className="py-3 px-3 text-right">{(b.currentRateAnnual * 100).toFixed(2)}%</td>
                     <td className="py-3 px-3 text-right">{(b.returnInPeriod * 100).toFixed(2)}%</td>
-                    <td className="py-3 px-3 text-right text-emerald-400">{formatReturn(alphaOverThis)}</td>
-                    <td className="py-3 px-3 text-right text-cyan-400">{pctOfCdi.toFixed(0)}%</td>
                     <td className="py-3 px-4 text-right text-slate-200">
-                      R$ {finalBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
+                      {validCapital && Number.isFinite(finalBrl)
+                        ? `R$ ${finalBrl.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}`
+                        : 'Indisponível'}
                     </td>
                   </tr>
                 );

@@ -2,29 +2,30 @@ import { useQuery } from '@tanstack/react-query';
 import { Activity, Cpu, Flame, GitPullRequest, RefreshCw, Scale, ShieldAlert } from 'lucide-react';
 import type React from 'react';
 import { apiClient } from '../api/client';
+import { QueryStatus } from '../components/QueryStatus';
 
 export const AutonomyDashboardView: React.FC = () => {
   const regimeQuery = useQuery({
     queryKey: ['marketRegime', 'BTCUSDT'],
-    queryFn: () => apiClient.getCurrentMarketRegime('BTCUSDT'),
+    queryFn: ({ signal }) => apiClient.getCurrentMarketRegime('BTCUSDT', { signal }),
     refetchInterval: 5000,
   });
 
   const allocationsQuery = useQuery({
     queryKey: ['strategyAllocations'],
-    queryFn: apiClient.getStrategyAllocations,
+    queryFn: ({ signal }) => apiClient.getStrategyAllocations({ signal }),
     refetchInterval: 5000,
   });
 
   const driftsQuery = useQuery({
     queryKey: ['recentDrifts'],
-    queryFn: () => apiClient.getRecentDrifts(undefined, 20),
+    queryFn: ({ signal }) => apiClient.getRecentDrifts(undefined, 20, { signal }),
     refetchInterval: 5000,
   });
 
   const modelsQuery = useQuery({
     queryKey: ['registeredModels'],
-    queryFn: () => apiClient.getRegisteredModels('trend-following'),
+    queryFn: ({ signal }) => apiClient.getRegisteredModels('trend-following', { signal }),
     refetchInterval: 10000,
   });
 
@@ -87,6 +88,10 @@ export const AutonomyDashboardView: React.FC = () => {
 
   return (
     <div className="space-y-6" data-testid="autonomy-dashboard-view">
+      <QueryStatus label="Regime" query={regimeQuery} observedAt={regimeData?.observedAtUtc} />
+      <QueryStatus label="Alocações" query={allocationsQuery} />
+      <QueryStatus label="Drift" query={driftsQuery} />
+      <QueryStatus label="Modelos" query={modelsQuery} />
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between bg-slate-900 border border-slate-800 rounded-lg p-5 gap-4">
         <div className="flex items-center gap-4">
@@ -180,7 +185,7 @@ export const AutonomyDashboardView: React.FC = () => {
           </h3>
 
           <div className="space-y-4">
-            {allocationsQuery.isError ? (
+            {allocationsQuery.isPending ? null : allocationsQuery.isError && !allocationsQuery.data ? (
               <p className="text-xs text-rose-400">Histórico de recompensas indisponível.</p>
             ) : allocations.length === 0 ? (
               <p className="text-xs text-slate-400">Nenhum desempenho de estratégia registrado.</p>
@@ -223,7 +228,7 @@ export const AutonomyDashboardView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 font-mono">
-                {driftsQuery.isError ? (
+                {driftsQuery.isPending ? null : driftsQuery.isError && !driftsQuery.data ? (
                   <tr>
                     <td colSpan={4} className="py-4 text-center text-rose-400">
                       Observações de drift indisponíveis.
@@ -282,7 +287,7 @@ export const AutonomyDashboardView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800 font-mono">
-                {modelsQuery.isError ? (
+                {modelsQuery.isPending ? null : modelsQuery.isError && !modelsQuery.data ? (
                   <tr>
                     <td colSpan={4} className="py-4 text-center text-rose-400">
                       Registro de modelos indisponível.

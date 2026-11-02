@@ -13,6 +13,18 @@ const renderView = () =>
 afterEach(() => vi.restoreAllMocks());
 
 describe('AutonomyDashboardView evidence states', () => {
+  it('distinguishes pending queries from successful empty collections', () => {
+    vi.spyOn(apiClient, 'getCurrentMarketRegime').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(apiClient, 'getStrategyAllocations').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(apiClient, 'getRecentDrifts').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(apiClient, 'getRegisteredModels').mockReturnValue(new Promise(() => {}));
+    renderView();
+    for (const label of ['Regime', 'Alocações', 'Drift', 'Modelos']) {
+      expect(screen.getByText(`${label}: carregando...`)).toBeInTheDocument();
+    }
+    expect(screen.queryByText(/Nenhum desempenho|Nenhuma observação|Nenhum modelo/)).not.toBeInTheDocument();
+  });
+
   it('fails closed and shows unknown values when no regime or learning history exists', async () => {
     vi.spyOn(apiClient, 'getCurrentMarketRegime').mockResolvedValue({
       symbol: 'BTCUSDT',
@@ -32,7 +44,7 @@ describe('AutonomyDashboardView evidence states', () => {
     expect(await screen.findByText(/Indisponível \(Unknown\)/)).toBeInTheDocument();
     expect(screen.getAllByText('Indisponível').length).toBeGreaterThan(1);
     expect(screen.getByText(/Novas exposições bloqueadas/)).toBeInTheDocument();
-    expect(screen.getByText(/Nenhum desempenho de estratégia registrado/)).toBeInTheDocument();
+    expect(await screen.findByText(/Nenhum desempenho de estratégia registrado/)).toBeInTheDocument();
     expect(screen.queryByText(/BULL TREND|88%|\$5500/)).not.toBeInTheDocument();
   });
 

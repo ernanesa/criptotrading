@@ -3,6 +3,7 @@ import { Activity, AlertCircle, CheckCircle2, Clock, Database, RefreshCw, Shield
 import type React from 'react';
 import { useState } from 'react';
 import { apiClient, formatIsoDate, formatUtcTimestamp } from '../api/client';
+import { QueryStatus } from '../components/QueryStatus';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const OperationalOverviewView: React.FC = () => {
@@ -10,38 +11,38 @@ export const OperationalOverviewView: React.FC = () => {
 
   const statusQuery = useQuery({
     queryKey: ['operationalStatus'],
-    queryFn: apiClient.getOperationalStatus,
+    queryFn: ({ signal }) => apiClient.getOperationalStatus({ signal }),
     refetchInterval: 5000,
   });
 
   const livenessQuery = useQuery({
     queryKey: ['healthLive'],
-    queryFn: apiClient.getHealthLive,
+    queryFn: ({ signal }) => apiClient.getHealthLive({ signal }),
     refetchInterval: 10000,
   });
 
   const readinessQuery = useQuery({
     queryKey: ['healthReady'],
-    queryFn: apiClient.getHealthReady,
+    queryFn: ({ signal }) => apiClient.getHealthReady({ signal }),
     refetchInterval: 10000,
   });
 
   const checkpointQuery = useQuery({
     queryKey: ['checkpoint', scope],
-    queryFn: () => apiClient.getAutonomyCheckpoint(scope),
+    queryFn: ({ signal }) => apiClient.getAutonomyCheckpoint(scope, { signal }),
     refetchInterval: 10000,
     retry: false,
   });
 
   const telemetryQuery = useQuery({
     queryKey: ['telemetryMetrics'],
-    queryFn: apiClient.getTelemetryMetrics,
+    queryFn: ({ signal }) => apiClient.getTelemetryMetrics({ signal }),
     refetchInterval: 5000,
   });
 
   const balancesQuery = useQuery({
     queryKey: ['portfolioBalances'],
-    queryFn: apiClient.getPortfolioBalances,
+    queryFn: ({ signal }) => apiClient.getPortfolioBalances({ signal }),
     refetchInterval: 5000,
   });
 
@@ -66,6 +67,12 @@ export const OperationalOverviewView: React.FC = () => {
 
   return (
     <div className="space-y-6" data-testid="operational-overview-view">
+      <QueryStatus label="Supervisor" query={statusQuery} />
+      <QueryStatus label="Liveness" query={livenessQuery} />
+      <QueryStatus label="Readiness" query={readinessQuery} />
+      <QueryStatus label="Checkpoint" query={checkpointQuery} />
+      <QueryStatus label="Telemetria" query={telemetryQuery} />
+      <QueryStatus label="Saldos" query={balancesQuery} observedAt={balancesQuery.data?.observedAtUtc} />
       {/* Top action row */}
       <div className="flex items-center justify-between">
         <div>

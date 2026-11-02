@@ -44,51 +44,72 @@ export interface RiskPolicyDocument {
 export interface AutonomyDecisionCommit {
   decisionId: string;
   environment: string;
-  account: string;
-  scope: string;
-  symbol: string;
-  strategy: string;
+  accountScope: string;
+  checkpointScope: string;
+  symbol: { value: string };
+  strategyId: string;
   strategyVersion: string;
-  evaluatedCloseUtc: string;
-  decisionUtc: string;
-  riskPolicyVersion: string;
-  configurationFingerprint: string;
-  featureSnapshotSha256: string;
+  closeTimeUtc: string;
+  availableAtUtc: string;
+  featureSchemaVersion: string;
+  featureConfigurationFingerprint: string;
+  featureFingerprint: string;
   signal: string;
-  signalReason: string;
-  proposedNotional: number | null;
+  strategyReason: string;
+  riskDecision: {
+    status: string;
+    requestedTargetNotional: number;
+    authorizedTargetNotional: number;
+    policyVersion: string;
+    reasonCodes: string[];
+  } | null;
   outcome: string;
-  outcomeReason: string;
-  decisionTraceJson: string;
-  rejectionReason: string | null;
+  noTradeReason: string | null;
+  traceJson: string;
 }
 
 export interface AutonomyDecisionReconstructionReport {
   commit: AutonomyDecisionCommit;
   canonicalIdentityHashMatches: boolean;
+  expectedCanonicalIdentity: string;
   isAuditVerified: boolean;
+  hasCompleteDispatchAudit: boolean;
   intentClientOrderId: string | null;
-  expectedFee?: {
-    clientOrderId: string;
-    expectedCommissionRateBps: number;
-    expectedCommissionAsset: string;
-    estimatedCommissionNotional: number;
+  expectedFee: {
+    rate: number;
+    snapshotHash: string;
+    source: string;
+    observedAtUtc: string;
+    validUntilUtc: string;
+    referencePrice: number | null;
+    authorizedQuantity: number | null;
+    decisionAtUtc: string | null;
   } | null;
-  submissionContext?: {
+  submissionContext: {
     clientOrderId: string;
-    symbol: string;
+    applicationOrderId: { value: string };
+    correlationId: { value: string };
+    outboxMessageId: string;
+    symbol: { value: string };
     side: string;
     type: string;
-    quantity: number;
-    price: number;
-    notional: number;
+    authorizedQuantity: { value: number };
+    referencePrice: { value: number };
+    authorizedNotional: number;
+    executionAttempt: number;
+    plannedAtUtc: string;
+    expiresAtUtc: string | null;
   } | null;
-  lifecycleEvents?: Array<{
+  lifecycleEvents: Array<{
     eventId: string;
     clientOrderId: string;
-    fromStatus: string;
-    toStatus: string;
-    occurredAtUtc: string;
+    transition: {
+      from: string;
+      to: string;
+      idempotencyKey: { value: string };
+      occurredAtUtc: string;
+      exchangeOrderId: string | null;
+    };
   }> | null;
 }
 
@@ -179,7 +200,7 @@ export interface PortfolioPerformanceResponse {
     profitUsd: number | null;
     profitPercentage: number | null;
     realizedProfitUsd: number;
-    unrealizedProfitUsd: number;
+    unrealizedProfitUsd: number | null;
     feesPaidUsd: number;
     tradesCount: number;
     winRatePercentage: number;

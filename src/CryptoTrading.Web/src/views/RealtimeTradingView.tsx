@@ -3,41 +3,42 @@ import { Activity, ChevronDown, ChevronUp, Clock, Database, Layers, RefreshCw, T
 import type React from 'react';
 import { useState } from 'react';
 import { apiClient, formatIsoDate } from '../api/client';
+import { QueryStatus } from '../components/QueryStatus';
 
 export const RealtimeTradingView: React.FC = () => {
   const [showAllBalances, setShowAllBalances] = useState(false);
   // 1. Live Market Ticker from Binance Spot
   const tickerQuery = useQuery({
     queryKey: ['marketTicker', 'BTCUSDT'],
-    queryFn: () => apiClient.getMarketTicker('BTCUSDT'),
+    queryFn: ({ signal }) => apiClient.getMarketTicker('BTCUSDT', { signal }),
     refetchInterval: 3000,
   });
 
   // 2. Real Portfolio Balances from Binance Spot Testnet
   const balancesQuery = useQuery({
     queryKey: ['portfolioBalances'],
-    queryFn: apiClient.getPortfolioBalances,
+    queryFn: ({ signal }) => apiClient.getPortfolioBalances({ signal }),
     refetchInterval: 5000,
   });
 
   // 3. Real Open Orders from OMS / Exchange
   const openOrdersQuery = useQuery({
     queryKey: ['openOrders', 'BTCUSDT'],
-    queryFn: () => apiClient.getOpenOrders('BTCUSDT'),
+    queryFn: ({ signal }) => apiClient.getOpenOrders('BTCUSDT', { signal }),
     refetchInterval: 5000,
   });
 
   // 4. Real Trade History from OMS / Exchange
   const tradesQuery = useQuery({
     queryKey: ['trades', 'BTCUSDT'],
-    queryFn: () => apiClient.getTrades('BTCUSDT'),
+    queryFn: ({ signal }) => apiClient.getTrades('BTCUSDT', { signal }),
     refetchInterval: 5000,
   });
 
   // 5. Autonomous Market Regime (US-074 / US-171)
   const regimeQuery = useQuery({
     queryKey: ['marketRegime', 'BTCUSDT'],
-    queryFn: () => apiClient.getCurrentMarketRegime('BTCUSDT'),
+    queryFn: ({ signal }) => apiClient.getCurrentMarketRegime('BTCUSDT', { signal }),
     refetchInterval: 5000,
   });
 
@@ -72,6 +73,11 @@ export const RealtimeTradingView: React.FC = () => {
 
   return (
     <div className="space-y-6" data-testid="realtime-trading-view">
+      <QueryStatus label="Ticker" query={tickerQuery} observedAt={ticker?.observedAtUtc} />
+      <QueryStatus label="Saldos" query={balancesQuery} observedAt={balances?.observedAtUtc} />
+      <QueryStatus label="Ordens" query={openOrdersQuery} />
+      <QueryStatus label="Trades" query={tradesQuery} />
+      <QueryStatus label="Regime" query={regimeQuery} observedAt={regime?.observedAtUtc} />
       {/* Header Bar */}
       <div className="flex flex-col md:flex-row md:items-center justify-between bg-slate-900 border border-slate-800 rounded-lg p-5 gap-4">
         <div className="flex items-center gap-4">
@@ -82,7 +88,7 @@ export const RealtimeTradingView: React.FC = () => {
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold tracking-tight text-slate-100">BTC / USDT</h2>
               <span className="px-2 py-0.5 text-xs font-semibold rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                SPOT TESTNET
+                SPOT · {balances?.environment ?? 'AMBIENTE NÃO VERIFICADO'}
               </span>
               <span
                 className={`px-2 py-0.5 text-xs font-semibold rounded border ${
@@ -98,7 +104,7 @@ export const RealtimeTradingView: React.FC = () => {
               {tickerQuery.isFetching && <RefreshCw className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Fonte: Binance Spot Testnet API. Dados disponíveis dependem das respostas atuais da API.
+              Fonte: API de mercado. Ambiente conforme evidência retornada pela conta; atualização via consulta REST.
             </p>
           </div>
         </div>
@@ -174,13 +180,13 @@ export const RealtimeTradingView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono">
-                  {balancesQuery.isLoading ? (
+                  {balancesQuery.isPending ? (
                     <tr>
                       <td colSpan={5} className="py-6 text-center text-slate-500">
                         Consultando saldos...
                       </td>
                     </tr>
-                  ) : balancesQuery.isError ? (
+                  ) : balancesQuery.isError && !balancesQuery.data ? (
                     <tr>
                       <td colSpan={5} className="py-6 text-center text-rose-400">
                         Saldos indisponíveis.
@@ -234,8 +240,8 @@ export const RealtimeTradingView: React.FC = () => {
               <div className="mt-4 pt-3 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
                 <span className="text-slate-400 text-[11px]">
                   {showAllBalances
-                    ? `Exibindo todos os ${displayedBalances.length} ativos (incluindo ${zeroValueBalances.length} tokens de teste com cotação $0.00)`
-                    : `${zeroValueBalances.length} tokens airdrop da Testnet (sem cotação de mercado) foram ocultados.`}
+                    ? `Exibindo todos os ${displayedBalances.length} ativos (incluindo ${zeroValueBalances.length} ativos com valor estimado zero)`
+                    : `${zeroValueBalances.length} ativos com valor estimado zero foram ocultados; a API não informa o motivo da ausência de valor.`}
                 </span>
                 <button
                   type="button"
@@ -250,7 +256,7 @@ export const RealtimeTradingView: React.FC = () => {
                   ) : (
                     <>
                       <ChevronDown className="w-3.5 h-3.5 text-cyan-400" />
-                      <span>Expandir Outros {zeroValueBalances.length} Tokens Testnet</span>
+                      <span>Expandir Outros {zeroValueBalances.length} Ativos</span>
                     </>
                   )}
                 </button>
@@ -272,9 +278,9 @@ export const RealtimeTradingView: React.FC = () => {
               </span>
             </div>
 
-            {openOrdersQuery.isLoading ? (
+            {openOrdersQuery.isPending ? (
               <div className="py-8 text-center text-xs text-slate-400">Consultando ordens...</div>
-            ) : openOrdersQuery.isError ? (
+            ) : openOrdersQuery.isError && !openOrdersQuery.data ? (
               <div className="py-8 text-center text-xs text-rose-400">Ordens indisponíveis.</div>
             ) : (openOrders?.length ?? 0) > 0 ? (
               <div className="overflow-x-auto">
@@ -339,9 +345,9 @@ export const RealtimeTradingView: React.FC = () => {
               </span>
             </div>
 
-            {tradesQuery.isLoading ? (
+            {tradesQuery.isPending ? (
               <div className="py-8 text-center text-xs text-slate-400">Consultando execuções...</div>
-            ) : tradesQuery.isError ? (
+            ) : tradesQuery.isError && !tradesQuery.data ? (
               <div className="py-8 text-center text-xs text-rose-400">Execuções indisponíveis.</div>
             ) : (trades?.length ?? 0) > 0 ? (
               <div className="overflow-x-auto">

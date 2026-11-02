@@ -37,21 +37,27 @@ const AppContent: React.FC = () => {
 
   const statusQuery = useQuery({
     queryKey: ['operationalStatus'],
-    queryFn: apiClient.getOperationalStatus,
+    queryFn: ({ signal }) => apiClient.getOperationalStatus({ signal }),
     refetchInterval: 5000,
   });
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 font-sans selection:bg-cyan-500 selection:text-slate-950">
       {/* Top Banner */}
-      <EnvironmentBanner status={statusQuery.data} isLoading={statusQuery.isLoading} environmentName="TESTNET" />
+      <EnvironmentBanner
+        status={statusQuery.data}
+        isLoading={statusQuery.isLoading}
+        isError={statusQuery.isError}
+        isFetching={statusQuery.isFetching}
+        dataUpdatedAt={statusQuery.dataUpdatedAt}
+      />
 
       {/* Navigation Bar */}
       <Navigation currentTab={currentTab} onSelectTab={setCurrentTab} />
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6">
-        <ErrorBoundary>
+        <ErrorBoundary resetKey={currentTab}>
           {currentTab === 'overview' && <OperationalOverviewView />}
           {currentTab === 'realtime' && <RealtimeTradingView />}
           {currentTab === 'performance' && <FinancialPerformanceView />}
@@ -68,7 +74,7 @@ const AppContent: React.FC = () => {
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Shield className="w-3.5 h-3.5 text-cyan-500" />
-            <span>Binance Spot Trading Bot — Fail-Closed Read-Only Operational Shell (R1.0 Ready)</span>
+            <span>Binance Spot Trading Bot — Console operacional somente leitura; ambiente não verificado</span>
           </div>
           <div className="flex items-center gap-2 font-mono">
             <Clock className="w-3.5 h-3.5 text-slate-500" />

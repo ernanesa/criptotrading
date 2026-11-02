@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowRight, CheckCircle2, FileCode, Search, XCircle } fr
 import type React from 'react';
 import { useState } from 'react';
 import { ApiError, apiClient, formatIsoDate } from '../api/client';
+import { QueryStatus } from '../components/QueryStatus';
 import { StatusBadge } from '../components/StatusBadge';
 
 export const DecisionTraceView: React.FC = () => {
@@ -11,7 +12,7 @@ export const DecisionTraceView: React.FC = () => {
 
   const decisionQuery = useQuery({
     queryKey: ['decision', searchedId],
-    queryFn: () => apiClient.getOperationalDecision(searchedId),
+    queryFn: ({ signal }) => apiClient.getOperationalDecision(searchedId, { signal }),
     enabled: searchedId.length > 0,
     retry: false,
   });
@@ -61,6 +62,7 @@ export const DecisionTraceView: React.FC = () => {
       </form>
 
       {/* Loading state */}
+      {searchedId && <QueryStatus label="Decisão" query={decisionQuery} />}
       {decisionQuery.isFetching && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-12 text-center text-slate-400 text-xs font-mono animate-pulse">
           Reconstruindo evidências e recalculando digest canônico SHA-256 no backend...
@@ -72,10 +74,9 @@ export const DecisionTraceView: React.FC = () => {
         <div className="bg-amber-950/40 border border-amber-800/60 rounded-xl p-6 flex items-start gap-4">
           <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
           <div className="text-xs">
-            <h3 className="font-bold text-amber-200 mb-1">Persistência Indisponível (503)</h3>
+            <h3 className="font-bold text-amber-200 mb-1">Consulta indisponível (503)</h3>
             <p className="text-amber-300/80">
-              O banco de dados PostgreSQL não está conectado na API. Configure `POSTGRES_CONNECTION_STRING` para
-              permitir consultas aos commits de decisão.
+              A API não conseguiu atender à consulta. A causa precisa ser verificada nos diagnósticos do serviço.
             </p>
           </div>
         </div>
@@ -130,77 +131,45 @@ export const DecisionTraceView: React.FC = () => {
                 >
                   {report.commit.outcome}
                 </span>
-                {(report.commit.outcomeReason ||
-                  (report.commit as unknown as { noTradeReason?: string }).noTradeReason) && (
-                  <span className="text-slate-400 block mt-0.5 text-[11px]">
-                    (
-                    {report.commit.outcomeReason ||
-                      (report.commit as unknown as { noTradeReason?: string }).noTradeReason}
-                    )
-                  </span>
+                {report.commit.noTradeReason && (
+                  <span className="text-slate-400 block mt-0.5 text-[11px]">({report.commit.noTradeReason})</span>
                 )}
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Sinal & Estratégia:</span>
                 <span className="text-slate-200 font-bold">
-                  {report.commit.strategy || (report.commit as unknown as { strategyId?: string }).strategyId} v
-                  {report.commit.strategyVersion}
+                  {report.commit.strategyId} v{report.commit.strategyVersion}
                 </span>
                 <span className="text-cyan-400 block mt-0.5 text-[11px]">Sinal: {report.commit.signal}</span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Símbolo & Escopo:</span>
-                <span className="text-slate-200 font-bold">
-                  {typeof report.commit.symbol === 'object'
-                    ? (report.commit.symbol as { value?: string })?.value || 'BTCUSDT'
-                    : String(report.commit.symbol || 'BTCUSDT')}
-                </span>
-                <span className="text-slate-400 block mt-0.5 text-[11px]">
-                  {report.commit.scope || (report.commit as unknown as { checkpointScope?: string }).checkpointScope}
-                </span>
+                <span className="text-slate-200 font-bold">{report.commit.symbol.value}</span>
+                <span className="text-slate-400 block mt-0.5 text-[11px]">{report.commit.checkpointScope}</span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Fechamento Avaliado:</span>
-                <span className="text-slate-300">
-                  {formatIsoDate(
-                    report.commit.evaluatedCloseUtc ||
-                      (report.commit as unknown as { closeTimeUtc?: string }).closeTimeUtc,
-                  )}
-                </span>
+                <span className="text-slate-300">{formatIsoDate(report.commit.closeTimeUtc)}</span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Instante da Decisão UTC:</span>
-                <span className="text-slate-300">
-                  {formatIsoDate(
-                    report.commit.decisionUtc ||
-                      (report.commit as unknown as { availableAtUtc?: string }).availableAtUtc,
-                  )}
-                </span>
+                <span className="text-slate-300">{formatIsoDate(report.commit.availableAtUtc)}</span>
               </div>
 
               <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                 <span className="text-slate-500 block mb-1">Política de Risco:</span>
-                <span className="text-slate-300">
-                  v
-                  {report.commit.riskPolicyVersion ||
-                    (report.commit as unknown as { featureSchemaVersion?: string }).featureSchemaVersion ||
-                    '1.0'}
-                </span>
+                <span className="text-slate-300">{report.commit.riskDecision?.policyVersion ?? 'Indisponível'}</span>
               </div>
             </div>
 
             {/* Feature Snapshot SHA-256 */}
             <div className="mt-4 p-3 bg-slate-950 rounded-lg border border-slate-800 text-xs font-mono">
               <span className="text-slate-500 block mb-1">Digest de Features (SHA-256):</span>
-              <span className="text-cyan-400 break-all">
-                {report.commit.featureSnapshotSha256 ||
-                  (report.commit as unknown as { featureFingerprint?: string }).featureFingerprint ||
-                  'N/A'}
-              </span>
+              <span className="text-cyan-400 break-all">{report.commit.featureFingerprint}</span>
             </div>
           </div>
 
@@ -212,8 +181,7 @@ export const DecisionTraceView: React.FC = () => {
             </h3>
             <pre className="p-4 bg-slate-950 rounded-lg border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto max-h-64">
               {(() => {
-                const rawTrace =
-                  report.commit.decisionTraceJson || (report.commit as unknown as { traceJson?: string }).traceJson;
+                const rawTrace = report.commit.traceJson;
                 if (!rawTrace) return '{}';
                 try {
                   const parsed = typeof rawTrace === 'string' ? JSON.parse(rawTrace) : rawTrace;

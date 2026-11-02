@@ -1,46 +1,41 @@
-import { AlertTriangle, ChevronDown, ChevronUp, RefreshCw, RotateCcw } from 'lucide-react';
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { Component, type ReactNode } from 'react';
 import { generateCorrelationId } from '../api/client';
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  resetKey?: string;
 }
 
 interface State {
   hasError: boolean;
-  error: Error | null;
   correlationId: string;
-  showDetails: boolean;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
-    error: null,
     correlationId: generateCorrelationId(),
-    showDetails: false,
   };
 
-  public static getDerivedStateFromError(error: Error): Partial<State> {
+  public static getDerivedStateFromError(): Partial<State> {
     return {
       hasError: true,
-      error,
       correlationId: generateCorrelationId(),
     };
   }
 
-  public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('ErrorBoundary caught exception:', error, errorInfo);
+  public componentDidCatch() {
+    console.error('ui.render_failure', { correlationId: this.state.correlationId, source: 'ErrorBoundary' });
+  }
+
+  public componentDidUpdate(previous: Props) {
+    if (previous.resetKey !== this.props.resetKey && this.state.hasError) this.handleRetry();
   }
 
   private handleRetry = () => {
-    this.setState({ hasError: false, error: null, showDetails: false });
-  };
-
-  private handleReset = () => {
-    this.setState({ hasError: false, error: null });
-    window.location.reload();
+    this.setState({ hasError: false });
   };
 
   public render() {
@@ -67,37 +62,8 @@ export class ErrorBoundary extends Component<Props, State> {
               </span>
             </div>
 
-            {this.state.error?.message && (
-              <div className="mb-4">
-                <button
-                  type="button"
-                  onClick={() => this.setState((prev) => ({ showDetails: !prev.showDetails }))}
-                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                >
-                  {this.state.showDetails ? (
-                    <ChevronUp className="w-3.5 h-3.5" />
-                  ) : (
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  )}
-                  <span>{this.state.showDetails ? 'Ocultar detalhes técnicos' : 'Exibir detalhes técnicos'}</span>
-                </button>
-
-                {this.state.showDetails && (
-                  <div className="mt-2 p-3 bg-slate-950 rounded-lg border border-rose-900/40 text-[11px] font-mono text-rose-300 max-h-48 overflow-y-auto break-all">
-                    <strong className="block text-rose-400 mb-1">Erro:</strong>
-                    {this.state.error.message}
-                    {this.state.error.stack && (
-                      <div className="mt-2 text-slate-400 text-[10px] whitespace-pre-wrap">
-                        {this.state.error.stack}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
             <p className="text-xs text-slate-400 mb-6">
-              Nenhum dado sensível ou chave de API foi exposto. O incidente foi registrado com o Correlation ID acima.
+              Referência local de diagnóstico. Esta interface não executou nenhuma ação de negociação.
             </p>
 
             <div className="flex gap-3">
@@ -108,14 +74,6 @@ export class ErrorBoundary extends Component<Props, State> {
               >
                 <RotateCcw className="w-4 h-4" />
                 <span>Tentar Novamente</span>
-              </button>
-              <button
-                type="button"
-                onClick={this.handleReset}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-medium rounded-lg text-sm transition-colors cursor-pointer"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>Recarregar página</span>
               </button>
             </div>
           </div>

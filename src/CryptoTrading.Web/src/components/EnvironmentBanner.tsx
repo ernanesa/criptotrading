@@ -1,20 +1,27 @@
 import { Activity, Lock, ShieldAlert } from 'lucide-react';
 import type React from 'react';
 import type { OperationalStatusResponse } from '../types/api';
+import { QueryStatus } from './QueryStatus';
 import { StatusBadge } from './StatusBadge';
 
 interface EnvironmentBannerProps {
   status?: OperationalStatusResponse | null;
   isLoading?: boolean;
   environmentName?: string;
+  isError?: boolean;
+  isFetching?: boolean;
+  dataUpdatedAt?: number;
 }
 
 export const EnvironmentBanner: React.FC<EnvironmentBannerProps> = ({
   status,
   isLoading = false,
-  environmentName = 'TESTNET',
+  environmentName = 'Unknown',
+  isError = false,
+  isFetching = false,
+  dataUpdatedAt = 0,
 }) => {
-  const mode = status?.mode ?? 'Normal';
+  const mode = status && ['Normal', 'SafeMode', 'KillSwitch'].includes(status.mode) ? status.mode : 'Unknown';
   const isSafeMode = mode === 'SafeMode';
   const isKillSwitch = mode === 'KillSwitch';
 
@@ -75,7 +82,15 @@ export const EnvironmentBanner: React.FC<EnvironmentBannerProps> = ({
 
           <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700 font-mono text-[11px]">
             <Lock className="w-3 h-3 text-emerald-400" />
-            <span>API MUTÁVEL: DESATIVADA (READ-ONLY)</span>
+            <span>
+              API MUTÁVEL:{' '}
+              {status
+                ? status.mutatingEndpointsEnabled
+                  ? 'ATIVADA NA API'
+                  : 'DESATIVADA (READ-ONLY)'
+                : 'NÃO VERIFICADA'}{' '}
+              · UI READ-ONLY
+            </span>
           </div>
 
           {status && (
@@ -83,6 +98,10 @@ export const EnvironmentBanner: React.FC<EnvironmentBannerProps> = ({
           )}
         </div>
       </div>
+      <QueryStatus
+        label="Supervisor"
+        query={{ data: status ?? undefined, isPending: isLoading, isError, isFetching, dataUpdatedAt }}
+      />
     </header>
   );
 };
