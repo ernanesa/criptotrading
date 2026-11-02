@@ -546,13 +546,15 @@ public readonly record struct TechnicalIndicatorSnapshot(
     decimal VwapDeviationBps,
     decimal RelativeVolume,
     decimal CvdImbalance = 0m,
-    decimal AbsoluteBarVolumeImbalance = 0m)
+    decimal AbsoluteBarVolumeImbalance = 0m,
+    decimal DownsideDeviationBps = 0m,
+    decimal IlliquiditySpikeRatio = 1.0m)
 {
     public bool IsWilderReady { get; init; }
     public bool IsAdxReady { get; init; }
 
     public static TechnicalIndicatorSnapshot Empty(decimal closePrice) =>
-        new(0m, 0m, 0m, 0m, 0m, 50m, closePrice, 0m, 1.0m, 0m, 0m);
+        new(0m, 0m, 0m, 0m, 0m, 50m, closePrice, 0m, 1.0m, 0m, 0m, 0m, 1.0m);
 }
 
 public static class TechnicalIndicatorCalculator
@@ -642,7 +644,7 @@ public static class TechnicalIndicatorCalculator
             ? (avgGain > 0m ? 100m : 50m)
             : Math.Clamp(Math.Round(100m - (100m / (1m + (avgGain / avgLoss))), 2), 0m, 100m);
 
-        // 3. Rolling VWAP, RVOL, signed volume and absolute time-bar imbalance.
+        // 3. Rolling VWAP, RVOL, signed volume, time-bar imbalance, downside deviation, and illiquidity spike.
         var vwapWindow = Math.Min(20, n);
         var vwapStart = n - vwapWindow;
         decimal pvSum = 0m;
@@ -652,6 +654,10 @@ public static class TechnicalIndicatorCalculator
         decimal cvdDeltaSum = 0m;
         decimal absOrderImbalanceSum = 0m;
         decimal aggressorVolSum = 0m;
+        double downsideSqSum = 0.0;
+        var downsideCount = 0;
+        decimal priorIlliqSum = 0m;
+        var priorIlliqCount = 0;
 
         for (var i = vwapStart; i < n; i++)
         {
@@ -675,6 +681,31 @@ public static class TechnicalIndicatorCalculator
                 absOrderImbalanceSum += Math.Abs(delta);
                 aggressorVolSum += b.Volume;
             }
+
+            if (i > 0)
+            {
+                var prevClose = bars[i - 1].ClosePrice.Value;
+                if (prevClose > 0m)
+                {
+                    var barRetBps = (b.ClosePrice.Value - prevClose) / prevClose * 10_000m;
+                    if (barRetBps < 0m)
+                    {
+                        downsideSqSum += (double)(barRetBps * barRetBps);
+                        downsideCount++;
+                    }
+                }
+            }
+
+            var barOpen = b.OpenPrice.Value;
+            if (barOpen > 0m && b.Volume > 0m)
+            {
+                var illiq = Math.Abs(b.ClosePrice.Value - barOpen) / barOpen / b.Volume;
+                if (i < n - 1)
+                {
+                    priorIlliqSum += illiq;
+                    priorIlliqCount++;
+                }
+            }
         }
 
         var vwap = volSum > 0m ? pvSum / volSum : typicalSum / vwapWindow;
@@ -689,6 +720,18 @@ public static class TechnicalIndicatorCalculator
         var absoluteBarVolumeImbalance = aggressorVolSum > 0m
             ? Math.Clamp(Math.Round(absOrderImbalanceSum / aggressorVolSum, 4), 0m, 1m)
             : 0m;
+        var downsideDeviationBps = downsideCount > 0
+            ? Math.Round((decimal)Math.Sqrt(downsideSqSum / downsideCount), 4)
+            : 0m;
+        var lastBar = bars[^1];
+        var lastBarOpen = lastBar.OpenPrice.Value;
+        var lastBarIlliq = (lastBarOpen > 0m && lastBar.Volume > 0m)
+            ? Math.Abs(lastBar.ClosePrice.Value - lastBarOpen) / lastBarOpen / lastBar.Volume
+            : 0m;
+        var priorAvgIlliq = priorIlliqCount > 0 ? priorIlliqSum / priorIlliqCount : 0m;
+        var illiquiditySpikeRatio = (priorAvgIlliq > 0m && lastBar.Volume > 0m)
+            ? Math.Clamp(Math.Round(lastBarIlliq / priorAvgIlliq, 4), 0.10m, 10.0m)
+            : 1.0m;
 
         return new TechnicalIndicatorSnapshot(
             Math.Round(atr, 8),
@@ -701,7 +744,9 @@ public static class TechnicalIndicatorCalculator
             vwapDeviationBps,
             rvol,
             cvdImbalance,
-            absoluteBarVolumeImbalance)
+            absoluteBarVolumeImbalance,
+            downsideDeviationBps,
+            illiquiditySpikeRatio)
         {
             IsWilderReady = n - 1 >= period,
             IsAdxReady = dxCount >= period

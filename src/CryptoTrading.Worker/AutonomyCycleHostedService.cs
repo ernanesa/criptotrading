@@ -75,6 +75,9 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, string> positionOriginatingStrategy = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, decimal> positionLifetimePeakProfitBps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (decimal CostNotional, decimal Quantity)> positionCostBases = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> positionOpenedAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, decimal> lastKnownUnrealizedProfitBpsBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> lastClosedTradeWasStopLossBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarWakeupUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
@@ -1061,8 +1064,10 @@ internal sealed class AutonomyCycleHostedService(
         string? originatingStrat = null;
         if (hasOpenExposure && accounting.HasPositionBasis && accounting.PositionCostNotional > 0m)
         {
+            positionOpenedAtBySymbol.TryAdd(symbol, valuationTimeProvider.GetUtcNow());
             positionCostBases[symbol] = (accounting.PositionCostNotional, baseQuantity);
             var curProfitBps = (portfolio.GrossExposureNotional - accounting.PositionCostNotional) / accounting.PositionCostNotional * 10_000m;
+            lastKnownUnrealizedProfitBpsBySymbol[symbol] = curProfitBps;
 
             lifetimePeakBps = positionLifetimePeakProfitBps.AddOrUpdate(
                 symbol,
@@ -1080,9 +1085,12 @@ internal sealed class AutonomyCycleHostedService(
         }
         else if (!hasOpenExposure)
         {
+            positionOpenedAtBySymbol.TryRemove(symbol, out _);
             if (positionCostBases.TryRemove(symbol, out _))
             {
                 lastClosedTradeAtBySymbol[symbol] = valuationTimeProvider.GetUtcNow();
+                var lastUnrealized = lastKnownUnrealizedProfitBpsBySymbol.TryRemove(symbol, out var prevBps) ? prevBps : 0m;
+                lastClosedTradeWasStopLossBySymbol[symbol] = lastUnrealized <= -50.0m;
             }
             positionLifetimePeakProfitBps.TryRemove(symbol, out _);
             positionOriginatingStrategy.TryRemove(symbol, out _);
@@ -1329,7 +1337,10 @@ internal sealed class AutonomyCycleHostedService(
                 CanaryBasketTrendSlope: canaryBasketTrendSlope,
                 MlTimeframe: runtime.AutonomyInterval.Trim(),
                 StopRiskSizing: runtime.ResolveStopRiskSizing(),
-                AllowTechnicalFallback: runtime.AutonomyAllowTechnicalFallback);
+                AllowTechnicalFallback: runtime.AutonomyAllowTechnicalFallback,
+                PositionOpenedAtUtc: positionOpenedAtBySymbol.TryGetValue(symbol, out var openedAtUtc) ? openedAtUtc : null,
+                LastClosedTradeWasStopLoss: lastClosedTradeWasStopLossBySymbol.TryGetValue(symbol, out var wasStop) && wasStop,
+                PerpetualFundingRateBps: null);
 
             if (durablePerformances is not null)
             {

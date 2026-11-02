@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Nodes;
 using CryptoTrading.Backtesting.Autonomy;
 using CryptoTrading.Backtesting.Strategies;
 using CryptoTrading.Domain.Architecture;
@@ -2467,5 +2468,248 @@ public sealed class AdaptiveDecisionCycleTests
 
         Assert.True(result.IsNoTrade);
         Assert.NotEqual(OrderSide.Buy, result.RecommendedSide);
+    }
+
+    [Fact]
+    public void TimeDecayRoiLocksProfitWhenHoldingDurationExceedsThreshold()
+    {
+        var cycle = CreateCycle();
+        var bars = Bars(
+            84_000m, 84_020m, 84_040m, 84_060m, 84_080m,
+            84_100m, 84_120m, 84_140m, 84_160m, 84_180m,
+            84_200m, 84_220m, 84_240m, 84_260m, 84_280m,
+            84_300m, 84_320m, 84_340m, 84_360m, 84_380m,
+            84_400m, 84_400m, 84_400m, 84_400m);
+        // Cost basis 10.0000m, gross exposure 10.1200m (+120 bps gain)
+        var portfolio = CreatePortfolio(10.1200m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt",
+            PositionOpenedAtUtc: TestTime.AddMinutes(-60))
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_399m),
+                new Price(84_401m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.40m,
+                askQuantity: 0.60m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+        Assert.Contains("TIME_DECAY_ROI_TAKE_PROFIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TimeDecayRoiNeverExitsBelowBreakEvenFloor()
+    {
+        var cycle = CreateCycle();
+        var bars = Bars(
+            84_000m, 84_010m, 84_020m, 84_030m, 84_040m,
+            84_050m, 84_060m, 84_070m, 84_080m, 84_090m,
+            84_100m, 84_110m, 84_120m, 84_130m, 84_140m,
+            84_150m, 84_160m, 84_170m, 84_180m, 84_190m,
+            84_200m, 84_200m, 84_200m, 84_200m);
+        // Cost basis 10.0000m, gross exposure 10.0250m (+25 bps gain, below break-even floor)
+        var portfolio = CreatePortfolio(10.0250m) with { PositionCostNotional = 10.0000m };
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            portfolio,
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 12m,
+            EvaluatedAtUtc: TestTime,
+            PositionOriginatingStrategyId: "mean-reversion-btcusdt",
+            PositionOpenedAtUtc: TestTime.AddMinutes(-180))
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_199m),
+                new Price(84_201m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.00001m,
+                bidQuantity: 0.40m,
+                askQuantity: 0.60m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.DoesNotContain("TIME_DECAY_ROI_TAKE_PROFIT", result.DecisionTraceJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PostStopLossQuarantineBlocksEntryBetween30And60MinutesWithoutStrongReclamation()
+    {
+        var cycle = CreateCycle();
+        var request = CreateDispatchableRequest() with
+        {
+            LastClosedTradeAtUtc = TestTime.AddMinutes(-45),
+            LastClosedTradeWasStopLoss = true,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(99.979m),
+                new Price(99.981m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 10m,
+                askQuantity: 10m) // orderBookImbalance = 0.0m < 0.20m, failing strong structure reclamation
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("POST_STOP_LOSS_QUARANTINE_ACTIVE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void PostStopLossQuarantineAllowsEntryWhenStrongBullishStructureIsReclaimed()
+    {
+        var cycle = CreateCycle();
+        var baseBars = WithWilderWarmup(Bars(100m, 100.1m, 100.2m, 100.3m, 100.2m, 100.38m));
+        var bars = baseBars
+            .Select(b => new CloseBar(b.Symbol, b.CloseTimeUtc, b.ClosePrice.Value,
+                volume: 100m, takerBuyBaseVolume: 70m, quoteVolume: b.ClosePrice.Value * 100m, numberOfTrades: 50))
+            .ToArray();
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LastClosedTradeAtUtc = TestTime.AddMinutes(-45),
+            LastClosedTradeWasStopLoss = true,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(100.37m),
+                new Price(100.39m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 15m,
+                askQuantity: 5m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.False(result.IsNoTrade, result.NoTradeReason);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.True(result.RecommendedNotional >= 10m);
+    }
+
+    [Fact]
+    public void BlocksEntryOnAmihudIlliquiditySpikeWithoutOrderBookSupport()
+    {
+        var cycle = CreateCycle();
+        var baseBars = CreateMeanReversionEntryBars(BtcUsdt, volume: 100m, takerBuyBaseVolume: 50m);
+        var bars = baseBars
+            .Select((b, idx) => idx == baseBars.Length - 1
+                ? new CloseBar(b.Symbol, b.CloseTimeUtc, 84_170m, openPrice: 84_200m, highPrice: 84_200m, lowPrice: 84_170m,
+                               volume: 20m, takerBuyBaseVolume: 10m, quoteVolume: 84_170m * 20m, numberOfTrades: 50)
+                : new CloseBar(b.Symbol, b.CloseTimeUtc, b.ClosePrice.Value, openPrice: b.ClosePrice.Value - 0.01m, highPrice: b.ClosePrice.Value + 0.02m, lowPrice: b.ClosePrice.Value - 0.02m,
+                               volume: 100m, takerBuyBaseVolume: 50m, quoteVolume: b.ClosePrice.Value * 100m, numberOfTrades: 50))
+            .ToArray();
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_169m),
+                new Price(84_171m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.00001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 5m,
+                askQuantity: 5m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("AMIHUD_ILLIQUIDITY_SPIKE_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BlocksEntryWhenPerpetualFundingShowsExtremeLongCrowding()
+    {
+        var cycle = CreateCycle();
+        var baseBars = WithWilderWarmup(Bars(100m, 100.1m, 100.2m, 100.3m, 100.2m, 100.38m));
+        var bars = baseBars
+            .Select(b => new CloseBar(b.Symbol, b.CloseTimeUtc, b.ClosePrice.Value,
+                volume: 100m, takerBuyBaseVolume: 70m, quoteVolume: b.ClosePrice.Value * 100m, numberOfTrades: 50))
+            .ToArray();
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            PerpetualFundingRateBps = 6.0m,
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(100.37m),
+                new Price(100.39m),
+                10_000m,
+                TestTime,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 15m,
+                askQuantity: 5m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("EXTREME_LONG_FUNDING_CROWDING_BLOCKED", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void BoostsDecisionConfidenceOnNegativeFundingShortSqueeze()
+    {
+        var allocator = new ContextualMetaAllocator();
+        allocator.RecordReward("mean-reversion-btcusdt", MarketRegime.MeanRevertingRange, -0.0010m);
+        var cycle = CreateCycle(allocator);
+        var baseRequest = CreateDispatchableRequest() with
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(99.979m),
+                new Price(99.981m),
+                10_000m,
+                TestTime,
+                isComplete: true,
+                quantityStepSize: 0.0001m,
+                priceTickSize: 0.01m,
+                bidQuantity: 12.5m,
+                askQuantity: 7.5m) // orderBookImbalance = +0.25m >= 0.15m
+        };
+        var requestWithFunding = baseRequest with
+        {
+            PerpetualFundingRateBps = -3.0m
+        };
+
+        var baseResult = cycle.Evaluate(baseRequest);
+        var fundingResult = cycle.Evaluate(requestWithFunding);
+
+        Assert.False(baseResult.IsNoTrade);
+        Assert.False(fundingResult.IsNoTrade);
+        var baseTrace = JsonNode.Parse(baseResult.DecisionTraceJson)!;
+        var fundingTrace = JsonNode.Parse(fundingResult.DecisionTraceJson)!;
+        var baseConf = (decimal)baseTrace["DecisionConfidence"]!;
+        var fundingConf = (decimal)fundingTrace["DecisionConfidence"]!;
+        Assert.True(fundingConf > baseConf, $"fundingConf={fundingConf}, baseConf={baseConf}");
+        Assert.True(fundingConf - baseConf >= 0.025m, $"delta={fundingConf - baseConf}");
+    }
+
+    [Fact]
+    public void TechnicalIndicatorCalculatorComputesDownsideDeviationFromNegativeReturns()
+    {
+        var bars = Bars(100m, 99.5m, 99.5m, 99.0m, 99.0m);
+        var snapshot = TechnicalIndicatorCalculator.Evaluate(bars);
+        Assert.True(snapshot.DownsideDeviationBps > 0m);
     }
 }

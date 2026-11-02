@@ -51,7 +51,10 @@ public sealed record AdaptiveDecisionCycleRequest(
     decimal? CanaryBasketTrendSlope = null,
     string MlTimeframe = "1m",
     StopRiskSizingPolicy? StopRiskSizing = null,
-    bool AllowTechnicalFallback = false)
+    bool AllowTechnicalFallback = false,
+    DateTimeOffset? PositionOpenedAtUtc = null,
+    bool LastClosedTradeWasStopLoss = false,
+    decimal? PerpetualFundingRateBps = null)
 {
     public void Validate()
     {
@@ -73,6 +76,11 @@ public sealed record AdaptiveDecisionCycleRequest(
         if (EvaluatedAtUtc.Offset != TimeSpan.Zero)
         {
             throw new ArgumentException("Evaluation time must be UTC.", nameof(EvaluatedAtUtc));
+        }
+
+        if (PositionOpenedAtUtc is { Offset: not { Ticks: 0 } })
+        {
+            throw new ArgumentException("Position opened time must be UTC.", nameof(PositionOpenedAtUtc));
         }
 
         if (LastClosedTradeAtUtc is { Offset: not { Ticks: 0 } })
@@ -363,6 +371,24 @@ public sealed class AdaptiveDecisionCycle
         var maxTargetProfitBps = Math.Max(minTargetProfitBps, Math.Max(250.0m, effectiveVolBps * 4.5m));
         var targetProfitBps = Math.Clamp(effectiveVolBps * 3.5m, minTargetProfitBps, maxTargetProfitBps);
 
+        var holdingMinutes = hasOpenPosition &&
+                             request.PositionOpenedAtUtc is { } openedAt &&
+                             request.EvaluatedAtUtc > openedAt
+            ? (decimal)(request.EvaluatedAtUtc - openedAt).TotalMinutes
+            : 0m;
+
+        var timeDecayMultiplier = holdingMinutes <= 15m
+            ? 1.00m
+            : holdingMinutes <= 45m
+                ? 1.00m - (0.30m * ((holdingMinutes - 15m) / 30m))
+                : holdingMinutes <= 120m
+                    ? 0.70m - (0.25m * ((holdingMinutes - 45m) / 75m))
+                    : 0.45m;
+
+        var decayedTargetProfitBps = Math.Max(
+            Math.Max(breakEvenFloorBps + 10.0m, minProfitBps),
+            Math.Round(targetProfitBps * timeDecayMultiplier, 2));
+
         var dynamicNoiseLossBps = bars.Count >= 20
             ? Math.Clamp(effectiveVolBps * 1.0m, 50.0m, 120.0m)
             : 60.0m;
@@ -537,6 +563,22 @@ public sealed class AdaptiveDecisionCycle
                 SelectedSide = OrderSide.Sell,
                 SelectedNotional = request.Portfolio.GrossExposureNotional,
                 OrchestrationReason = $"TAKE_PROFIT_EXPANDED_TARGET: Locking {currentUnrealizedProfitBps:F1} bps profit on expanded target in {regime.Regime}.",
+                IsNoTrade = false
+            };
+        }
+        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
+                 bars.Count >= 20 &&
+                 request.Portfolio.GrossExposureNotional > minTradableExposure &&
+                 holdingMinutes >= 15m &&
+                 currentUnrealizedProfitBps >= decayedTargetProfitBps &&
+                 (orderBookImbalance <= 0.05m || regime.Regime != MarketRegime.BullTrend))
+        {
+            orchestration = orchestration with
+            {
+                SelectedStrategyId = exitStrategyId,
+                SelectedSide = OrderSide.Sell,
+                SelectedNotional = request.Portfolio.GrossExposureNotional,
+                OrchestrationReason = $"TIME_DECAY_ROI_TAKE_PROFIT: Locking {currentUnrealizedProfitBps:F1} bps profit after {holdingMinutes:F0}m holding (decayed target {decayedTargetProfitBps:F1} bps from {targetProfitBps:F1} bps).",
                 IsNoTrade = false
             };
         }
@@ -725,6 +767,7 @@ public sealed class AdaptiveDecisionCycle
             !orchestration.OrchestrationReason.StartsWith("CROSS_ASSET_LEADER_SHOCK_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("CONFLUENCE_BREAKDOWN_DEFENSIVE_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("BREAK_EVEN_PROFIT_LOCK", StringComparison.Ordinal) &&
+            !orchestration.OrchestrationReason.StartsWith("TIME_DECAY_ROI_TAKE_PROFIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("TRAILING_STOP_CHANDELIER_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("PROTECTIVE_STOP_LOSS_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("HIGH_VOLATILITY_CHOP_RISK_EXIT", StringComparison.Ordinal) &&
@@ -773,7 +816,12 @@ public sealed class AdaptiveDecisionCycle
         var bookAlignment = isEntry ? orderBookImbalance : -orderBookImbalance;
         var bookBonus = Math.Clamp(bookAlignment * 0.15m, -0.22m, 0.10m);
         var leaderBonus = isEntry && hasCrossAssetLeaderMomentum ? 0.035m : 0m;
-        var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus + leaderBonus, 0.05m, 0.99m);
+        var fundingBonus = isEntry && request.PerpetualFundingRateBps is { } fundingBps
+            ? (fundingBps <= -2.0m && orderBookImbalance >= 0.15m && indicators.CvdImbalance >= 0m
+                ? 0.05m
+                : (fundingBps >= 3.5m ? -0.04m : 0m))
+            : 0m;
+        var baseConfidence = Math.Clamp(regime.Confidence + perfBonus + bookBonus + leaderBonus + fundingBonus, 0.05m, 0.99m);
         var decisionConfidence = isEntry && bars.Count >= 20 && mlEval.HasCalibratedProbability
             ? Math.Round(Math.Clamp((baseConfidence * 0.58m) + (mlEval.MlWinProbability * 0.42m), 0.05m, 0.99m), 4)
             : Math.Round(baseConfidence, 4);
@@ -813,6 +861,33 @@ public sealed class AdaptiveDecisionCycle
                     mlEval: mlEval,
                     expectedNetEdgeBps: expectedNetEdgeBps,
                     request: request);
+            }
+
+            if (isEntry &&
+                request.LastClosedTradeWasStopLoss &&
+                request.LastClosedTradeAtUtc is { } lastStopClose &&
+                lastStopClose > DateTimeOffset.MinValue &&
+                (request.EvaluatedAtUtc - lastStopClose) < TimeSpan.FromMinutes(60))
+            {
+                var hasStrongStructureReclamation = regime.Regime == MarketRegime.BullTrend &&
+                                                    regime.TrendSlopeRate >= 0.00010m &&
+                                                    indicators.Rsi >= 52m &&
+                                                    indicators.VwapDeviationBps > 0m &&
+                                                    orderBookImbalance >= 0.20m &&
+                                                    indicators.CvdImbalance >= 0.05m;
+                if (!hasStrongStructureReclamation)
+                {
+                    return CreateNoTradeResult(
+                        regime,
+                        orchestration.Candidates,
+                        null,
+                        "POST_STOP_LOSS_QUARANTINE_ACTIVE",
+                        decisionConfidence: decisionConfidence,
+                        orderBookImbalance: orderBookImbalance,
+                        mlEval: mlEval,
+                        expectedNetEdgeBps: expectedNetEdgeBps,
+                        request: request);
+                }
             }
 
             if (isEntry && (mlEval.IsSsaStructuralBreakdown || mlEval.IsNegativePriceShock))
@@ -862,6 +937,22 @@ public sealed class AdaptiveDecisionCycle
             }
 
             if (isEntry &&
+                request.PerpetualFundingRateBps is >= 5.0m &&
+                indicators.Rsi >= 68m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "EXTREME_LONG_FUNDING_CROWDING_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry &&
                 bars.Count >= 20 &&
                 !string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId) &&
                 !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase) &&
@@ -889,6 +980,24 @@ public sealed class AdaptiveDecisionCycle
                     orchestration.Candidates,
                     null,
                     "THIN_RELATIVE_VOLUME_BLOCKED",
+                    decisionConfidence: decisionConfidence,
+                    orderBookImbalance: orderBookImbalance,
+                    mlEval: mlEval,
+                    expectedNetEdgeBps: expectedNetEdgeBps,
+                    request: request);
+            }
+
+            if (isEntry &&
+                bars.Count >= 20 &&
+                bars[^1].Volume > 0m &&
+                indicators.IlliquiditySpikeRatio >= 3.5m &&
+                orderBookImbalance < 0.15m)
+            {
+                return CreateNoTradeResult(
+                    regime,
+                    orchestration.Candidates,
+                    null,
+                    "AMIHUD_ILLIQUIDITY_SPIKE_BLOCKED",
                     decisionConfidence: decisionConfidence,
                     orderBookImbalance: orderBookImbalance,
                     mlEval: mlEval,
@@ -1133,6 +1242,10 @@ public sealed class AdaptiveDecisionCycle
                         : (decisionConfidence < 0.70m || (mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.45m))
                             ? 0.85m
                             : (!mlEval.HasCalibratedProbability && request.AllowTechnicalFallback ? 1.00m : 1.06m);
+            if (indicators.DownsideDeviationBps > 0m && indicators.AtrBps > 0m && indicators.DownsideDeviationBps >= indicators.AtrBps * 0.85m)
+            {
+                convictionMultiplier = Math.Round(convictionMultiplier * 0.85m, 2);
+            }
             targetNotional = Math.Clamp(
                 Math.Round(baseTarget * convictionMultiplier, 2),
                 Math.Min(10m, maxEntryOrderNotional),
@@ -1419,6 +1532,12 @@ public sealed class AdaptiveDecisionCycle
             RelativeVolume = indicators.RelativeVolume,
             CvdImbalance = indicators.CvdImbalance,
             AbsoluteBarVolumeImbalance = indicators.AbsoluteBarVolumeImbalance,
+            DownsideDeviationBps = indicators.DownsideDeviationBps,
+            IlliquiditySpikeRatio = indicators.IlliquiditySpikeRatio,
+            HoldingMinutes = hasOpenPosition && request.PositionOpenedAtUtc is not null ? (decimal?)Math.Round(holdingMinutes, 2) : null,
+            DecayedTargetProfitBps = hasOpenPosition ? (decimal?)decayedTargetProfitBps : null,
+            LastClosedTradeWasStopLoss = request.LastClosedTradeWasStopLoss,
+            PerpetualFundingRateBps = request.PerpetualFundingRateBps,
             MaxOpenPositionCorrelation = request.MaxOpenPositionCorrelation,
             LeaderReturnBps = request.LeaderReturnBps,
             LeaderRegime = request.LeaderRegime?.ToString(),
@@ -1516,6 +1635,8 @@ public sealed class AdaptiveDecisionCycle
             EthBtcSpreadReturnBps = request?.EthBtcSpreadReturnBps,
             CanaryBasketReturnBps = request?.CanaryBasketReturnBps,
             CanaryBasketTrendSlope = request?.CanaryBasketTrendSlope,
+            LastClosedTradeWasStopLoss = request?.LastClosedTradeWasStopLoss ?? false,
+            PerpetualFundingRateBps = request?.PerpetualFundingRateBps,
             Candidates = candidates.Select(c => new
             {
                 c.StrategyId,
