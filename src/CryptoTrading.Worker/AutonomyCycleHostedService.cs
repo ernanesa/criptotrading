@@ -1328,7 +1328,8 @@ internal sealed class AutonomyCycleHostedService(
                 CanaryBasketReturnBps: canaryBasketReturnBps,
                 CanaryBasketTrendSlope: canaryBasketTrendSlope,
                 MlTimeframe: runtime.AutonomyInterval.Trim(),
-                StopRiskSizing: runtime.ResolveStopRiskSizing());
+                StopRiskSizing: runtime.ResolveStopRiskSizing(),
+                AllowTechnicalFallback: runtime.AutonomyAllowTechnicalFallback);
 
             if (durablePerformances is not null)
             {

@@ -50,7 +50,8 @@ public sealed record AdaptiveDecisionCycleRequest(
     decimal? CanaryBasketReturnBps = null,
     decimal? CanaryBasketTrendSlope = null,
     string MlTimeframe = "1m",
-    StopRiskSizingPolicy? StopRiskSizing = null)
+    StopRiskSizingPolicy? StopRiskSizing = null,
+    bool AllowTechnicalFallback = false)
 {
     public void Validate()
     {
@@ -583,12 +584,12 @@ public sealed class AdaptiveDecisionCycle
         var trendPerf = _metaAllocator.GetPerformance(trendFollowingId, regime.Regime);
         var isTrendNegativeExpectancy = (trendPerf is { ObservationCount: >= 5, AverageReward: < 0m }) ||
                                         (trendPerf is { ObservationCount: >= 3, AverageReward: <= -0.0020m });
-        if (!hasOpenPosition && !mlEval.HasCalibratedProbability)
+        if (!hasOpenPosition && !mlEval.HasCalibratedProbability && !request.AllowTechnicalFallback)
             return CreateNoTradeResult(regime, orchestration.Candidates, null,
                 mlEval.AvailabilityReason ?? "ML_CALIBRATED_ARTIFACT_UNAVAILABLE",
                 orderBookImbalance: orderBookImbalance, mlEval: mlEval, request: request);
 
-        var canRehabilitateTrendConfluence = mlEval.MlWinProbability >= 0.51m &&
+        var canRehabilitateTrendConfluence = (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability >= 0.51m : true) &&
                                              orderBookImbalance >= 0.35m &&
                                              request.MarketBreadthRatio is >= 0.60m;
 
@@ -609,7 +610,7 @@ public sealed class AdaptiveDecisionCycle
             indicators.Rsi >= 48m &&
             indicators.VwapDeviationBps >= -10m &&
             indicators.RelativeVolume >= 0.15m &&
-            mlEval.MlWinProbability >= 0.51m &&
+            (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability >= 0.51m : true) &&
             (orderBookImbalance >= 0.25m ||
              (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m) ||
              (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.10m && microPriceDivergenceBps >= 0.15m) ||
@@ -628,7 +629,9 @@ public sealed class AdaptiveDecisionCycle
                 SelectedStrategyId = trendFollowingId,
                 SelectedSide = OrderSide.Buy,
                 SelectedNotional = request.EntryTargetNotional,
-                OrchestrationReason = $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}, MicroPriceDiv={microPriceDivergenceBps:+0.00;-0.00}bps, LeaderRet={request.LeaderReturnBps ?? 0m:+0.0;-0.0}bps) in {regime.Regime}.",
+                OrchestrationReason = mlEval.HasCalibratedProbability
+                    ? $"ML_ORDERBOOK_CONFLUENCE_ENTRY: High-confidence bullish continuation (ML={mlEval.MlWinProbability:P1}, Imbalance={orderBookImbalance:+0.00;-0.00}, MicroPriceDiv={microPriceDivergenceBps:+0.00;-0.00}bps, LeaderRet={request.LeaderReturnBps ?? 0m:+0.0;-0.0}bps) in {regime.Regime}."
+                    : $"TECHNICAL_CONFLUENCE_ENTRY: Technical bullish continuation (Imbalance={orderBookImbalance:+0.00;-0.00}, MicroPriceDiv={microPriceDivergenceBps:+0.00;-0.00}bps, LeaderRet={request.LeaderReturnBps ?? 0m:+0.0;-0.0}bps) in {regime.Regime} [ML Fallback].",
                 IsNoTrade = false
             };
         }
@@ -785,10 +788,14 @@ public sealed class AdaptiveDecisionCycle
         var roundTripCostBps = roundTripFeeBps + expectedSlippageCostBps;
         var expectedGainBps = Math.Max(targetProfitBps, effectiveVolBps * 3.5m);
         var expectedLossBps = protectiveStopLossBps;
-        var pWin = isEntry && mlEval.HasCalibratedProbability
-            ? Math.Clamp((decisionConfidence * 0.50m) + (mlEval.MlWinProbability * 0.50m), 0.05m, 0.95m) : 0m;
-        var expectedNetEdgeBps = isEntry && mlEval.HasCalibratedProbability
-            ? Math.Round((pWin * expectedGainBps) - ((1m - pWin) * expectedLossBps) - roundTripCostBps, 2) : 0m;
+        var pWin = isEntry
+            ? (mlEval.HasCalibratedProbability
+                ? Math.Clamp((decisionConfidence * 0.50m) + (mlEval.MlWinProbability * 0.50m), 0.05m, 0.95m)
+                : Math.Clamp(decisionConfidence, 0.05m, 0.95m))
+            : 0m;
+        var expectedNetEdgeBps = isEntry
+            ? Math.Round((pWin * expectedGainBps) - ((1m - pWin) * expectedLossBps) - roundTripCostBps, 2)
+            : 0m;
 
         if (bars.Count >= 20)
         {
@@ -996,9 +1003,9 @@ public sealed class AdaptiveDecisionCycle
 
             if (isEntry &&
                 (orderBookImbalance <= -0.75m ||
-                 (orderBookImbalance <= -0.45m && mlEval.MlWinProbability < 0.45m && !hasAggressiveTakerDemand) ||
+                 (orderBookImbalance <= -0.45m && (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability < 0.45m : decisionConfidence < 0.65m) && !hasAggressiveTakerDemand) ||
                  (orchestration.SelectedStrategyId is not null && !orchestration.SelectedStrategyId.StartsWith("mean-reversion", StringComparison.OrdinalIgnoreCase) &&
-                  (mlEval.MlWinProbability < 0.45m || (orderBookImbalance <= -0.20m && mlEval.MlWinProbability < 0.50m && !hasAggressiveTakerDemand)))))
+                  ((mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.45m) || (orderBookImbalance <= -0.20m && (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability < 0.50m : decisionConfidence < 0.65m) && !hasAggressiveTakerDemand)))))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -1014,7 +1021,7 @@ public sealed class AdaptiveDecisionCycle
 
             if (isEntry && regime.Regime == MarketRegime.MeanRevertingRange &&
                 isMomentumEntry &&
-                (mlEval.MlWinProbability < 0.53m || orderBookImbalance < 0.10m))
+                ((mlEval.HasCalibratedProbability ? mlEval.MlWinProbability < 0.53m : decisionConfidence < 0.70m) || orderBookImbalance < 0.10m))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -1028,7 +1035,7 @@ public sealed class AdaptiveDecisionCycle
                     request: request);
             }
 
-            if (isEntry && (decisionConfidence < 0.60m || mlEval.MlWinProbability < 0.50m))
+            if (isEntry && (decisionConfidence < 0.60m || (mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.50m)))
             {
                 return CreateNoTradeResult(
                     regime,
@@ -1067,7 +1074,7 @@ public sealed class AdaptiveDecisionCycle
                  (regime.Regime == MarketRegime.BullTrend &&
                   regime.TrendSlopeRate >= 0.00018m &&
                   orderBookImbalance >= 0.25m &&
-                  mlEval.MlWinProbability >= 0.60m)))
+                  (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability >= 0.60m : true))))
             {
                 var unrealizedProfitBps = (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional)
                     / request.Portfolio.PositionCostNotional * 10_000m;
@@ -1117,15 +1124,15 @@ public sealed class AdaptiveDecisionCycle
                 : request.RiskPolicy.MaxOrderNotional;
             var baseTarget = Math.Min(request.EntryTargetNotional, maxEntryOrderNotional);
             // Conviction heuristic, not an estimated Kelly fraction.
-            var convictionMultiplier = (decisionConfidence >= 0.85m && mlEval.MlWinProbability >= 0.72m && orderBookImbalance >= 0.30m && microPriceDivergenceBps >= 0.35m)
+            var convictionMultiplier = (decisionConfidence >= 0.85m && mlEval.HasCalibratedProbability && mlEval.MlWinProbability >= 0.72m && orderBookImbalance >= 0.30m && microPriceDivergenceBps >= 0.35m)
                 ? 1.55m
-                : (decisionConfidence >= 0.82m && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
+                : (decisionConfidence >= 0.82m && mlEval.HasCalibratedProbability && mlEval.MlWinProbability >= 0.65m && orderBookImbalance >= 0.25m)
                     ? 1.35m
-                    : (decisionConfidence >= 0.74m && mlEval.MlWinProbability >= 0.54m)
+                    : (decisionConfidence >= 0.74m && mlEval.HasCalibratedProbability && mlEval.MlWinProbability >= 0.54m)
                         ? 1.18m
-                        : (decisionConfidence < 0.70m || mlEval.MlWinProbability < 0.45m)
+                        : (decisionConfidence < 0.70m || (mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.45m))
                             ? 0.85m
-                            : 1.06m;
+                            : (!mlEval.HasCalibratedProbability && request.AllowTechnicalFallback ? 1.00m : 1.06m);
             targetNotional = Math.Clamp(
                 Math.Round(baseTarget * convictionMultiplier, 2),
                 Math.Min(10m, maxEntryOrderNotional),
@@ -1213,7 +1220,7 @@ public sealed class AdaptiveDecisionCycle
 
         // 8. Adaptive Execution Tactic Selection
         var isUrgentBreakout = isMomentumEntry &&
-            (mlEval.MlWinProbability >= 0.65m ||
+            ((mlEval.HasCalibratedProbability && mlEval.MlWinProbability >= 0.65m) ||
              volBps >= 20.0m ||
              (request.ExecutionMarket is not null && request.ExecutionMarket.OrderBookImbalance >= 0.30m));
         var urgency = orchestration.SelectedSide == OrderSide.Sell
@@ -1386,6 +1393,7 @@ public sealed class AdaptiveDecisionCycle
             MlModelTargetSide = mlEval.ModelTargetSide?.ToString(),
             StopRiskSizingVersion = request.StopRiskSizing?.Version,
             MaximumPlannedLossNotional = request.StopRiskSizing?.MaximumPlannedLossNotional,
+            TechnicalFallbackActive = !mlEval.HasCalibratedProbability && request.AllowTechnicalFallback,
             MlAvailabilityReason = mlEval.AvailabilityReason,
             mlEval.HasSsaEvidence,
             mlEval.IsNegativePriceShock,
@@ -1485,6 +1493,7 @@ public sealed class AdaptiveDecisionCycle
             MlModelTargetSide = mlEval?.ModelTargetSide?.ToString(),
             StopRiskSizingVersion = request?.StopRiskSizing?.Version,
             MaximumPlannedLossNotional = request?.StopRiskSizing?.MaximumPlannedLossNotional,
+            TechnicalFallbackActive = (mlEval?.HasCalibratedProbability ?? false) == false && (request?.AllowTechnicalFallback ?? false),
             MlAvailabilityReason = mlEval?.AvailabilityReason,
             HasSsaEvidence = mlEval?.HasSsaEvidence ?? false,
             IsNegativePriceShock = mlEval?.IsNegativePriceShock ?? false,

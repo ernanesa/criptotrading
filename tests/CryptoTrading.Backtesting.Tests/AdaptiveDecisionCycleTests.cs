@@ -2071,6 +2071,86 @@ public sealed class AdaptiveDecisionCycleTests
         Assert.Equal("ML_CALIBRATED_ARTIFACT_UNAVAILABLE", result.NoTradeReason);
         using var trace = System.Text.Json.JsonDocument.Parse(result.DecisionTraceJson);
         Assert.Equal(System.Text.Json.JsonValueKind.Null, trace.RootElement.GetProperty("IsSsaStructuralBreakdown").ValueKind);
+        Assert.False(trace.RootElement.GetProperty("TechnicalFallbackActive").GetBoolean());
+    }
+
+    [Fact]
+    public void EntersOnTechnicalFallbackWhenMlArtifactIsUnavailableAndTechnicalFallbackAllowed()
+    {
+        var bars = WithWilderWarmup(Bars(Enumerable.Range(0, 25).Select(i => 100m + i * 0.5m).ToArray()));
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            EvaluatedAtUtc = TestTime,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(111.98m), new Price(112.02m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 18m, askQuantity: 2m),
+            AllowTechnicalFallback = true
+        };
+        var result = new AdaptiveDecisionCycle().Evaluate(request);
+        Assert.False(result.IsNoTrade, result.NoTradeReason);
+        Assert.Equal(OrderSide.Buy, result.RecommendedSide);
+        Assert.Equal("trend-following-btcusdt", result.SelectedStrategyId);
+        Assert.Equal(500m, result.RecommendedNotional); // Fallback caps conviction multiplier to neutral 1.00m (500 target * 1.0 = 500)
+        using var trace = System.Text.Json.JsonDocument.Parse(result.DecisionTraceJson);
+        Assert.True(trace.RootElement.GetProperty("TechnicalFallbackActive").GetBoolean());
+        Assert.False(trace.RootElement.GetProperty("HasCalibratedProbability").GetBoolean());
+    }
+
+    [Fact]
+    public void TechnicalFallbackFailsClosedOnLowDecisionConfidence()
+    {
+        // Mild trend slope (just above threshold 0.00008) sets BullTrend regime confidence to ~0.80.
+        // With negative perfBonus (-0.25), decision confidence drops to ~0.59 (< 0.60 floor).
+        var bars = WithWilderWarmup(Bars(Enumerable.Range(0, 25).Select(i => 100m + i * 0.0085m).ToArray()));
+        var allocator = new ContextualMetaAllocator();
+        allocator.RecordReward("trend-following-btcusdt", MarketRegime.BullTrend, -0.0020m);
+        allocator.RecordReward("trend-following-btcusdt", MarketRegime.BullTrend, -0.0020m);
+
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            EvaluatedAtUtc = TestTime,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(100.20m), new Price(100.22m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 12.5m, askQuantity: 7.5m), // Imbalance = +0.25 (meets confluence trigger)
+            AllowTechnicalFallback = true
+        };
+        var result = new AdaptiveDecisionCycle(allocator).Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("LOW_DECISION_CONFIDENCE", result.NoTradeReason);
+        using var trace = System.Text.Json.JsonDocument.Parse(result.DecisionTraceJson);
+        Assert.True(trace.RootElement.GetProperty("TechnicalFallbackActive").GetBoolean());
+    }
+
+    [Fact]
+    public void TechnicalFallbackFailsClosedOnAdverseOrderBookImbalance()
+    {
+        var bars = Bars(
+            84_200m, 84_202m, 84_198m, 84_201m, 84_199m, 84_200m,
+            84_201m, 84_199m, 84_200m, 84_202m, 84_198m, 84_200m,
+            84_199m, 84_201m, 84_200m, 84_198m, 84_201m, 84_200m,
+            84_201m, 84_200m, 84_201m, 84_200m, 84_201m, 84_170m);
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            AllowTechnicalFallback: true)
+        {
+            ExecutionMarket = new ExecutionMarketSnapshot(
+                new Price(84_169m),
+                new Price(84_171m),
+                10_000m,
+                TestTime,
+                bidQuantity: 0.05m,
+                askQuantity: 1.95m),
+        };
+        var result = new AdaptiveDecisionCycle().Evaluate(request);
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("ADVERSE_ORDER_BOOK_IMBALANCE", result.NoTradeReason);
+        using var trace = System.Text.Json.JsonDocument.Parse(result.DecisionTraceJson);
+        Assert.True(trace.RootElement.GetProperty("TechnicalFallbackActive").GetBoolean());
     }
 
     [Fact]

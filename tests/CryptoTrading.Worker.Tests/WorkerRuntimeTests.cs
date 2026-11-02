@@ -32,6 +32,7 @@ public sealed class WorkerRuntimeTests
         Assert.False(options.ReconciliationEnabled);
         Assert.False(options.RiskPolicyRequired);
         Assert.Contains("breakout-momentum", options.ResolveQuarantinedStrategies());
+        Assert.True(options.AutonomyAllowTechnicalFallback);
     }
 
     [Fact]

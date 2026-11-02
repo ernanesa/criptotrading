@@ -56,6 +56,9 @@ public sealed class WorkerRuntimeOptions
 
     /// <summary>Autonomy decision mode: "Baseline" (A2), "RegimeAdaptive" (A3), "ContextualAllocation" (A4), "ContinuousLearning" (A5).</summary>
     public string AutonomyEngineMode { get; set; } = "RegimeAdaptive";
+
+    /// <summary>When true, permits technical strategy fallback in RegimeAdaptive mode when no calibrated ML model artifact is loaded.</summary>
+    public bool AutonomyAllowTechnicalFallback { get; set; } = true;
     public string? AutonomyMlArtifactPath { get; set; }
     public string? AutonomyMlArtifactSha256 { get; set; }
     public string? AutonomyStopRiskSizingVersion { get; set; }

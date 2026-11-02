@@ -110,6 +110,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.AutonomyFeeReserveBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_RESERVE_BPS", FeeReservePolicy.DefaultReserveBps);
         options.AutonomyFeeDriftToleranceBps = builder.Configuration.GetValue("WORKER_AUTONOMY_FEE_DRIFT_TOLERANCE_BPS", ExecutionFeeDriftEvaluator.DefaultToleranceBps);
         options.AutonomyEngineMode = builder.Configuration["WORKER_AUTONOMY_ENGINE_MODE"] ?? "RegimeAdaptive";
+        options.AutonomyAllowTechnicalFallback = builder.Configuration.GetValue("WORKER_AUTONOMY_ALLOW_TECHNICAL_FALLBACK", true);
         options.FeeAssetValuationMaxAgeSeconds = builder.Configuration.GetValue("WORKER_FEE_ASSET_VALUATION_MAX_AGE_SECONDS", 30);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
