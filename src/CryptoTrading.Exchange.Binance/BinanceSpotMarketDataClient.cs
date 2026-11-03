@@ -169,7 +169,15 @@ public sealed class BinanceSpotMarketDataClient : IBinanceSpotMarketDataClient
                     }
                     finally
                     {
-                        await enumerator.DisposeAsync().ConfigureAwait(false);
+                        try
+                        {
+                            await enumerator.DisposeAsync().ConfigureAwait(false);
+                        }
+#pragma warning disable CA1031 // Suppress any exception when disposing a cancelled/timed-out transport enumerator
+                        catch (Exception)
+                        {
+                        }
+#pragma warning restore CA1031
                     }
                 }
                 else if (!cancellationToken.IsCancellationRequested)
