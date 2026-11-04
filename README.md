@@ -1,6 +1,6 @@
 # CryptoTrading
 
-Plataforma própria de trading algorítmico de criptomoedas, a ser implementada em .NET 11 + C# 15 no backend e React + TypeScript no frontend.
+Plataforma de pesquisa e trading algorítmico de criptomoedas, destinada a desenvolvedores e pesquisadores que precisam avaliar estratégias e controles de risco. O backend usa .NET 11, C#, ASP.NET Core e PostgreSQL; a interface usa React, TypeScript e Vite.
 
 O projeto será desenvolvido de forma incremental, com prioridade para segurança, pesquisa reproduzível, gestão de risco independente, execução confiável e portabilidade entre provedores de infraestrutura.
 
@@ -15,11 +15,18 @@ O projeto será desenvolvido de forma incremental, com prioridade para seguranç
 
 ## Planejamento
 
-Toda a documentação de produto, arquitetura, Scrum, requisitos, estratégias, riscos, releases e critérios de qualidade está em [`plan/`](plan/README.md).
+Trabalho futuro identificado no código e nas validações:
+
+- Aperfeiçoar o realismo dos backtests, incluindo limitações de execução, custos e fills.
+- Ampliar as evidências de pesquisa e validação fora da amostra antes de qualquer promoção de estratégia.
+- Completar e validar as evidências pré-trade de conta, símbolo e preço, preservando o bloqueio quando estiverem incompletas.
+- Reconciliar as fontes de requisitos e rastreabilidade exigidas por `scripts/validate-traceability.sh`.
+
+Esses itens não representam estimativas de prazo nem autorização para operar.
 
 ## Secrets e primeiro bootstrap
 
-O repositório não contém credenciais. O contrato local para a Binance Spot
+Não inclua credenciais nem dados reais no repositório ou em seu histórico. O contrato local para a Binance Spot
 Testnet está em [`secrets/README.md`](secrets/README.md), o exemplo sem valores
 está em [`.env.example`](.env.example) e o helper de entrada mascarada está em
 [`scripts/init-testnet-secrets.sh`](scripts/init-testnet-secrets.sh). Execute o
@@ -28,12 +35,30 @@ uma nova chave Testnet. A integração pública pode ser verificada com
 [`scripts/test-binance-testnet-public.sh`](scripts/test-binance-testnet-public.sh);
 nenhum teste autenticado deve ocorrer com segredo enviado pelo chat.
 
-O procedimento do bootstrap local está em [`docs/local-development.md`](docs/local-development.md).
-O acompanhamento das tarefas está em [`docs/implementation-checklist.md`](docs/implementation-checklist.md).
-Antes de abrir uma mudança, os gates locais independentes podem ser executados
-em paralelo com [`scripts/test-local-gates.sh`](scripts/test-local-gates.sh);
-o relatório redigido e as limitações do comando estão documentados em
-[`docs/local-quality-gates.md`](docs/local-quality-gates.md).
+## Desenvolvimento local
+
+O SDK exigido está fixado em [`global.json`](global.json). Com o SDK instalado e as dependências restauradas, o smoke test local compila e inicia temporariamente a API em loopback, verificando também respostas fail-closed:
+
+```bash
+dotnet restore CryptoTrading.slnx
+bash scripts/test-api-smoke.sh
+```
+
+O smoke encerra a API ao terminar e executa o build a partir de um diretório temporário; confirme que o SDK selecionado nesse ambiente é compatível com `global.json`. Para manter a API local em execução, em outro terminal, a partir da raiz:
+
+```bash
+dotnet run --project src/CryptoTrading.Api/CryptoTrading.Api.csproj --no-launch-profile --urls http://127.0.0.1:5000
+```
+
+Para iniciar a interface de desenvolvimento, com Node.js 22.12 ou posterior e npm instalados:
+
+```bash
+cd src/CryptoTrading.Web
+npm ci
+npm run dev
+```
+
+O restore e o `npm ci` podem acessar a rede. Para verificações locais adicionais, consulte [`scripts/test-local-gates.sh`](scripts/test-local-gates.sh). Ausência de persistência ou estado durável pode manter a API em condição não pronta; isso não autoriza negociação.
 
 ## Princípios
 
@@ -45,9 +70,9 @@ o relatório redigido e as limitações do comando estão documentados em
 6. Sem permissão de saque nas chaves de trading.
 7. Arquitetura modular e containerizada, local-first e sem dependência de provedor de nuvem.
 
-## Escopo congelado do MVP
+## Escopo e segurança
 
-O primeiro incremento é Binance Spot em BTC/USDT, com uma única baseline Trend Following, paper e Testnet real. Multi-strategy só começa após o R1.0. Não há arbitragem, Futures ou market making no produto comprometido. A expansão para até 20 ativos depende de uma `UniversePolicy` point-in-time, capacidade medida, churn budget e gate explícito.
+O projeto inclui pesquisa de estratégias, backtesting, execução simulada e integração Binance Spot. A presença de código de execução não comprova prontidão operacional. Negociação real ou requisições mutáveis à Testnet exigem autorização humana explícita e todos os controles aplicáveis íntegros.
 
 O RAG é uma ferramenta local do Research Plane, fora do hot path de capital. Ele deve confirmar fontes contra o código/commit atual e nunca autoriza risco, ordens, credenciais ou mudanças externas.
 
@@ -60,7 +85,7 @@ O skill global `context-state-manager` aplica a mesma política, e o RAG é usad
 somente para localizar fontes relevantes por ID/hash antes da confirmação no
 checkout atual.
 
-## Adapter Binance Spot read-only
+## Adapter Binance Spot
 
 O projeto `CryptoTrading.Exchange.Binance` possui duas fronteiras separadas:
 
@@ -69,13 +94,10 @@ O projeto `CryptoTrading.Exchange.Binance` possui duas fronteiras separadas:
 - o cliente autenticado estritamente read-only, usado apenas pelo probe e pela
   reconciliação opt-in, limitado a account, balances, open orders e trades.
 
-Não existem endpoints de submit/cancel de ordens, saques, transferências,
-margin ou Futures no adapter autenticado. O registro autenticado não ocorre por
-default; exige Testnet, `NO_TRADE`, persistência quando aplicável e credenciais
-locais protegidas. Em runtime, a validação rejeita qualquer conta que reporte
-`canWithdraw=true`. Exclusivamente o probe manual de Testnet registra essa
-capacidade para permitir a verificação completa das leituras autenticadas: a
-Testnet não expõe `/sapi` e o cliente continua sem qualquer endpoint mutável.
+O adapter também contém código para submissão e cancelamento de ordens, separado
+do cliente de leitura. Sua existência não autoriza seu uso: as guardas devem
+permanecer fail-closed e nenhuma operação mutável deve ocorrer sem aprovação
+humana explícita.
 
 O registro no host de composição usa `AddBinanceSpotMarketClient`, com
 `BinanceEnvironment.Testnet` como padrão. O endereço da Testnet é
@@ -83,7 +105,4 @@ O registro no host de composição usa `AddBinanceSpotMarketClient`, com
 O cliente valida timeout, endereço absoluto HTTP(S), símbolo ASCII e respostas
 HTTP sem copiar o corpo de erro para exceções ou logs.
 
-Os testes usam `HttpMessageHandler` falso e não fazem chamadas à exchange. A
-única execução externa autorizada é o probe manual
-`scripts/test-binance-testnet-auth-readonly.sh`, que grava apenas relatório
-redigido e mantém o gate em No-Go quando qualquer guarda falha.
+Testes com transportes simulados não comprovam integração real com a exchange.
