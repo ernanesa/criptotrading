@@ -499,6 +499,40 @@ public sealed class BinanceRequestBudgetTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new BinanceRequestBudget("/tmp/unused-quota", new ExtremeFrequencyClock()));
     }
 
+    [Fact]
+#pragma warning disable CA2007, CA2025
+    public async Task ConcurrentDispatchesOnSameScopeAreSerializedByInFlightGate()
+    {
+        using var fixture = new Fixture(weightLimit: 1000);
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        fixture.Handler.AsyncResponse = async _ =>
+        {
+            firstEntered.TrySetResult();
+            await releaseFirst.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("[]") };
+        };
+
+        using var req1 = new HttpRequestMessage(HttpMethod.Get, "v3/ticker/bookTicker?symbol=BTCUSDT");
+        using var req2 = new HttpRequestMessage(HttpMethod.Get, "v3/ticker/bookTicker?symbol=ETHUSDT");
+
+        var task1 = fixture.Budget.SendAsync(fixture.Http, req1, TestContext.Current.CancellationToken);
+        await firstEntered.Task;
+
+        // Second call on same scope while first call is in-flight:
+        var task2 = fixture.Budget.SendAsync(fixture.Http, req2, TestContext.Current.CancellationToken);
+
+        releaseFirst.SetResult();
+        var responses = await Task.WhenAll(task1, task2);
+        Assert.All(responses, r =>
+        {
+            Assert.True(r.IsSuccessStatusCode);
+            r.Dispose();
+        });
+    }
+#pragma warning restore CA2007, CA2025
+
     private sealed class ExtremeFrequencyClock : TimeProvider
     {
         public override long TimestampFrequency => long.MaxValue / 30 + 1;

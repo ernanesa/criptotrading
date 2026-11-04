@@ -169,6 +169,32 @@ public sealed class ExecutionSubmissionGuardTests
         Assert.Equal("PRE_SUBMIT_ACCOUNTING_OR_LOSS_BREAKER", exception.Message);
     }
 
+    [Fact]
+    public async Task GuardAllowsUnvaluedExternalFaucetAssetsWhenIsolateConfiguredUniverseEquityEnabledInTestnet()
+    {
+        await using var supervisor = await ReadySupervisorAsync();
+        var (command, message) = FreshCommand();
+        var account = new GuardAccountClient { ExtraBalances = [new BinanceBalance("BNB", "1", "0"), .. Enumerable.Range(0, 20).Select(i => new BinanceBalance($"OTHER{i}", "0", "0"))] };
+        var runtime = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "TESTNET",
+            IsolateConfiguredUniverseEquity = true,
+            NoTrade = false,
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        };
+
+        var guard = ReadyGuard(supervisor, new GuardMarketClient(), account, runtime);
+        var ex = await Record.ExceptionAsync(() => guard.ValidateAsync(command, message, TestContext.Current.CancellationToken));
+        Assert.Null(ex);
+    }
+
     [Theory]
     [InlineData("stale")]
     [InlineData("future")]

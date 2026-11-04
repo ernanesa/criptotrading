@@ -33,6 +33,40 @@ public sealed class WorkerRuntimeTests
         Assert.False(options.RiskPolicyRequired);
         Assert.Contains("breakout-momentum", options.ResolveQuarantinedStrategies());
         Assert.True(options.AutonomyAllowTechnicalFallback);
+        Assert.False(options.IsolateConfiguredUniverseEquity);
+    }
+
+    [Theory]
+    [InlineData("TESTNET", false)]
+    [InlineData("PAPER", false)]
+    [InlineData("LIVE", true)]
+    public void IsolateConfiguredUniverseEquityRestrictedToTestnetOrPaper(string mode, bool shouldThrow)
+    {
+        var options = new WorkerRuntimeOptions
+        {
+            ExecutionMode = mode,
+            IsolateConfiguredUniverseEquity = true,
+            NoTrade = mode == "PAPER",
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            TestnetExecutionAcknowledged = mode == "TESTNET",
+            TestnetOrderExecutionEnabled = mode == "TESTNET",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        };
+
+        if (shouldThrow)
+        {
+            var ex = Assert.Throws<OptionsValidationException>(() => options.Validate());
+            Assert.Contains("WORKER_ISOLATE_CONFIGURED_UNIVERSE_EQUITY is only permitted when WORKER_EXECUTION_MODE is TESTNET or PAPER.", ex.Failures);
+        }
+        else
+        {
+            options.Validate();
+            Assert.True(options.IsolateConfiguredUniverseEquity);
+        }
     }
 
     [Fact]

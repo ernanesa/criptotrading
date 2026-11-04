@@ -112,6 +112,12 @@ public sealed class WorkerRuntimeOptions
 
     public string AutonomyInterval { get; set; } = "1m";
 
+    /// <summary>
+    /// When true in TESTNET or PAPER mode, restricts portfolio equity valuation and risk context
+    /// to the configured quote asset and autonomy symbol universe, ignoring external faucet balances.
+    /// </summary>
+    public bool IsolateConfiguredUniverseEquity { get; set; }
+
     /// <summary>Comma or whitespace-separated list of strategies quarantined from opening new entries due to negative expectancy.</summary>
     public string QuarantinedStrategies { get; set; } = "breakout-momentum";
 
@@ -186,6 +192,12 @@ public sealed class WorkerRuntimeOptions
         _ = ResolveStopRiskSizing();
         var isPaper = string.Equals(ExecutionMode, "PAPER", StringComparison.OrdinalIgnoreCase);
         var isTestnet = string.Equals(ExecutionMode, "TESTNET", StringComparison.OrdinalIgnoreCase);
+        if (IsolateConfiguredUniverseEquity && !isTestnet && !isPaper)
+        {
+            throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),
+                ["WORKER_ISOLATE_CONFIGURED_UNIVERSE_EQUITY is only permitted when WORKER_EXECUTION_MODE is TESTNET or PAPER."]);
+        }
+
         if (!isPaper && !isTestnet)
         {
             throw new OptionsValidationException(nameof(WorkerRuntimeOptions), typeof(WorkerRuntimeOptions),

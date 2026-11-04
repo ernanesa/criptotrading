@@ -808,7 +808,7 @@ internal sealed class AutonomyCycleHostedService(
             configuredUniverseAssets.Add(b);
         }
 
-        var unsupportedAssetBalance = account.Balances
+        var unsupportedAssetBalance = !runtime.IsolateConfiguredUniverseEquity && account.Balances
             .Where(balance => !configuredUniverseAssets.Contains(balance.Asset))
             .Any(balance => ParseBalance(balance.Free) + ParseBalance(balance.Locked) > 0m);
 

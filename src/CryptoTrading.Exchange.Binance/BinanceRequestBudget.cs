@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
@@ -31,6 +32,7 @@ public sealed class BinanceRequestBudget
     private readonly TimeProvider timeProvider;
     private readonly BinanceRateLimitDefinition[]? initialLimits;
     private readonly string clockOrigin;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> inFlightGates = new(StringComparer.Ordinal);
     private const int MaximumJournalBytes = 131_072;
     public static BinanceRequestBudget Shared { get; } = new(Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CryptoTrading", "binance-request-budgets"));
@@ -58,48 +60,57 @@ public sealed class BinanceRequestBudget
         uri = uri.IsAbsoluteUri ? uri : new Uri(client.BaseAddress ?? throw new InvalidOperationException("HTTP base address is missing."), uri);
         request.RequestUri = uri;
         var scope = Scope(uri);
-        var cost = Cost(request.Method, uri.AbsolutePath);
-        var discover = await ChangeAsync(scope, state =>
+        var gate = inFlightGates.GetOrAdd(scope, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            CheckBlocked(state);
-            if (state.Windows.Count == 0 && initialLimits is not null) Install(state, initialLimits);
-            if (state.Windows.Count != 0) { Charge(state, cost); return false; }
-            var now = state.LastTimestamp;
-            if (state.BootstrapAt is { } last && now - last < 30 * state.Frequency) Reject("RATE_METADATA_DISCOVERY_IN_PROGRESS");
-            if (state.UnaccountedBootstrapStamps.Count >= 256) Reject("RATE_METADATA_DISCOVERY_BUDGET_UNCERTAIN");
-            state.UnaccountedBootstrapStamps.Add(now);
-            state.BootstrapAt = now;
-            state.PendingObservation = true;
-            return true;
-        }, cancellationToken).ConfigureAwait(false);
-
-        if (discover)
-        {
-            var discoveryUri = new UriBuilder(uri.Scheme, uri.Host, uri.Port, "/api/v3/exchangeInfo").Uri;
-            using var discovery = new HttpRequestMessage(HttpMethod.Get, discoveryUri);
-            using var response = await client.SendAsync(discovery, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-            await ObserveAsync(scope, response).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) Reject("RATE_METADATA_DISCOVERY_FAILED");
-            var definitions = await ReadDefinitionsAsync(response, cancellationToken).ConfigureAwait(false);
-            await ChangeAsync(scope, state =>
+            var cost = Cost(request.Method, uri.AbsolutePath);
+            var discover = await ChangeAsync(scope, state =>
             {
                 CheckBlocked(state);
-                Install(state, definitions);
-                Observe(state, response);
+                if (state.Windows.Count == 0 && initialLimits is not null) Install(state, initialLimits);
+                if (state.Windows.Count != 0) { Charge(state, cost); return false; }
+                var now = state.LastTimestamp;
+                if (state.BootstrapAt is { } last && now - last < 30 * state.Frequency) Reject("RATE_METADATA_DISCOVERY_IN_PROGRESS");
+                if (state.UnaccountedBootstrapStamps.Count >= 256) Reject("RATE_METADATA_DISCOVERY_BUDGET_UNCERTAIN");
+                state.UnaccountedBootstrapStamps.Add(now);
+                state.BootstrapAt = now;
+                state.PendingObservation = true;
                 return true;
             }, cancellationToken).ConfigureAwait(false);
-            await ChangeAsync(scope, state => { CheckBlocked(state); Charge(state, cost); return true; }, cancellationToken).ConfigureAwait(false);
-        }
 
-        // A single dispatch: a timeout or 429 is never a reason to repeat POST.
-        var result = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        try { await ObserveAsync(scope, result).ConfigureAwait(false); }
-        catch
-        {
-            result.Dispose();
-            throw new HttpRequestException("RATE_BUDGET_OBSERVATION_FAILED_AFTER_DISPATCH");
+            if (discover)
+            {
+                var discoveryUri = new UriBuilder(uri.Scheme, uri.Host, uri.Port, "/api/v3/exchangeInfo").Uri;
+                using var discovery = new HttpRequestMessage(HttpMethod.Get, discoveryUri);
+                using var response = await client.SendAsync(discovery, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                await ObserveAsync(scope, response).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) Reject("RATE_METADATA_DISCOVERY_FAILED");
+                var definitions = await ReadDefinitionsAsync(response, cancellationToken).ConfigureAwait(false);
+                await ChangeAsync(scope, state =>
+                {
+                    CheckBlocked(state);
+                    Install(state, definitions);
+                    Observe(state, response);
+                    return true;
+                }, cancellationToken).ConfigureAwait(false);
+                await ChangeAsync(scope, state => { CheckBlocked(state); Charge(state, cost); return true; }, cancellationToken).ConfigureAwait(false);
+            }
+
+            // A single dispatch: a timeout or 429 is never a reason to repeat POST.
+            var result = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            try { await ObserveAsync(scope, result).ConfigureAwait(false); }
+            catch
+            {
+                result.Dispose();
+                throw new HttpRequestException("RATE_BUDGET_OBSERVATION_FAILED_AFTER_DISPATCH");
+            }
+            return result;
         }
-        return result;
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private async Task ObserveAsync(string scope, HttpResponseMessage response)

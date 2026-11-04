@@ -172,7 +172,7 @@ internal sealed class ExecutionSubmissionGuard(
 
         var quoteQuantity = Parse(quoteBalance?.Free) + Parse(quoteBalance?.Locked);
         var mid = (ticker.BidPrice + ticker.AskPrice) / 2m;
-        var unsupportedAsset = snapshot.Balances
+        var unsupportedAsset = !options.Value.IsolateConfiguredUniverseEquity && snapshot.Balances
             .Where(item => !configuredUniverseAssets.Contains(item.Asset))
             .Any(item => Parse(item.Free) + Parse(item.Locked) > 0m);
 

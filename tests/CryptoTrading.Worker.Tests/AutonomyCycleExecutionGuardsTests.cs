@@ -683,6 +683,65 @@ public sealed class AutonomyCycleExecutionGuardsTests
         Assert.Null(decisionCommitStore.Commits[0].OutboxRecord);
     }
 
+    [Fact]
+    public async Task RunOnceValuesPortfolioWhenIsolateConfiguredUniverseEquityIsEnabledInTestnet()
+    {
+        var marketClient = new FakeMarketClient();
+        var accountClient = new FakeAccountClient([
+            new BinanceBalance("USDT", "5000", "0"),
+            new BinanceBalance("BTC", "0.05", "0"),
+            new BinanceBalance("BNB", "1.5", "0"),
+            new BinanceBalance("ETH", "0", "0")
+        ]);
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("ETHUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 50,
+            ExecutionMode = "TESTNET",
+            IsolateConfiguredUniverseEquity = true,
+            NoTrade = false,
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        await hostedService.RunOnceAsync(options.Value, "ETHUSDT", TestContext.Current.CancellationToken);
+
+        Assert.Single(decisionCommitStore.Commits);
+        Assert.Equal("ETHUSDT", decisionCommitStore.Commits[0].Symbol.Value);
+        Assert.Equal(1, riskContextStore.RecordCount);
+        Assert.NotNull(riskContextStore.LastRecordedEquity);
+        Assert.True(riskContextStore.LastRecordedEquity > 5000m);
+    }
+
     [Theory]
     [InlineData("stale")]
     [InlineData("future")]
