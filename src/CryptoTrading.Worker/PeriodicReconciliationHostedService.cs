@@ -1,3 +1,4 @@
+using CryptoTrading.Domain.Operations;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Reconciliation;
@@ -24,55 +25,65 @@ internal sealed class PeriodicReconciliationHostedService(
             return;
         }
 
-        var isFirstTick = true;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                if (!isFirstTick)
+                var isRecoverable = operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
+                                    ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot) &&
+                                    !resetAuthorizer.IsCircuitBreakerTripped(DateTimeOffset.UtcNow);
+
+                var targetWait = isRecoverable
+                    ? TimeSpan.FromSeconds(Math.Clamp(options.Value.SafeModeRecoveryIntervalSeconds, 5, 300))
+                    : TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440));
+
+                var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+                while (!stoppingToken.IsCancellationRequested && System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp) < targetWait)
                 {
-                    var isRecoverable = operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
-                                        ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot) &&
-                                        !resetAuthorizer.IsCircuitBreakerTripped(DateTimeOffset.UtcNow);
-
-                    var targetWait = isRecoverable
-                        ? TimeSpan.FromSeconds(Math.Clamp(options.Value.SafeModeRecoveryIntervalSeconds, 5, 300))
-                        : TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440));
-
-                    var startTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
-                    while (!stoppingToken.IsCancellationRequested && System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp) < targetWait)
+                    var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
+                    var remaining = targetWait - elapsed;
+                    var slice = remaining > TimeSpan.FromSeconds(5)
+                        ? TimeSpan.FromSeconds(5)
+                        : (remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                    if (slice > TimeSpan.Zero)
                     {
-                        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(startTimestamp);
-                        var remaining = targetWait - elapsed;
-                        var slice = remaining > TimeSpan.FromSeconds(5)
-                            ? TimeSpan.FromSeconds(5)
-                            : (remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
-                        if (slice > TimeSpan.Zero)
-                        {
-                            await Task.Delay(slice, stoppingToken).ConfigureAwait(false);
-                        }
+                        await Task.Delay(slice, stoppingToken).ConfigureAwait(false);
+                    }
 
-                        var activeRecoverable = operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
-                                                ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot) &&
-                                                !resetAuthorizer.IsCircuitBreakerTripped(DateTimeOffset.UtcNow);
+                    var activeRecoverable = operationalControl.Snapshot.Mode == OperationalMode.SafeMode &&
+                                            ReconciliationOperationalControlResetAuthorizer.IsAutoRecoverable(operationalControl.Snapshot) &&
+                                            !resetAuthorizer.IsCircuitBreakerTripped(DateTimeOffset.UtcNow);
 
-                        if (activeRecoverable)
+                    if (activeRecoverable)
+                    {
+                        var recoveryWait = TimeSpan.FromSeconds(Math.Clamp(options.Value.SafeModeRecoveryIntervalSeconds, 5, 300));
+                        if (targetWait > recoveryWait)
                         {
-                            var recoveryWait = TimeSpan.FromSeconds(Math.Clamp(options.Value.SafeModeRecoveryIntervalSeconds, 5, 300));
-                            if (targetWait > recoveryWait)
-                            {
-                                targetWait = recoveryWait;
-                            }
-                        }
-                        else if (targetWait < TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440)))
-                        {
-                            targetWait = TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440));
+                            targetWait = recoveryWait;
                         }
                     }
+                    else if (targetWait < TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440)))
+                    {
+                        targetWait = TimeSpan.FromMinutes(Math.Clamp(options.Value.ReconciliationIntervalMinutes, 1, 1440));
+                    }
                 }
-                isFirstTick = false;
 
-                var result = await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
+                ReconciliationRunResult? result = null;
+                for (var attempt = 1; attempt <= 3; attempt++)
+                {
+                    try
+                    {
+                        result = await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
+                        break;
+                    }
+                    catch (Exception ex) when (attempt < 3 && FailureClassifier.Classify(ex).Severity == FailureSeverity.Transient)
+                    {
+                        var delay = FailureClassifier.Classify(ex).SuggestedBackoff ?? TimeSpan.FromSeconds(3);
+                        await Task.Delay(delay, stoppingToken).ConfigureAwait(false);
+                    }
+                }
+
+                result ??= await reconciliation.ReconcileAsync(stoppingToken).ConfigureAwait(false);
                 if (!result.IsHealthy)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
@@ -152,7 +163,7 @@ internal sealed class PeriodicReconciliationHostedService(
                     PeriodicReconciliationLog.ControlFailure(logger, controlException.GetType().Name);
                 }
 
-                PeriodicReconciliationLog.Failed(logger, exception.GetType().Name);
+                PeriodicReconciliationLog.Failed(logger, exception.GetType().Name, exception.Message);
             }
 #pragma warning restore CA1031
         }
@@ -176,8 +187,8 @@ internal static partial class PeriodicReconciliationLog
     [LoggerMessage(LogLevel.Warning, "Periodic reconciliation blocked new entries. CorrelationId={CorrelationId} ReportPath={ReportPath}")]
     public static partial void Blocked(ILogger logger, string correlationId, string reportPath);
 
-    [LoggerMessage(LogLevel.Error, "Periodic reconciliation failed closed. ExceptionType={ExceptionType}")]
-    public static partial void Failed(ILogger logger, string exceptionType);
+    [LoggerMessage(LogLevel.Error, "Periodic reconciliation failed closed. ExceptionType={ExceptionType} Message={Message}")]
+    public static partial void Failed(ILogger logger, string exceptionType, string message);
 
     [LoggerMessage(LogLevel.Error, "Periodic reconciliation SafeMode control failed. ExceptionType={ExceptionType}")]
     public static partial void ControlFailure(ILogger logger, string exceptionType);

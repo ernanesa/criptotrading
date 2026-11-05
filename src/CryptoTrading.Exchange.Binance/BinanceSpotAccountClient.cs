@@ -346,11 +346,13 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
                 if ((response.StatusCode is HttpStatusCode.TooManyRequests or (HttpStatusCode)418) &&
                     (retryAfter is null || retryAfter < observedAt))
                 {
-                    throw new BinanceApiException(response.StatusCode, endpoint);
+                    var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    throw new BinanceApiException(response.StatusCode, endpoint, errorPayload);
                 }
                 if (!retryPolicy.ShouldRetry(response.StatusCode, attempt))
                 {
-                    throw new BinanceApiException(response.StatusCode, endpoint);
+                    var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                    throw new BinanceApiException(response.StatusCode, endpoint, errorPayload);
                 }
 
                 var delay = retryPolicy.GetDelay(response, attempt, observedAt);

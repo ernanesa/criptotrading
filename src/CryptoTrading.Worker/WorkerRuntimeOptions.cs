@@ -150,7 +150,7 @@ public sealed class WorkerRuntimeOptions
 
     public string ReconciliationSymbols { get; set; } = "BTCUSDT";
 
-    public int ReconciliationMaxSnapshotAgeSeconds { get; set; } = 30;
+    public int ReconciliationMaxSnapshotAgeSeconds { get; set; } = 120;
 
     /// <summary>Periodic read-only reconciliation interval after startup, in minutes.</summary>
     public int ReconciliationIntervalMinutes { get; set; } = 15;

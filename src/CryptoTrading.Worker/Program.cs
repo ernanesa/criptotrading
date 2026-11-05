@@ -115,7 +115,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.FeeAssetValuationMaxAgeSeconds = builder.Configuration.GetValue("WORKER_FEE_ASSET_VALUATION_MAX_AGE_SECONDS", 30);
         options.ReconciliationAccount = builder.Configuration["WORKER_RECONCILIATION_ACCOUNT"] ?? "exchange-wallet";
         options.ReconciliationSymbols = builder.Configuration["WORKER_RECONCILIATION_SYMBOLS"] ?? "BTCUSDT";
-        options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 30);
+        options.ReconciliationMaxSnapshotAgeSeconds = builder.Configuration.GetValue("WORKER_RECONCILIATION_MAX_SNAPSHOT_AGE_SECONDS", 120);
         options.ReconciliationIntervalMinutes = builder.Configuration.GetValue("WORKER_RECONCILIATION_INTERVAL_MINUTES", 15);
         options.SafeModeRecoveryIntervalSeconds = builder.Configuration.GetValue("WORKER_SAFEMODE_RECOVERY_INTERVAL_SECONDS", 30);
         options.MaxAutoRecoveriesPerHour = builder.Configuration.GetValue("WORKER_MAX_AUTO_RECOVERIES_PER_HOUR", 3);

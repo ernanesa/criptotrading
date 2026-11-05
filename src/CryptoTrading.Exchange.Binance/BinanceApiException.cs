@@ -21,8 +21,10 @@ public sealed class BinanceApiException : HttpRequestException
         Endpoint = string.Empty;
     }
 
-    public BinanceApiException(HttpStatusCode statusCode, string endpoint)
-        : base($"Binance request to '{endpoint}' failed with HTTP {(int)statusCode} ({statusCode}).", null, statusCode)
+    public BinanceApiException(HttpStatusCode statusCode, string endpoint, string? responseBody = null)
+        : base(string.IsNullOrWhiteSpace(responseBody)
+            ? $"Binance request to '{endpoint}' failed with HTTP {(int)statusCode} ({statusCode})."
+            : $"Binance request to '{endpoint}' failed with HTTP {(int)statusCode} ({statusCode}): {responseBody}", null, statusCode)
     {
         Endpoint = endpoint;
     }
