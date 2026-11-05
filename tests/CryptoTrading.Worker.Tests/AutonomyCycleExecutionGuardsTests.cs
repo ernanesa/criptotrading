@@ -296,13 +296,18 @@ public sealed class AutonomyCycleExecutionGuardsTests
     {
         private readonly IReadOnlyList<BinanceBalance> balances;
 
+        public int GetAccountCallCount { get; private set; }
+
         public FakeAccountClient(IReadOnlyList<BinanceBalance>? balances = null)
         {
             this.balances = balances ?? [new BinanceBalance("BTC", "0", "0"), new BinanceBalance("USDT", "1000", "0")];
         }
 
-        public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT", balances));
+        public Task<BinanceAccountSnapshot> GetAccountAsync(CancellationToken cancellationToken = default)
+        {
+            GetAccountCallCount++;
+            return Task.FromResult(new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT", balances));
+        }
 
         public Task<BinanceCommissionSnapshot> GetCommissionAsync(string symbol, CancellationToken cancellationToken = default) =>
             Task.FromResult(new BinanceCommissionSnapshot(
@@ -1540,6 +1545,162 @@ public sealed class AutonomyCycleExecutionGuardsTests
         {
             await cancellation.CancelAsync();
             await consumer.ConfigureAwait(true);
+        }
+    }
+
+    [Fact]
+    public async Task RunOnceAsyncWithPreloadedAccountReusesSnapshotWithoutCallingAccountClient()
+    {
+        var fakeAccount = new FakeAccountClient();
+        var options = CreateOptions();
+        var control = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+        using var service = new AutonomyCycleHostedService(
+            options,
+            new FakeMarketClient(),
+            fakeAccount,
+            new FakePolicyStore(),
+            new FakeRiskContextStore(),
+            new FakeDecisionCommitStore(),
+            control,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        var preloaded = new BinanceAccountSnapshot(0, 0, 0, 0, true, false, true, 0, "SPOT", [new BinanceBalance("USDT", "5000", "0")]);
+        await service.RunOnceAsync(options.Value, "BTCUSDT", preloaded, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, fakeAccount.GetAccountCallCount);
+    }
+
+    [Fact]
+    public async Task ExecuteAsyncMultiSymbolBatchIsolatesTransientFailureWhenOneSymbolFails()
+    {
+        var marketClient = new TransientSymbolFaultMarketClient("BTCUSDT");
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 100,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var runTask = hostedService.StartAsync(cts.Token);
+
+        var executedHealthySymbol = SpinWait.SpinUntil(() =>
+            decisionCommitStore.Commits.Any(c => c.Symbol.Value == "ETHUSDT"),
+            TimeSpan.FromSeconds(3));
+
+        await hostedService.StopAsync(CancellationToken.None).ConfigureAwait(true);
+        await runTask.ConfigureAwait(true);
+
+        Assert.True(executedHealthySymbol, "Healthy symbol ETHUSDT should have committed despite BTCUSDT transient failure.");
+        Assert.Equal(OperationalMode.Normal, operationalControl.Snapshot.Mode);
+    }
+
+    [Fact]
+    public async Task ExecuteAsyncMultiSymbolBatchEscalatesToSafeModeWhenAllSymbolsFailWithNonTransientError()
+    {
+        var marketClient = new TransientSymbolFaultMarketClient("ALL", new InvalidOperationException("simulated data drift"));
+        var accountClient = new FakeAccountClient();
+        var policyStore = new FakePolicyStore();
+        var riskContextStore = new FakeRiskContextStore();
+        var decisionCommitStore = new FakeDecisionCommitStore();
+        var operationalControl = new InMemoryOperationalControl(new AllowAllResetAuthorizer());
+        using var supervisor = new RuntimeSupervisor(new InMemoryRuntimeTransitionSink(), TimeProvider.System, 0, RuntimeState.Ready);
+        var cycle = new BaselineDecisionCycle(new TrendFollowingParameters("test", "1.0.0", new Symbol("BTCUSDT"), 2, 3, 0m, 0m));
+
+        var options = Options.Create(new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            AutonomySymbols = "BTCUSDT, ETHUSDT",
+            AutonomyInterval = "1m",
+            AutonomyKlineLimit = 50,
+            PollIntervalMilliseconds = 100,
+            ExecutionMode = "PAPER",
+            NoTrade = true,
+            ReconciliationAccount = "test-account",
+            PersistenceEnabled = true,
+            PostgresConnectionString = "Host=localhost;Database=test;Username=test;Password=test",
+            ApplyMigrations = true,
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true
+        });
+
+        using var hostedService = new AutonomyCycleHostedService(
+            options,
+            marketClient,
+            accountClient,
+            policyStore,
+            riskContextStore,
+            decisionCommitStore,
+            operationalControl,
+            supervisor,
+            cycle,
+            NullLogger<AutonomyCycleHostedService>.Instance);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var runTask = hostedService.StartAsync(cts.Token);
+
+        var reachedSafeMode = SpinWait.SpinUntil(() =>
+            operationalControl.Snapshot.Mode == OperationalMode.SafeMode,
+            TimeSpan.FromSeconds(3));
+
+        await hostedService.StopAsync(CancellationToken.None).ConfigureAwait(true);
+        await runTask.ConfigureAwait(true);
+
+        Assert.True(reachedSafeMode, "Autonomy cycle should escalate to SafeMode when all symbols fail with non-transient error.");
+    }
+
+    private sealed class TransientSymbolFaultMarketClient(string faultSymbol, Exception? customException = null) : FakeMarketClient
+    {
+        public override Task<IReadOnlyList<BinanceSpotKline>> GetKlinesAsync(
+            string symbol,
+            string interval,
+            DateTimeOffset? startTimeUtc = null,
+            DateTimeOffset? endTimeUtc = null,
+            int limit = 500,
+            CancellationToken cancellationToken = default)
+        {
+            if (faultSymbol == "ALL" || string.Equals(symbol, faultSymbol, StringComparison.OrdinalIgnoreCase))
+            {
+                throw customException ?? new HttpRequestException("Simulated transient transport failure.");
+            }
+
+            return base.GetKlinesAsync(symbol, interval, startTimeUtc, endTimeUtc, limit, cancellationToken);
         }
     }
 

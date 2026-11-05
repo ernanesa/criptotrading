@@ -168,7 +168,43 @@ internal sealed class AutonomyCycleHostedService(
                             }
                         }
 
-                        await Task.WhenAll(symbols.Select(symbol => RunOnceAsync(runtime, symbol, stoppingToken))).ConfigureAwait(false);
+                        var batchAccount = await accountClient.GetAccountAsync(stoppingToken).ConfigureAwait(false);
+                        var anySymbolSucceeded = false;
+                        Exception? lastTransientFailure = null;
+                        foreach (var symbol in symbols)
+                        {
+                            stoppingToken.ThrowIfCancellationRequested();
+                            try
+                            {
+                                await RunOnceAsync(runtime, symbol, batchAccount, stoppingToken).ConfigureAwait(false);
+                                anySymbolSucceeded = true;
+                            }
+                            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                            {
+                                throw;
+                            }
+                            catch (Exception symbolEx)
+                            {
+                                var classification = FailureClassifier.Classify(symbolEx);
+                                if (classification.Severity == FailureSeverity.Transient)
+                                {
+                                    lastTransientFailure = symbolEx;
+                                    AutonomyCycleLog.Failed(
+                                        logger,
+                                        symbolEx.GetType().Name,
+                                        classification.ReasonCode,
+                                        ComputeExceptionFingerprint(symbolEx),
+                                        $"autonomy-cycle:{symbol}");
+                                    continue;
+                                }
+                                throw;
+                            }
+                        }
+
+                        if (!anySymbolSucceeded && symbols.Count > 0 && lastTransientFailure is not null)
+                        {
+                            throw lastTransientFailure;
+                        }
                     }
                     consecutiveTransientFailures = 0;
                     var currentControl = operationalControl.Snapshot;
@@ -500,7 +536,12 @@ internal sealed class AutonomyCycleHostedService(
         return RunOnceAsync(runtime, runtime.AutonomySymbol, cancellationToken);
     }
 
-    internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, string symbol, CancellationToken cancellationToken)
+    internal Task RunOnceAsync(WorkerRuntimeOptions runtime, string symbol, CancellationToken cancellationToken)
+    {
+        return RunOnceAsync(runtime, symbol, null, cancellationToken);
+    }
+
+    internal async Task RunOnceAsync(WorkerRuntimeOptions runtime, string symbol, BinanceAccountSnapshot? preloadedAccount, CancellationToken cancellationToken)
     {
         using var cycleActivity = CryptoTrading.Observability.TradingTelemetry.ActivitySource.StartActivity("autonomy.cycle");
         using var cycleScope = logger.BeginScope(new Dictionary<string, object?>
@@ -764,7 +805,7 @@ internal sealed class AutonomyCycleHostedService(
             ? cancellationStore.ReadReplanCandidatesAsync(100, cancellationToken)
             : Task.FromResult<IReadOnlyList<ExecutionReplanCandidate>>([]);
         var candidates = await replanTask.ConfigureAwait(false);
-        var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
+        var account = preloadedAccount ?? await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         var commission = await accountClient.GetCommissionAsync(symbol, cancellationToken).ConfigureAwait(false);
         ExecutionReplanCandidate? replanCandidate = candidates.LastOrDefault(c =>
             string.Equals(c.Symbol.Value, symbol, StringComparison.OrdinalIgnoreCase));

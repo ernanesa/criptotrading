@@ -651,8 +651,15 @@ public sealed class BinanceReadOnlySnapshotProvider : IReadOnlyAccountSnapshotPr
         var account = await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
         var trades = new Dictionary<KnownTradeIdentity, ReconciliationFill>();
         var openOrders = new Dictionary<(string Symbol, long OrderId), ReconciliationOpenOrder>();
+        var isFirstSymbol = true;
         foreach (var symbol in options.Symbols)
         {
+            if (!isFirstSymbol)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), timeProvider, cancellationToken).ConfigureAwait(false);
+            }
+            isFirstSymbol = false;
+
             var symbolOpenOrders = await accountClient.GetOpenOrdersAsync(symbol, cancellationToken).ConfigureAwait(false);
             foreach (var order in symbolOpenOrders)
             {
