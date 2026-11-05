@@ -905,7 +905,8 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new BinanceApiException(response.StatusCode, endpoint);
+            var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new BinanceApiException(response.StatusCode, endpoint, errorPayload);
         }
 
         var wire = await response.Content.ReadFromJsonAsync<BinanceOrderWire>(JsonOptions, cancellationToken).ConfigureAwait(false)
@@ -933,7 +934,8 @@ public sealed class BinanceSpotOrderClient : IBinanceSpotOrderClient
         using var response = await requestBudget.SendAsync(httpClient, request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            throw new BinanceApiException(response.StatusCode, endpoint);
+            var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new BinanceApiException(response.StatusCode, endpoint, errorPayload);
         }
 
         return await response.Content.ReadFromJsonAsync<TWire>(JsonOptions, cancellationToken).ConfigureAwait(false)

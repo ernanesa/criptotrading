@@ -342,16 +342,21 @@ public sealed class BinanceSpotAccountClient : IBinanceSpotAccountClient, IBinan
             {
                 var observedAt = timeProvider.GetUtcNow();
                 rateLimitGate.ObserveResponse(response, observedAt);
+                var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.BadRequest && errorPayload.Contains("-1021", StringComparison.Ordinal) && attempt < 3)
+                {
+                    await SynchronizeClockAsync(cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
                 var retryAfter = BinanceRateLimitHeaders.Parse(response.Headers, observedAt).RetryAfterUtc;
                 if ((response.StatusCode is HttpStatusCode.TooManyRequests or (HttpStatusCode)418) &&
                     (retryAfter is null || retryAfter < observedAt))
                 {
-                    var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                     throw new BinanceApiException(response.StatusCode, endpoint, errorPayload);
                 }
                 if (!retryPolicy.ShouldRetry(response.StatusCode, attempt))
                 {
-                    var errorPayload = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                     throw new BinanceApiException(response.StatusCode, endpoint, errorPayload);
                 }
 
