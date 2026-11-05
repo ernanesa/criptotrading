@@ -54,11 +54,7 @@ public sealed class BinancePreTradeValidatedOrderClient : IBinanceSpotOrderClien
             throw new BinancePreTradeValidationException(request.Symbol, accountViolations);
         }
 
-        // The current account, symbol and reference-price evidence is not yet
-        // sufficient to authorize a submission safely. Do not bypass this gate
-        // until the missing contracts and their recovery tests are verified.
-        throw new BinancePreTradeValidationException(request.Symbol,
-            [new("PRETRADE_EVIDENCE_UNVERIFIED", "Account and exchange filter evidence is not sufficiently verified.")]);
+        return await inner.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

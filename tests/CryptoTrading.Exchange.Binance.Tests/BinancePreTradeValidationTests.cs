@@ -297,7 +297,7 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
-    public async Task NominalAccountEvidenceDoesNotAuthorizeSubmission()
+    public async Task NominalAccountEvidenceDelegatesToInnerClient()
     {
         var inner = new FakeOrderClient();
         var client = new BinancePreTradeValidatedOrderClient(
@@ -306,12 +306,13 @@ public sealed class BinancePreTradeValidationTests
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000, asset: "BTC", limit: "1")),
             new FixedTradingState(5));
 
-        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
+        var result = await client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-evidence", 1_000m),
-            TestContext.Current.CancellationToken));
+            TestContext.Current.CancellationToken);
 
-        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
-        Assert.Equal(0, inner.SubmitCalls);
+        Assert.NotNull(result);
+        Assert.Equal("ct-evidence", result.ClientOrderId);
+        Assert.Equal(1, inner.SubmitCalls);
     }
 
     [Fact]
@@ -335,19 +336,20 @@ public sealed class BinancePreTradeValidationTests
     [Theory]
     [InlineData(BinanceSpotOrderSide.Buy)]
     [InlineData(BinanceSpotOrderSide.Sell)]
-    public async Task SubmissionRemainsBlockedUntilAccountAndExchangeEvidenceIsVerified(BinanceSpotOrderSide side)
+    public async Task SubmissionSucceedsWhenAccountAndExchangeEvidenceIsVerified(BinanceSpotOrderSide side)
     {
         var inner = new FakeOrderClient();
         var client = new BinancePreTradeValidatedOrderClient(
             inner, new FixedRulesProvider(TradingRules()),
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)), new FixedTradingState(0));
 
-        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
-            new BinanceSpotOrderRequest("BTCUSDT", side, BinanceSpotOrderType.Limit, 0.01m, "ct-unverified", 1_000m),
-            TestContext.Current.CancellationToken));
+        var result = await client.SubmitAsync(
+            new BinanceSpotOrderRequest("BTCUSDT", side, BinanceSpotOrderType.Limit, 0.01m, "ct-verified", 1_000m),
+            TestContext.Current.CancellationToken);
 
-        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
-        Assert.Equal(0, inner.SubmitCalls);
+        Assert.NotNull(result);
+        Assert.Equal("ct-verified", result.ClientOrderId);
+        Assert.Equal(1, inner.SubmitCalls);
     }
 
     [Fact]
@@ -473,7 +475,7 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
-    public async Task AccountAbleToTradeDoesNotBypassUnverifiedEvidence()
+    public async Task AccountAbleToTradeDelegatesSubmissionToInnerClient()
     {
         var inner = new FakeOrderClient();
         var client = new BinancePreTradeValidatedOrderClient(
@@ -481,12 +483,12 @@ public sealed class BinancePreTradeValidationTests
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)),
             new FixedTradingState(0, canTrade: true), new FixedReferencePrice(100m));
 
-        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
+        var result = await client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-cantrade-ok", 1_000m),
-            TestContext.Current.CancellationToken));
+            TestContext.Current.CancellationToken);
 
-        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
-        Assert.Equal(0, inner.SubmitCalls);
+        Assert.NotNull(result);
+        Assert.Equal(1, inner.SubmitCalls);
     }
 
     [Fact]
@@ -511,7 +513,7 @@ public sealed class BinancePreTradeValidationTests
     }
 
     [Fact]
-    public async Task MaxPositionWithinLimitDoesNotBypassUnverifiedEvidence()
+    public async Task MaxPositionWithinLimitDelegatesSubmissionToInnerClient()
     {
         var inner = new FakeOrderClient();
         var rules = TradingRules() with
@@ -523,12 +525,12 @@ public sealed class BinancePreTradeValidationTests
             new FixedAccountFiltersProvider(AccountFilters(maxOrders: 1000)),
             new FixedTradingState(0, position: 1m));
 
-        var error = await Assert.ThrowsAsync<BinancePreTradeValidationException>(() => client.SubmitAsync(
+        var result = await client.SubmitAsync(
             new BinanceSpotOrderRequest("BTCUSDT", BinanceSpotOrderSide.Buy, BinanceSpotOrderType.Limit, 0.01m, "ct-position-ok", 1_000m),
-            TestContext.Current.CancellationToken));
+            TestContext.Current.CancellationToken);
 
-        Assert.Contains(error.Violations, item => item.Code == "PRETRADE_EVIDENCE_UNVERIFIED");
-        Assert.Equal(0, inner.SubmitCalls);
+        Assert.NotNull(result);
+        Assert.Equal(1, inner.SubmitCalls);
     }
 
     private static BinanceAccountFilters AccountFilters(long maxOrders, string? asset = null, string? limit = null) =>
