@@ -1,4 +1,5 @@
 using CryptoTrading.Domain.Accounting;
+using CryptoTrading.Domain.Operations;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Persistence;
@@ -27,7 +28,22 @@ internal sealed class ReconciliationStartupHostedService(
             return;
         }
 
-        var result = await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+        ReconciliationRunResult? result = null;
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            try
+            {
+                result = await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+                break;
+            }
+            catch (Exception ex) when (attempt < 3 && FailureClassifier.Classify(ex).Severity == FailureSeverity.Transient)
+            {
+                var delay = FailureClassifier.Classify(ex).SuggestedBackoff ?? TimeSpan.FromSeconds(3);
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        result ??= await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
         var reportPath = await reportWriter.AppendAsync(new ReconciliationRunReport(
             Guid.NewGuid().ToString("N"),
             result.ObservedAtUtc,
