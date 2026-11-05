@@ -214,12 +214,18 @@ public sealed class BinanceRequestBudget
         catch (Exception error) when (error is JsonException or InvalidDataException or IOException or UnauthorizedAccessException)
         { throw new BinanceRequestBudgetRejectedException("RATE_BUDGET_JOURNAL_INVALID"); }
         var now = timeProvider.GetTimestamp();
-        var previousTimestamp = state.LastTimestamp;
-        if (state.PendingObservation && now - previousTimestamp >= 10 * state.Frequency)
+        if (state.PendingObservation)
         {
-            state.PendingObservation = false;
+            if (now - state.LastTimestamp >= 2 * state.Frequency)
+            {
+                state.PendingObservation = false;
+                state.LastTimestamp = now;
+            }
         }
-        state.LastTimestamp = now;
+        else
+        {
+            state.LastTimestamp = now;
+        }
         foreach (var window in state.Windows)
         {
             var lifetime = checked(window.Seconds * state.Frequency + Width(window.Seconds, state.Frequency));
