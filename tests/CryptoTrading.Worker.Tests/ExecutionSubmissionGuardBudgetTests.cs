@@ -66,6 +66,60 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     }
 
     [Fact]
+    public async Task TestnetIsolatedEquityDoesNotCountUnmanagedFaucetAssetsTowardsMaxOpenPositions()
+    {
+        await using var supervisor = await CreateReadySupervisorAsync();
+        var account = new TestAccountClient { BtcFree = "0.00019" }; // Faucet has BTC
+        var runtimeOptions = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "TESTNET",
+            IsolateConfiguredUniverseEquity = true,
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            AutonomySymbols = "BTCUSDT,ETHUSDT"
+        };
+        // RiskContextStore has 0 tracked positions:
+        var riskStore = new TestRiskContextStore();
+        var guard = CreateGuard(
+            supervisor,
+            new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT", maxOpenPositions: 1),
+            account: account,
+            runtimeOptions: runtimeOptions,
+            riskContextStore: riskStore);
+        var (command, message) = CreateCommand("ETHUSDT", 10m);
+
+        // Must succeed without throwing MaxOpenPositionsExceeded because BTC is unmanaged faucet dust
+        await guard.ValidateAsync(command, message, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task TestnetIsolatedEquityAllowsBuyWhenTargetSymbolHoldsUnmanagedFaucetDust()
+    {
+        await using var supervisor = await CreateReadySupervisorAsync();
+        var account = new TestAccountClient { BtcFree = "0.00019" }; // Faucet has BTC dust on target symbol
+        var runtimeOptions = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "TESTNET",
+            IsolateConfiguredUniverseEquity = true,
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            AutonomySymbols = "BTCUSDT,ETHUSDT"
+        };
+        // RiskContextStore has 0 tracked positions for BTC:
+        var riskStore = new TestRiskContextStore { PositionQuantity = 0m };
+        var guard = CreateGuard(
+            supervisor,
+            new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT", maxOpenPositions: 1),
+            account: account,
+            runtimeOptions: runtimeOptions,
+            riskContextStore: riskStore);
+        var (command, message) = CreateCommand("BTCUSDT", 10m);
+
+        // Must succeed without throwing PRE_SUBMIT_ACCOUNTING_OR_LOSS_BREAKER
+        await guard.ValidateAsync(command, message, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task OtherUniverseAssetTickerFailureFailsClosed()
     {
         await using var supervisor = await CreateReadySupervisorAsync();
@@ -193,7 +247,8 @@ public sealed class ExecutionSubmissionGuardBudgetTests
         TestMarketClient? market = null,
         TestAccountClient? account = null,
         ICapitalReservationStore? reservations = null,
-        WorkerRuntimeOptions? runtimeOptions = null)
+        WorkerRuntimeOptions? runtimeOptions = null,
+        IAutonomyRiskContextStore? riskContextStore = null)
     {
         var policyStore = new TestPolicyStore(budgetPolicy);
         var control = new InMemoryOperationalControl(new AllowResetAuthorizer());
@@ -209,7 +264,7 @@ public sealed class ExecutionSubmissionGuardBudgetTests
             control,
             supervisor,
             policyStore,
-            new TestRiskContextStore { PositionQuantity = positionQuantity },
+            riskContextStore ?? new TestRiskContextStore { PositionQuantity = positionQuantity },
             new TestOpenOrderStore(),
             new TestSubmissionStore(),
             market ?? new TestMarketClient(),
@@ -394,6 +449,10 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     private sealed class TestRiskContextStore : IAutonomyRiskContextStore
     {
         public decimal PositionQuantity { get; init; }
+        public Dictionary<string, decimal> TrackedOpenPositions { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<IReadOnlyDictionary<string, decimal>> ReadTrackedOpenPositionsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyDictionary<string, decimal>>(TrackedOpenPositions);
 
         public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default)
         {

@@ -913,7 +913,7 @@ internal sealed class AutonomyCycleHostedService(
                     {
                         totalOtherUnrealizedPnlQuote += otherMarketValue - otherBasis.CostNotional;
                     }
-                    else
+                    else if (!runtime.IsolateConfiguredUniverseEquity)
                     {
                         allOtherPositionsHaveBasis = false;
                     }
@@ -1068,9 +1068,12 @@ internal sealed class AutonomyCycleHostedService(
             tradeAggressionDelta: tradeAggressionDelta,
             depthImbalanceTop5: depthImbalanceTop5);
         var baseAssetObj = new Asset(baseAsset);
-        var positionBasisConsistent = baseQuantity <= 0m
+        var effectiveBaseQuantity = runtime.IsolateConfiguredUniverseEquity
+            ? (accounting.HasPositionBasis && accounting.PositionQuantity > 0.00000001m ? accounting.PositionQuantity : 0m)
+            : baseQuantity;
+        var positionBasisConsistent = effectiveBaseQuantity <= 0m
             ? !accounting.HasPositionBasis || accounting.PositionQuantity <= 0m
-            : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - baseQuantity) <= 0.00000001m;
+            : accounting.HasPositionBasis && Math.Abs(accounting.PositionQuantity - effectiveBaseQuantity) <= 0.00000001m;
         var decisionValuationAt = valuationTimeProvider.GetUtcNow();
         if (!PortfolioTickerValidation.IsValid(bookTicker, symbol, decisionValuationAt, policyDocument.Policy.MaxMarketDataAge))
         {
@@ -1087,9 +1090,9 @@ internal sealed class AutonomyCycleHostedService(
             new Dictionary<Asset, Money>
             {
                 [quoteAsset] = new Money(availableQuoteLiquidity, quoteAsset),
-                [baseAssetObj] = new Money(baseQuantity, baseAssetObj),
+                [baseAssetObj] = new Money(effectiveBaseQuantity, baseAssetObj),
             },
-            baseQuantity * latest.ClosePrice.Value,
+            effectiveBaseQuantity * latest.ClosePrice.Value,
             accounting.RealizedDailyLossNotional,
             accounting.DrawdownNotional ?? 0m,
             accounting.PositionCostNotional,

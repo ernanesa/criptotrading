@@ -460,6 +460,9 @@ public sealed class ExecutionSubmissionGuardTests
     {
         public decimal PositionQuantity { get; set; } = defaultPositionQuantity;
         public bool HasPositionBasis { get; set; } = hasPositionBasis;
+        public Dictionary<string, decimal> TrackedOpenPositions { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Task<IReadOnlyDictionary<string, decimal>> ReadTrackedOpenPositionsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyDictionary<string, decimal>>(TrackedOpenPositions);
         public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) =>
             Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, PositionQuantity, HasPositionBasis, DateTimeOffset.UtcNow, 1000m, 1000m, 0m, true, true));
         public Task<AutonomyRiskContextSnapshot> RecordAutonomyRiskContextAsync(string scope, Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, decimal? currentEquityNotional, DateTimeOffset valuationAtUtc, CancellationToken cancellationToken = default) =>

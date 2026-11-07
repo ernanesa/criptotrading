@@ -367,6 +367,10 @@ public sealed class AutonomyCycleExecutionGuardsTests
         public decimal? LastRecordedEquity { get; private set; }
         public int RecordCount { get; private set; }
         public Action? OnRecord { get; init; }
+        public Dictionary<string, decimal> TrackedOpenPositions { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<IReadOnlyDictionary<string, decimal>> ReadTrackedOpenPositionsAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyDictionary<string, decimal>>(TrackedOpenPositions);
 
         public Task<AutonomyRiskContextSnapshot> ReadAutonomyRiskContextAsync(Symbol symbol, Asset quoteAsset, DateTimeOffset dayStartUtc, CancellationToken cancellationToken = default) =>
             Task.FromResult(new AutonomyRiskContextSnapshot(0m, 0m, 0m, true, DateTimeOffset.UtcNow));

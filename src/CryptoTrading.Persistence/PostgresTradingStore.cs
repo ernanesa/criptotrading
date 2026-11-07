@@ -434,6 +434,9 @@ public interface IAutonomyRiskContextStore
         decimal? currentEquityNotional,
         DateTimeOffset valuationAtUtc,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyDictionary<string, decimal>> ReadTrackedOpenPositionsAsync(
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record AutonomyRiskContextSnapshot(
@@ -1803,6 +1806,24 @@ public sealed partial class PostgresTradingStore : IOutboxStore, IExpectedExecut
             state is not null,
             complete,
             complete ? null : reason);
+    }
+
+    public async Task<IReadOnlyDictionary<string, decimal>> ReadTrackedOpenPositionsAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT symbol, quantity
+            FROM trading.position_cost_basis
+            WHERE quantity > 0.00000001;
+            """, connection);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result[reader.GetString(0)] = reader.GetDecimal(1);
+        }
+        return result;
     }
 
     public async Task<Money> GetBalanceAsync(

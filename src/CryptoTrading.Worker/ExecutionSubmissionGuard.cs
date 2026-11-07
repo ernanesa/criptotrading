@@ -177,7 +177,11 @@ internal sealed class ExecutionSubmissionGuard(
             .Any(item => Parse(item.Free) + Parse(item.Locked) > 0m);
 
         decimal totalOtherPositionsNotional = 0m;
-        int aggregateOpenPositionsCount = positionQuantity * mid > 0m ? 1 : 0;
+        var trackedOpenPositions = await riskContexts.ReadTrackedOpenPositionsAsync(cancellationToken).ConfigureAwait(false);
+        var currentSymbolIsOpen = trackedOpenPositions.TryGetValue(command.Symbol.Value, out var curQty) && curQty > 0.00000001m;
+        int aggregateOpenPositionsCount = options.Value.IsolateConfiguredUniverseEquity
+            ? (currentSymbolIsOpen ? 1 : 0)
+            : (positionQuantity * mid > 0m ? 1 : 0);
         var earliestMarketObservedAt = ticker.ObservedAtUtc;
         var latestMarketObservedAt = ticker.ObservedAtUtc;
 
@@ -239,12 +243,25 @@ internal sealed class ExecutionSubmissionGuard(
                 if (otherNotional > 0m)
                 {
                     totalOtherPositionsNotional += otherNotional;
-                    aggregateOpenPositionsCount++;
+                    if (options.Value.IsolateConfiguredUniverseEquity)
+                    {
+                        if (trackedOpenPositions.TryGetValue(otherSymbolsToFetch[i].Symbol, out var tQty) && tQty > 0.00000001m)
+                        {
+                            aggregateOpenPositionsCount++;
+                        }
+                    }
+                    else
+                    {
+                        aggregateOpenPositionsCount++;
+                    }
                 }
             }
         }
 
         var evaluatedAt = UtcNow;
+        var effectivePositionQuantity = options.Value.IsolateConfiguredUniverseEquity
+            ? (currentSymbolIsOpen ? (trackedOpenPositions.TryGetValue(command.Symbol.Value, out var qty) ? qty : 0m) : 0m)
+            : positionQuantity;
         decimal? currentEquityNotional = unsupportedAsset ? null : quoteQuantity + positionQuantity * mid + totalOtherPositionsNotional;
         var accounting = await riskContexts.RecordAutonomyRiskContextAsync(
             $"equity:{options.Value.ReconciliationAccount}:{command.Symbol.Value}:{quote}",
@@ -256,7 +273,7 @@ internal sealed class ExecutionSubmissionGuard(
         if (command.Side == OrderSide.Buy && (!accounting.RiskContextComplete ||
             accounting.RealizedDailyLossNotional >= policy.Policy.MaxDailyLoss ||
             accounting.DrawdownNotional is null || accounting.DrawdownNotional >= policy.Policy.MaxDrawdown ||
-            Math.Abs(accounting.PositionQuantity - positionQuantity) > 0.00000001m))
+            Math.Abs(accounting.PositionQuantity - effectivePositionQuantity) > 0.00000001m))
         {
             throw new ExecutionDispatchBlockedException("PRE_SUBMIT_ACCOUNTING_OR_LOSS_BREAKER");
         }
@@ -268,13 +285,13 @@ internal sealed class ExecutionSubmissionGuard(
             evaluatedAt - ticker.ObservedAtUtc > policy.Policy.MaxMarketDataAge ||
             currentNotional > command.AuthorizedNotional || currentNotional > measuredRisk.AvailableLiquidityNotional ||
             currentNotional > policy.Policy.MaxOrderNotional ||
-            (command.Side == OrderSide.Buy && positionQuantity * mid + currentNotional > policy.Policy.MaxExposureNotional))
+            (command.Side == OrderSide.Buy && effectivePositionQuantity * mid + currentNotional > policy.Policy.MaxExposureNotional))
         {
             throw new ExecutionDispatchBlockedException("PRE_SUBMIT_MARKET_OR_NOTIONAL_CHANGED");
         }
         var effectiveCurrentExposure = command.Side == OrderSide.Sell
-            ? Math.Max(positionQuantity * mid, currentNotional)
-            : positionQuantity * mid;
+            ? Math.Max(effectivePositionQuantity * mid, currentNotional)
+            : effectivePositionQuantity * mid;
         var risk = RiskEvaluator.Evaluate(policy.Policy, new RiskEvaluationRequest(
             currentNotional, effectiveCurrentExposure, accounting.RealizedDailyLossNotional,
             accounting.DrawdownNotional ?? 0m, closed[^1].Bar.CloseTimeUtc, evaluatedAt,
@@ -286,7 +303,7 @@ internal sealed class ExecutionSubmissionGuard(
         }
         if (policy.Policy.BudgetPolicy is { } budgetPolicy && command.Side == OrderSide.Buy)
         {
-            decimal aggregateOpenPositionsUsdt = positionQuantity * mid + totalOtherPositionsNotional;
+            decimal aggregateOpenPositionsUsdt = effectivePositionQuantity * mid + totalOtherPositionsNotional;
             await ValidateAndReserveOperatorBudgetAsync(
                 command,
                 message,
