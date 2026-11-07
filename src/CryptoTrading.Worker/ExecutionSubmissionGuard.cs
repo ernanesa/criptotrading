@@ -177,6 +177,7 @@ internal sealed class ExecutionSubmissionGuard(
             .Any(item => Parse(item.Free) + Parse(item.Locked) > 0m);
 
         decimal totalOtherPositionsNotional = 0m;
+        decimal trackedOtherPositionsNotional = 0m;
         var trackedOpenPositions = await riskContexts.ReadTrackedOpenPositionsAsync(cancellationToken).ConfigureAwait(false);
         var currentSymbolIsOpen = trackedOpenPositions.TryGetValue(command.Symbol.Value, out var curQty) && curQty > 0.00000001m;
         int aggregateOpenPositionsCount = options.Value.IsolateConfiguredUniverseEquity
@@ -248,6 +249,7 @@ internal sealed class ExecutionSubmissionGuard(
                         if (trackedOpenPositions.TryGetValue(otherSymbolsToFetch[i].Symbol, out var tQty) && tQty > 0.00000001m)
                         {
                             aggregateOpenPositionsCount++;
+                            trackedOtherPositionsNotional += tQty * otherPrice;
                         }
                     }
                     else
@@ -303,7 +305,8 @@ internal sealed class ExecutionSubmissionGuard(
         }
         if (policy.Policy.BudgetPolicy is { } budgetPolicy && command.Side == OrderSide.Buy)
         {
-            decimal aggregateOpenPositionsUsdt = effectivePositionQuantity * mid + totalOtherPositionsNotional;
+            decimal aggregateOpenPositionsUsdt = effectivePositionQuantity * mid +
+                (options.Value.IsolateConfiguredUniverseEquity ? trackedOtherPositionsNotional : totalOtherPositionsNotional);
             await ValidateAndReserveOperatorBudgetAsync(
                 command,
                 message,

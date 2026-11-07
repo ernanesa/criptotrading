@@ -120,6 +120,34 @@ public sealed class ExecutionSubmissionGuardBudgetTests
     }
 
     [Fact]
+    public async Task TestnetIsolatedEquityDoesNotCommitUnmanagedFaucetDustToBudgetCeiling()
+    {
+        await using var supervisor = await CreateReadySupervisorAsync();
+        // Faucet holds 1.0 BTC worth $100, which exceeds the 20 USDT budget ceiling:
+        var account = new TestAccountClient { BtcFree = "1.0" };
+        var runtimeOptions = new WorkerRuntimeOptions
+        {
+            ExecutionMode = "TESTNET",
+            IsolateConfiguredUniverseEquity = true,
+            TestnetExecutionAcknowledged = true,
+            TestnetOrderExecutionEnabled = true,
+            AutonomySymbols = "BTCUSDT,ETHUSDT"
+        };
+        // RiskContextStore has 0 tracked positions for BTC:
+        var riskStore = new TestRiskContextStore { PositionQuantity = 0m };
+        var guard = CreateGuard(
+            supervisor,
+            new BudgetPolicy(allowedSymbol: "BTCUSDT,ETHUSDT", maxOpenPositions: 5),
+            account: account,
+            runtimeOptions: runtimeOptions,
+            riskContextStore: riskStore);
+        var (command, message) = CreateCommand("ETHUSDT", 10m);
+
+        // Must succeed without throwing BudgetCeilingExceeded because BTC is unmanaged faucet dust
+        await guard.ValidateAsync(command, message, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task OtherUniverseAssetTickerFailureFailsClosed()
     {
         await using var supervisor = await CreateReadySupervisorAsync();
