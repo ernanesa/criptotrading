@@ -27,7 +27,7 @@ public static class ServiceCollectionExtensions
             options.AllowTestnetWithdrawCapability = options.Environment == BinanceEnvironment.Testnet;
             options.ClockSyncCacheDuration = TimeSpan.FromSeconds(60);
             options.AccountSnapshotCacheDuration = TimeSpan.FromSeconds(15);
-            options.CommissionCacheDuration = TimeSpan.FromMinutes(30);
+            options.CommissionCacheDuration = TimeSpan.FromSeconds(60);
         });
     }
 

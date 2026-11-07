@@ -407,9 +407,14 @@ public sealed class AdaptiveDecisionCycle
             : meanReversionId;
 
         var isAltcoin = !string.Equals(symbol.Value, "BTCUSDT", StringComparison.OrdinalIgnoreCase);
-        var leaderRetreatReturnThresholdBps = request.LeaderRegime == MarketRegime.BullTrend && request.LeaderTrendSlope is > 0m
-            ? -6.0m
-            : -2.5m;
+        var symbolReturnBps = bars.Count >= 2 && bars[^2].ClosePrice.Value > 0m
+            ? Math.Round((bars[^1].ClosePrice.Value - bars[^2].ClosePrice.Value) / bars[^2].ClosePrice.Value * 10_000m, 4)
+            : 0m;
+        var leaderRetreatReturnThresholdBps = symbolReturnBps > 15.0m
+            ? -12.0m
+            : (request.LeaderRegime == MarketRegime.BullTrend && request.LeaderTrendSlope is > 0m
+                ? -6.0m
+                : -2.5m);
         var isLeaderRetreating = isAltcoin &&
                                  ((request.LeaderReturnBps is { } leaderRet && leaderRet <= leaderRetreatReturnThresholdBps) ||
                                   (request.LeaderRegime is MarketRegime.BearTrend or MarketRegime.IlliquidOrStale) ||
@@ -417,9 +422,6 @@ public sealed class AdaptiveDecisionCycle
         var isCanaryBasketRetreating = isAltcoin &&
                                        ((request.CanaryBasketReturnBps is <= -8.0m) ||
                                         (request.CanaryBasketReturnBps is <= -4.0m && request.CanaryBasketTrendSlope is <= -0.00005m));
-        var symbolReturnBps = bars.Count >= 2 && bars[^2].ClosePrice.Value > 0m
-            ? Math.Round((bars[^1].ClosePrice.Value - bars[^2].ClosePrice.Value) / bars[^2].ClosePrice.Value * 10_000m, 4)
-            : 0m;
         var effectiveLeaderReturnBps = request.CanaryBasketReturnBps is { } canaryRet && request.LeaderReturnBps is { } btcRet
             ? Math.Round((btcRet * 0.50m) + (canaryRet * 0.50m), 4)
             : (request.LeaderReturnBps ?? request.CanaryBasketReturnBps);
@@ -649,7 +651,6 @@ public sealed class AdaptiveDecisionCycle
             !hasNegativeTakerDelta &&
             !isWeakBreadth &&
             indicators.Adx >= 12m &&
-            indicators.Rsi >= 48m &&
             indicators.VwapDeviationBps >= -10m &&
             indicators.RelativeVolume >= 0.15m &&
             (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability >= 0.51m : true) &&
@@ -657,8 +658,10 @@ public sealed class AdaptiveDecisionCycle
              (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m) ||
              (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.10m && microPriceDivergenceBps >= 0.15m) ||
              (hasAggressiveTakerDemand && orderBookImbalance >= -0.25m && microPriceDivergenceBps >= 0.0m)) &&
-            regime.Regime == MarketRegime.BullTrend &&
-            regime.TrendSlopeRate > 0m)
+            ((regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate > 0m && indicators.Rsi >= 48m) ||
+             (regime.Regime == MarketRegime.MeanRevertingRange &&
+              (request.ExecutionMarket?.OrderBookImbalance >= 0.15m || orderBookImbalance >= 0.15m) &&
+              indicators.Rsi >= 35m)))
         {
             var updatedCandidates = orchestration.Candidates.Select(c =>
                 string.Equals(c.StrategyId, trendFollowingId, StringComparison.OrdinalIgnoreCase)

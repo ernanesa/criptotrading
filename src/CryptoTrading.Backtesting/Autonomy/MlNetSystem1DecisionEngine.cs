@@ -98,7 +98,7 @@ public static class MlNetSystem1DecisionEngine
         var threeBarReturn = (last.ClosePrice.Value - bars[^4].ClosePrice.Value) / bars[^4].ClosePrice.Value;
         // Preserve the existing negative-shock entry veto conservatively, without
         // presenting an unavailable IID/SSA estimate as measured evidence.
-        var negativeShock = oneBarReturn <= -0.00055m || threeBarReturn <= -0.00075m;
+        var negativeShock = oneBarReturn <= -0.0025m || threeBarReturn <= -0.0040m;
         if (artifact is null) return Unavailable("ML_CALIBRATED_ARTIFACT_UNAVAILABLE", negativeShock);
         if (regime.Symbol != last.Symbol) return Unavailable("ML_REGIME_SYMBOL_MISMATCH", negativeShock);
         var features = CreateFeatureVector(bars, bars.Count - 1, orderBookImbalance);
