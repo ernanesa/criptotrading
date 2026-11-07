@@ -74,6 +74,60 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
         Assert.False(result);
     }
 
+    [Theory]
+    [InlineData("account-reconciliation", "Account reconciliation stale snapshot (correlation corr-12345).")]
+    [InlineData("periodic-reconciliation", "Account reconciliation stale snapshot (correlation corr-67890).")]
+    public void IsAuthorizedWhenSafeModeEnteredByStaleSnapshotReconciliationReturnsTrue(string changedBy, string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: changedBy,
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
+    [Theory]
+    [InlineData("account-reconciliation", "Account reconciliation drift detected (correlation corr-drift-1).")]
+    [InlineData("periodic-reconciliation", "Account reconciliation drift detected (correlation corr-drift-2).")]
+    public void IsAuthorizedWhenSafeModeEnteredByAccountReconciliationDriftReturnsFalse(string changedBy, string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: changedBy,
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.False(result);
+    }
+
     [Fact]
     public void IsAuthorizedWhenSafeModeRestoredByWorkerBootstrapReturnsFalse()
     {

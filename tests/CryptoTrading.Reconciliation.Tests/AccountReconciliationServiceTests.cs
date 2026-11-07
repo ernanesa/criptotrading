@@ -389,6 +389,7 @@ public sealed class AccountReconciliationServiceTests
         var mismatch = Assert.IsType<ReconciliationMismatch>(Assert.Single(result.Events));
         Assert.Equal("STALE_SNAPSHOT", mismatch.ReasonCode);
         Assert.Equal(OperationalMode.SafeMode, control.Snapshot.Mode);
+        Assert.StartsWith("Account reconciliation stale snapshot", control.Snapshot.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

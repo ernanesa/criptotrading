@@ -88,11 +88,12 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
             return AutoRecoverableStreamReasons.Contains(current.Reason);
         }
 
-        // 2. Periodic reconciliation tick transient failure
+        // 2. Periodic reconciliation tick transient failure or purely stale snapshot
         if (string.Equals(current.ChangedBy, "account-reconciliation", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(current.ChangedBy, "periodic-reconciliation", StringComparison.OrdinalIgnoreCase))
         {
-            return string.Equals(current.Reason, "PERIODIC_RECONCILIATION_FAILURE", StringComparison.OrdinalIgnoreCase);
+            return string.Equals(current.Reason, "PERIODIC_RECONCILIATION_FAILURE", StringComparison.OrdinalIgnoreCase) ||
+                current.Reason.StartsWith("Account reconciliation stale snapshot", StringComparison.OrdinalIgnoreCase);
         }
 
         // 3. Autonomy cycle transient failures

@@ -579,9 +579,28 @@ public sealed class AccountReconciliationService
             && !events.Any(static item => item is OpenOrderReconciliationMismatch);
         if (!healthy)
         {
+            var hasDivergentOrders = events.OfType<OpenOrderReconciliationMismatch>().Any(static m =>
+                m.ReasonCode != "STALE_SNAPSHOT" ||
+                m.LocalOrderId is null ||
+                m.ExchangeOrderId is null ||
+                !string.Equals(m.LocalStatus, m.ExchangeStatus, StringComparison.OrdinalIgnoreCase));
+
+            var hasBalanceDrift = events.OfType<ReconciliationMismatch>().Any(m =>
+                Math.Abs(m.Delta) > options.AbsoluteTolerance ||
+                m.ReasonCode != "STALE_SNAPSHOT");
+
+            var isPurelyStaleSnapshot = !snapshotIsFresh
+                && unknownTradeIds.Length == 0
+                && !hasDivergentOrders
+                && !hasBalanceDrift;
+
+            var reason = isPurelyStaleSnapshot
+                ? $"Account reconciliation stale snapshot (correlation {correlationId})."
+                : $"Account reconciliation drift detected (correlation {correlationId}).";
+
             var command = new OperationalControlCommand(
                 Actor,
-                $"Account reconciliation drift detected (correlation {correlationId}).",
+                reason,
                 new IdempotencyKey($"reconciliation:{correlationId}"),
                 timeProvider.GetUtcNow());
             _ = await operationalControl.EnterSafeModeAsync(command, cancellationToken).ConfigureAwait(false);
