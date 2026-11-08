@@ -1134,7 +1134,7 @@ internal sealed class AutonomyCycleHostedService(
             {
                 lastClosedTradeAtBySymbol[symbol] = valuationTimeProvider.GetUtcNow();
                 var lastUnrealized = lastKnownUnrealizedProfitBpsBySymbol.TryRemove(symbol, out var prevBps) ? prevBps : 0m;
-                lastClosedTradeWasStopLossBySymbol[symbol] = lastUnrealized <= -50.0m;
+                lastClosedTradeWasStopLossBySymbol[symbol] = lastUnrealized <= -90.0m;
             }
             positionLifetimePeakProfitBps.TryRemove(symbol, out _);
             positionOriginatingStrategy.TryRemove(symbol, out _);

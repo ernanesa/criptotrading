@@ -2712,4 +2712,124 @@ public sealed class AdaptiveDecisionCycleTests
         var snapshot = TechnicalIndicatorCalculator.Evaluate(bars);
         Assert.True(snapshot.DownsideDeviationBps > 0m);
     }
+
+    [Fact]
+    public void SuppressesPrematureExitWhenLossIsWithinNoiseBand()
+    {
+        var cycle = CreateCycle();
+        var bars = Bars(
+            84_000m, 84_050m, 84_150m, 84_300m, 84_500m, 84_700m,
+            84_900m, 85_050m, 85_150m, 85_200m, 85_100m, 85_000m,
+            84_900m, 84_800m, 84_700m, 84_650m, 84_600m, 84_500m,
+            84_500m, 84_500m, 84_500m, 84_500m, 84_500m, 84_500m);
+        // Position bought at 500 USDT, slight micro-loss to 498.50 USDT (-30 bps)
+        var portfolio = CreatePortfolio(498.50m) with { PositionCostNotional = 500.00m };
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            Portfolio = portfolio,
+            PositionOriginatingStrategyId = "trend-following-btcusdt",
+            PositionOpenedAtUtc = TestTime.AddMinutes(-8),
+            EvaluatedAtUtc = TestTime
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("EXIT_BELOW_COST_BASIS_WITHIN_NOISE_BAND", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void AllowsExitWhenLossExceedsNoiseBandEvenIfPositionIsYoung()
+    {
+        var cycle = CreateCycle();
+        var bars = Bars(
+            84_000m, 84_050m, 84_150m, 84_300m, 84_500m, 84_700m,
+            84_900m, 85_050m, 85_150m, 85_200m, 85_100m, 85_000m,
+            84_900m, 84_800m, 84_700m, 84_650m, 84_600m, 84_500m,
+            84_500m, 84_500m, 84_500m, 84_500m, 84_500m, 84_500m);
+        // Position bought at 500 USDT, loss of 150 bps (> maxNoiseLossBps of 50-60 bps)
+        var portfolio = CreatePortfolio(492.50m) with { PositionCostNotional = 500.00m };
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            Portfolio = portfolio,
+            PositionOriginatingStrategyId = "trend-following-btcusdt",
+            PositionOpenedAtUtc = TestTime.AddMinutes(-8), // 8 minutes old (< 15m)
+            EvaluatedAtUtc = TestTime
+        };
+
+        var result = cycle.Evaluate(request);
+
+        // Must NOT be suppressed by noise band since loss exceeds maxNoiseLossBps
+        Assert.False(result.IsNoTrade);
+        Assert.Equal(OrderSide.Sell, result.RecommendedSide);
+    }
+
+    [Fact]
+    public void PostTradeCooldownEnforcedAt10MinutesInBullTrend()
+    {
+        var cycle = CreateCycle();
+        var prices = new decimal[25];
+        for (var i = 0; i < 25; i++)
+        {
+            prices[i] = 84_000m + (i * 20m);
+        }
+        var bars = Bars(prices);
+
+        var request = new AdaptiveDecisionCycleRequest(
+            bars,
+            CreatePortfolio(),
+            CreateRiskPolicy(),
+            OperationalControlSnapshot.Initial,
+            EntryTargetNotional: 500m,
+            EvaluatedAtUtc: TestTime,
+            LastClosedTradeAtUtc: TestTime.AddMinutes(-10)); // 10m ago < 15m cooldown in BullTrend
+
+        var result = cycle.Evaluate(request);
+
+        Assert.True(result.IsNoTrade);
+        Assert.Equal("POST_TRADE_COOLDOWN_ACTIVE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void PostTradeCooldownReducedTo15MinutesInConfirmedBullTrend()
+    {
+        var cycle = CreateCycle();
+        // Bull trend slope > 0.00008
+        var bars = WithWilderWarmup(Bars(Enumerable.Range(0, 25).Select(i => 100m + i * 0.15m).ToArray()));
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LastClosedTradeAtUtc = TestTime.AddMinutes(-20), // 20m ago (> 15m cooldown in BullTrend)
+            EvaluatedAtUtc = TestTime,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(103.59m), new Price(103.61m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 10m, askQuantity: 10m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.NotEqual("POST_TRADE_COOLDOWN_ACTIVE", result.NoTradeReason);
+    }
+
+    [Fact]
+    public void PostStopLossQuarantineReducedTo30MinutesInConfirmedBullTrend()
+    {
+        var cycle = CreateCycle();
+        // Bull trend slope > 0.00008
+        var bars = WithWilderWarmup(Bars(Enumerable.Range(0, 25).Select(i => 100m + i * 0.15m).ToArray()));
+        var request = CreateDispatchableRequest() with
+        {
+            Bars = bars,
+            LastClosedTradeAtUtc = TestTime.AddMinutes(-35), // 35m ago (> 30m quarantine in BullTrend)
+            LastClosedTradeWasStopLoss = true,
+            EvaluatedAtUtc = TestTime,
+            ExecutionMarket = new ExecutionMarketSnapshot(new Price(103.59m), new Price(103.61m), 10_000m, TestTime,
+                quantityStepSize: 0.0001m, priceTickSize: 0.01m, bidQuantity: 10m, askQuantity: 10m)
+        };
+
+        var result = cycle.Evaluate(request);
+
+        Assert.NotEqual("POST_STOP_LOSS_QUARANTINE_ACTIVE", result.NoTradeReason);
+    }
 }

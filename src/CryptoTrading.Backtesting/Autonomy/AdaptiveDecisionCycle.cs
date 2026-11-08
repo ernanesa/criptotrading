@@ -213,6 +213,22 @@ public sealed class AdaptiveDecisionCycle
             closePrices,
             request.EvaluatedAtUtc,
             trendSlopeThreshold: trendSlopeThreshold);
+        var macroWindowStart = bars.Count > 36 ? bars.Count - 36 : 0;
+        var macroClosePrices = new List<decimal>(bars.Count - macroWindowStart);
+        for (var i = macroWindowStart; i < bars.Count; i++)
+        {
+            macroClosePrices.Add(bars[i].ClosePrice.Value);
+        }
+        var macroSlopeThreshold = bars.Count > 20
+            ? Math.Max(0.000015m, 0.00008m * 20m / macroClosePrices.Count)
+            : trendSlopeThreshold;
+        var macroRegime = bars.Count > 20
+            ? MarketRegimeClassifier.Classify(
+                symbol,
+                macroClosePrices,
+                request.EvaluatedAtUtc,
+                trendSlopeThreshold: macroSlopeThreshold)
+            : regime;
         var orderBookImbalance = request.ExecutionMarket?.EffectiveOrderFlowImbalance ?? 0m;
         var microPriceDivergenceBps = request.ExecutionMarket?.MicroPriceDivergenceBps ?? 0m;
         var indicators = bars.Count >= 20
@@ -458,8 +474,7 @@ public sealed class AdaptiveDecisionCycle
                 IsNoTrade = false
             };
         }
-        else if ((orchestration.IsNoTrade || !orchestration.SelectedSide.HasValue || string.IsNullOrWhiteSpace(orchestration.SelectedStrategyId)) &&
-                 bars.Count >= 20 &&
+        else if (bars.Count >= 20 &&
                  request.Portfolio.GrossExposureNotional > minTradableExposure &&
                  request.Portfolio.PositionCostNotional > 0m &&
                  currentUnrealizedProfitBps <= -protectiveStopLossBps)
@@ -775,14 +790,15 @@ public sealed class AdaptiveDecisionCycle
             !orchestration.OrchestrationReason.StartsWith("PROTECTIVE_STOP_LOSS_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("HIGH_VOLATILITY_CHOP_RISK_EXIT", StringComparison.Ordinal) &&
             !orchestration.OrchestrationReason.StartsWith("HIGH_PRICE_DISPERSION_RISK_EXIT", StringComparison.Ordinal) &&
-            !(regime.Regime == MarketRegime.BearTrend &&
+            !(macroRegime.Regime == MarketRegime.BearTrend &&
+              regime.Regime == MarketRegime.BearTrend &&
+              regime.TrendSlopeRate <= -0.00030m &&
               (request.LifetimePeakProfitBps is >= 60.0m ||
                indicators.CvdImbalance < -0.05m ||
-               (regime.TrendSlopeRate <= -0.00015m &&
-                 ((mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.42m) ||
-                 request.MarketBreadthRatio is < 0.35m ||
-                 isLeaderRetreating ||
-                 isCanaryBasketRetreating)))) &&
+               ((mlEval.HasCalibratedProbability && mlEval.MlWinProbability < 0.42m) ||
+                request.MarketBreadthRatio is < 0.35m ||
+                isLeaderRetreating ||
+                isCanaryBasketRetreating))) &&
             (request.Portfolio.GrossExposureNotional < request.Portfolio.PositionCostNotional ||
              (bars.Count >= 20 &&
               (request.Portfolio.GrossExposureNotional - request.Portfolio.PositionCostNotional) / request.Portfolio.PositionCostNotional * 10_000m < minProfitBps)))
@@ -801,7 +817,6 @@ public sealed class AdaptiveDecisionCycle
                     mlEval: mlEval,
                     request: request);
             }
-
         }
 
         // 5b. Previously calibrated System-1 evidence and independent entry guards.
@@ -853,9 +868,21 @@ public sealed class AdaptiveDecisionCycle
 
         if (bars.Count >= 20)
         {
+            var hasStrongStructureReclamation = regime.Regime == MarketRegime.BullTrend &&
+                                                regime.TrendSlopeRate >= 0.00010m &&
+                                                indicators.Rsi >= 52m &&
+                                                indicators.VwapDeviationBps > 0m &&
+                                                orderBookImbalance >= 0.20m &&
+                                                indicators.CvdImbalance >= 0.05m;
+
+            var cooldownDuration = (regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate >= 0.00008m)
+                ? TimeSpan.FromMinutes(15)
+                : TimeSpan.FromMinutes(30);
+
             if (isEntry && request.LastClosedTradeAtUtc is { } lastClose &&
                 lastClose > DateTimeOffset.MinValue &&
-                (request.EvaluatedAtUtc - lastClose) < TimeSpan.FromMinutes(30))
+                (request.EvaluatedAtUtc - lastClose) < cooldownDuration &&
+                !hasStrongStructureReclamation)
             {
                 return CreateNoTradeResult(
                     regime,
@@ -870,18 +897,16 @@ public sealed class AdaptiveDecisionCycle
                     indicators: indicators);
             }
 
+            var quarantineDuration = (regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate >= 0.00008m)
+                ? TimeSpan.FromMinutes(30)
+                : TimeSpan.FromMinutes(60);
+
             if (isEntry &&
                 request.LastClosedTradeWasStopLoss &&
                 request.LastClosedTradeAtUtc is { } lastStopClose &&
                 lastStopClose > DateTimeOffset.MinValue &&
-                (request.EvaluatedAtUtc - lastStopClose) < TimeSpan.FromMinutes(60))
+                (request.EvaluatedAtUtc - lastStopClose) < quarantineDuration)
             {
-                var hasStrongStructureReclamation = regime.Regime == MarketRegime.BullTrend &&
-                                                    regime.TrendSlopeRate >= 0.00010m &&
-                                                    indicators.Rsi >= 52m &&
-                                                    indicators.VwapDeviationBps > 0m &&
-                                                    orderBookImbalance >= 0.20m &&
-                                                    indicators.CvdImbalance >= 0.05m;
                 if (!hasStrongStructureReclamation)
                 {
                     return CreateNoTradeResult(
