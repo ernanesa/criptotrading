@@ -43,7 +43,26 @@ internal sealed class ReconciliationStartupHostedService(
             }
         }
 
-        result ??= await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+        if (result is null)
+        {
+            try
+            {
+                result = await reconciliation.ReconcileAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (FailureClassifier.Classify(ex).Severity == FailureSeverity.Transient)
+            {
+                logger.LogWarning(ex, "Startup reconciliation encountered transient rate or network limitation. Delegating reconciliation to periodic service.");
+                await runtimeSupervisor.MarkReconciliationAsync(
+                    true,
+                    "startup-reconciliation-deferred-transient",
+                    cancellationToken).ConfigureAwait(false);
+                await runtimeSupervisor.MarkWarmupAsync(
+                    true,
+                    "startup-warmup-deferred-transient",
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+        }
         var reportPath = await reportWriter.AppendAsync(new ReconciliationRunReport(
             Guid.NewGuid().ToString("N"),
             result.ObservedAtUtc,
