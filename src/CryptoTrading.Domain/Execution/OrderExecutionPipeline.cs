@@ -26,7 +26,8 @@ public sealed record OrderIntent
         DateTimeOffset? commissionObservedAtUtc = null,
         DateTimeOffset? commissionValidUntilUtc = null,
         int executionAttempt = 0,
-        DateTimeOffset? executionExpiresAtUtc = null)
+        DateTimeOffset? executionExpiresAtUtc = null,
+        bool postOnly = false)
     {
         ArgumentNullException.ThrowIfNull(riskEvaluation);
 
@@ -91,6 +92,7 @@ public sealed record OrderIntent
         CommissionValidUntilUtc = commissionValidUntilUtc;
         ExecutionAttempt = executionAttempt;
         ExecutionExpiresAtUtc = executionExpiresAtUtc;
+        PostOnly = postOnly;
     }
 
     public OrderId OrderId { get; }
@@ -111,6 +113,7 @@ public sealed record OrderIntent
     public DateTimeOffset? CommissionValidUntilUtc { get; }
     public int ExecutionAttempt { get; }
     public DateTimeOffset? ExecutionExpiresAtUtc { get; }
+    public bool PostOnly { get; }
 }
 
 /// <summary>Exchange-facing command; it is only created after risk authorization.</summary>
@@ -133,7 +136,8 @@ public sealed record SubmitOrderCommand(
     DateTimeOffset? CommissionObservedAtUtc = null,
     DateTimeOffset? CommissionValidUntilUtc = null,
     int ExecutionAttempt = 0,
-    DateTimeOffset? ExecutionExpiresAtUtc = null);
+    DateTimeOffset? ExecutionExpiresAtUtc = null,
+    bool PostOnly = false);
 
 public enum OutboxRecordStatus
 {
@@ -247,7 +251,8 @@ public static class OrderExecutionPipeline
             intent.CommissionObservedAtUtc,
             intent.CommissionValidUntilUtc,
             intent.ExecutionAttempt,
-            intent.ExecutionExpiresAtUtc);
+            intent.ExecutionExpiresAtUtc,
+            intent.PostOnly);
 
         var outbox = new OutboxRecord(
             Guid.NewGuid(),

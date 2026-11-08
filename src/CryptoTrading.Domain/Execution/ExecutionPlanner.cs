@@ -129,7 +129,8 @@ public sealed record ExecutionPlanRequest
         TimeSpan? commissionMaximumAge = null,
         bool makerFeeEligible = false,
         bool useConservativeCommissionReserve = false,
-        ExecutionTacticDecision? tactic = null)
+        ExecutionTacticDecision? tactic = null,
+        bool postOnly = false)
     {
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(decision);
@@ -172,6 +173,7 @@ public sealed record ExecutionPlanRequest
         MakerFeeEligible = makerFeeEligible;
         UseConservativeCommissionReserve = useConservativeCommissionReserve;
         Tactic = tactic;
+        PostOnly = postOnly;
     }
 
     public OrderIntent Intent { get; }
@@ -189,6 +191,7 @@ public sealed record ExecutionPlanRequest
     public bool MakerFeeEligible { get; }
     public bool UseConservativeCommissionReserve { get; }
     public ExecutionTacticDecision? Tactic { get; }
+    public bool PostOnly { get; }
 }
 
 /// <summary>One passive limit leg; quantity is never larger than the authorized target.</summary>
@@ -207,7 +210,8 @@ public sealed record ExecutionPlan(
     string? CommissionSnapshotHash = null,
     string? CommissionSource = null,
     DateTimeOffset? CommissionObservedAtUtc = null,
-    DateTimeOffset? CommissionValidUntilUtc = null);
+    DateTimeOffset? CommissionValidUntilUtc = null,
+    bool PostOnly = false);
 
 public sealed record ExecutionPlanResult(ExecutionPlan? Plan, string? NoTradeReason)
 {
@@ -407,6 +411,9 @@ public static class ExecutionPlanner
         var authorizedNotional = quantity.Value * limitPrice.Value;
 
         var identity = BuildIdentity(intent, request.Attempt, limitPrice, quantity);
+        var isPostOnly = request.PostOnly || intent.PostOnly ||
+            request.Tactic is { SelectedTactic: ExecutionTactic.PassiveMakerPegged or ExecutionTactic.PassiveMakerDeep or ExecutionTactic.IcebergChunked };
+
         return new(
             new ExecutionPlan(
                 intent.OrderId,
@@ -425,7 +432,8 @@ public static class ExecutionPlanner
                 request.EffectiveCommission?.ObservedAtUtc,
                 request.EffectiveCommission is { } snapshot
                     ? snapshot.ObservedAtUtc + request.CommissionMaximumAge
-                    : null),
+                    : null,
+                PostOnly: isPostOnly),
             null);
     }
 

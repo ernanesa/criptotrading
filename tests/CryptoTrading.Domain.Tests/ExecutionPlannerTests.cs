@@ -506,6 +506,99 @@ public sealed class ExecutionPlannerTests
         Assert.Equal(100.09m, plan.LimitPrice.Value); // 1 tick inside spread from ask
     }
 
+    [Fact]
+    public void ExecutionPlanSetsPostOnlyWhenPassiveMakerTacticOrPostOnlyRequested()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(100.00m),
+            new Price(100.10m),
+            10_000m,
+            Now,
+            isComplete: true,
+            quantityStepSize: 0.01m,
+            priceTickSize: 0.01m);
+
+        var intent = new OrderIntent(
+            new OrderId(Guid.NewGuid()),
+            new ClientOrderId("ct-post-only-test"),
+            new Symbol("BTCUSDT"),
+            OrderSide.Buy,
+            OrderType.Limit,
+            new Quantity(1m),
+            new Price(100m),
+            new CorrelationId(Guid.NewGuid()),
+            new IdempotencyKey("decision:post-only-test"),
+            new RiskEvaluationRequest(100m, 0m, 0m, 0m, Now, Now),
+            Now,
+            postOnly: true);
+
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "risk-1", [RiskReasonCodes.TargetWithinLimits]);
+        var request = new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            attempt: 0,
+            postOnly: true);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+        Assert.NotNull(plan);
+        Assert.True(plan.PostOnly);
+    }
+
+    [Fact]
+    public void ExecutionPlanInfusesPostOnlyWhenPassiveMakerTacticSelected()
+    {
+        var market = new ExecutionMarketSnapshot(
+            new Price(100.00m),
+            new Price(100.10m),
+            10_000m,
+            Now,
+            isComplete: true,
+            quantityStepSize: 0.01m,
+            priceTickSize: 0.01m);
+
+        var intent = new OrderIntent(
+            new OrderId(Guid.NewGuid()),
+            new ClientOrderId("ct-tactic-postonly"),
+            new Symbol("BTCUSDT"),
+            OrderSide.Buy,
+            OrderType.Limit,
+            new Quantity(1m),
+            new Price(100m),
+            new CorrelationId(Guid.NewGuid()),
+            new IdempotencyKey("decision:tactic-postonly"),
+            new RiskEvaluationRequest(100m, 0m, 0m, 0m, Now, Now),
+            Now,
+            postOnly: false);
+
+        var decision = new RiskDecision(RiskDecisionStatus.Approved, 100m, 100m, "risk-1", [RiskReasonCodes.TargetWithinLimits]);
+        var tactic = new ExecutionTacticDecision(
+            ExecutionTactic.PassiveMakerPegged,
+            UrgencyScore: 0.20m,
+            ExpectedSlippageBps: 0.5m,
+            NetExpectedBenefitBps: 3.0m,
+            RequiresImmediateFill: false,
+            Reason: "PASSIVE_MAKER_PEGGED");
+
+        var request = new ExecutionPlanRequest(
+            intent,
+            decision,
+            market,
+            Now,
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(2),
+            attempt: 0,
+            tactic: tactic,
+            postOnly: false);
+
+        var plan = ExecutionPlanner.Plan(request).Plan;
+        Assert.NotNull(plan);
+        Assert.True(plan.PostOnly);
+    }
+
     private static ExecutionPlanRequest Request(
         OrderSide side,
         ExecutionMarketSnapshot? market = null,

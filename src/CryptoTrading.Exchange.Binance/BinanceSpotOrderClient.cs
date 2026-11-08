@@ -112,9 +112,9 @@ public sealed class BinanceSpotOrderRequest
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         var normalized = value.Trim().ToUpperInvariant();
-        return normalized is "GTC" or "IOC" or "FOK"
+        return normalized is "GTC" or "IOC" or "FOK" or "GTX"
             ? normalized
-            : throw new ArgumentException("Limit time-in-force must be GTC, IOC or FOK.", nameof(value));
+            : throw new ArgumentException("Limit time-in-force must be GTC, IOC, FOK or GTX.", nameof(value));
     }
 }
 

@@ -1,6 +1,7 @@
 using System.Globalization;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Portfolio;
+using CryptoTrading.Domain.Regimes;
 using CryptoTrading.Domain.Risk;
 using Xunit;
 
@@ -164,5 +165,40 @@ public sealed class MultiStrategyOperationsTests
         // Strat C: Proposed 70% was clamped to 60% ($60,000)
         Assert.Equal(60_000m, instrC.TargetNotional);
         Assert.True(instrC.RebalanceRequired);
+    }
+
+    [Fact]
+    public void PlanRebalanceWithRegimeFavorsTrendInBullAndMeanReversionInRange()
+    {
+        var totalCapital = 100_000m;
+        var inputs = new List<(string, decimal, decimal)>
+        {
+            ("trend-following-btc", 30_000m, 0.50m),
+            ("grid-adaptive-btc", 30_000m, 0.50m),
+        };
+
+        // In BullTrend: trend gets 1.0 multiplier (0.50), grid gets 0.5 multiplier (0.25)
+        var bullPlan = MultiStrategyPortfolioRebalancer.PlanRebalanceWithRegime(
+            inputs,
+            totalCapital,
+            MarketRegime.BullTrend);
+
+        var bullTrendInstr = bullPlan.Instructions.First(i => i.StrategyId == "trend-following-btc");
+        var bullGridInstr = bullPlan.Instructions.First(i => i.StrategyId == "grid-adaptive-btc");
+
+        Assert.Equal(50_000m, bullTrendInstr.TargetNotional);
+        Assert.Equal(25_000m, bullGridInstr.TargetNotional);
+
+        // In MeanRevertingRange: grid gets 1.0 multiplier (0.50), trend gets 0.4 multiplier (0.20)
+        var rangePlan = MultiStrategyPortfolioRebalancer.PlanRebalanceWithRegime(
+            inputs,
+            totalCapital,
+            MarketRegime.MeanRevertingRange);
+
+        var rangeTrendInstr = rangePlan.Instructions.First(i => i.StrategyId == "trend-following-btc");
+        var rangeGridInstr = rangePlan.Instructions.First(i => i.StrategyId == "grid-adaptive-btc");
+
+        Assert.Equal(20_000m, rangeTrendInstr.TargetNotional);
+        Assert.Equal(50_000m, rangeGridInstr.TargetNotional);
     }
 }

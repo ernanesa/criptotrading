@@ -81,6 +81,7 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastIntrabarWakeupUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, decimal> cachedTakerFeeRateBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastProcessedCloseByScope = new(StringComparer.Ordinal);
     private sealed record CachedRiskPolicy(RiskPolicyDocument Document, DateTimeOffset CachedAtUtc);
     private CachedRiskPolicy? cachedActiveRiskPolicy;
@@ -455,7 +456,9 @@ internal sealed class AutonomyCycleHostedService(
                             tickerEvent.BestBidPrice > 0m)
                         {
                             var curValueNotional = basis.Quantity * tickerEvent.BestBidPrice;
-                            var curProfitBps = (curValueNotional - basis.CostNotional) / basis.CostNotional * 10_000m;
+                            var takerFeeRate = cachedTakerFeeRateBySymbol.GetValueOrDefault(tickerEvent.Symbol, 0.0010m);
+                            var curNetExitValue = curValueNotional * (1m - takerFeeRate);
+                            var curProfitBps = (curNetExitValue - basis.CostNotional) / basis.CostNotional * 10_000m;
                             var peakBps = positionLifetimePeakProfitBps.AddOrUpdate(tickerEvent.Symbol, curProfitBps, (_, peak) => Math.Max(peak, curProfitBps));
 
                             var thresholds = dynamicExitThresholdsBySymbol.GetValueOrDefault(tickerEvent.Symbol, DynamicExitThresholds.Default);
@@ -702,7 +705,9 @@ internal sealed class AutonomyCycleHostedService(
                 now - intrabarTicker.ObservedAtUtc <= policyDocument.Policy.MaxMarketDataAge)
             {
                 var intrabarValueNotional = intrabarBasis.Quantity * intrabarTicker.BidPrice;
-                var intrabarProfitBps = (intrabarValueNotional - intrabarBasis.CostNotional) / intrabarBasis.CostNotional * 10_000m;
+                var takerFeeRate = cachedTakerFeeRateBySymbol.GetValueOrDefault(symbol, 0.0010m);
+                var intrabarNetExitValue = intrabarValueNotional * (1m - takerFeeRate);
+                var intrabarProfitBps = (intrabarNetExitValue - intrabarBasis.CostNotional) / intrabarBasis.CostNotional * 10_000m;
                 var intrabarPeakBps = positionLifetimePeakProfitBps.AddOrUpdate(
                     symbol,
                     intrabarProfitBps,
@@ -828,6 +833,7 @@ internal sealed class AutonomyCycleHostedService(
             account,
             now,
             discountValuation);
+        cachedTakerFeeRateBySymbol[symbol] = commissionSnapshot.Standard.Taker;
 
         var baseAsset = symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
             ? symbol[..^4]
@@ -1110,7 +1116,9 @@ internal sealed class AutonomyCycleHostedService(
         {
             positionOpenedAtBySymbol.TryAdd(symbol, valuationTimeProvider.GetUtcNow());
             positionCostBases[symbol] = (accounting.PositionCostNotional, baseQuantity);
-            var curProfitBps = (portfolio.GrossExposureNotional - accounting.PositionCostNotional) / accounting.PositionCostNotional * 10_000m;
+            var takerFeeRate = cachedTakerFeeRateBySymbol.GetValueOrDefault(symbol, 0.0010m);
+            var netExposureNotional = portfolio.GrossExposureNotional * (1m - takerFeeRate);
+            var curProfitBps = (netExposureNotional - accounting.PositionCostNotional) / accounting.PositionCostNotional * 10_000m;
             lastKnownUnrealizedProfitBpsBySymbol[symbol] = curProfitBps;
 
             lifetimePeakBps = positionLifetimePeakProfitBps.AddOrUpdate(

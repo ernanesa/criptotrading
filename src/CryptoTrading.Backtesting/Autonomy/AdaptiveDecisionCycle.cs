@@ -1536,7 +1536,8 @@ public sealed class AdaptiveDecisionCycle
                     plan.Plan.CommissionObservedAtUtc,
                     plan.Plan.CommissionValidUntilUtc,
                     plan.Plan.Attempt,
-                    plan.Plan.ExpiresAtUtc);
+                    plan.Plan.ExpiresAtUtc,
+                    postOnly: plan.Plan.PostOnly);
 
                 finalExecution = OrderExecutionPipeline.Evaluate(finalIntent, request.RiskPolicy, request.OperationalControl);
             }

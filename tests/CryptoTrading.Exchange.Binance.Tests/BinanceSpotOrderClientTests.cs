@@ -171,6 +171,21 @@ public sealed class BinanceSpotOrderClientTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => new BinanceSpotOrderClient(client, options));
     }
 
+    [Fact]
+    public void OrderRequestAcceptsGtxPostOnlyTimeInForce()
+    {
+        var request = new BinanceSpotOrderRequest(
+            "BTCUSDT",
+            BinanceSpotOrderSide.Buy,
+            BinanceSpotOrderType.Limit,
+            0.01m,
+            "ct-gtx-1",
+            price: 60_000m,
+            timeInForce: "GTX");
+
+        Assert.Equal("GTX", request.TimeInForce);
+    }
+
     private static BinanceSpotOrderRequest Request() => new(
         "btcusdt",
         BinanceSpotOrderSide.Buy,

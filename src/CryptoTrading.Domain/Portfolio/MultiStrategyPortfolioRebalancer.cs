@@ -1,3 +1,5 @@
+using CryptoTrading.Domain.Regimes;
+
 namespace CryptoTrading.Domain.Portfolio;
 
 /// <summary>Intent to adjust capital allocation for an individual strategy (US-076).</summary>
@@ -18,12 +20,51 @@ public sealed record PortfolioRebalancePlan(
 
 /// <summary>
 /// Multi-strategy portfolio rebalancer (US-076).
-/// Computes minimum turnover rebalancing adjustments while enforcing capacity caps and hysteresis bands.
+/// Computes minimum turnover rebalancing adjustments while enforcing capacity caps, regime shifts, and hysteresis bands.
 /// </summary>
 public static class MultiStrategyPortfolioRebalancer
 {
     public const decimal DefaultHysteresisThreshold = 0.05m; // 5% minimum shift to trigger rebalance
     public const decimal DefaultMaxStrategyCap = 0.60m; // Max 60% of total capital in any single strategy
+
+    public static decimal ResolveRegimeMultiplier(string strategyId, MarketRegime regime)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(strategyId);
+        var id = strategyId.ToUpperInvariant();
+
+        var isTrend = id.Contains("TREND", StringComparison.Ordinal) || id.Contains("BREAKOUT", StringComparison.Ordinal);
+        var isMeanReversion = id.Contains("MEAN", StringComparison.Ordinal) || id.Contains("REVERSION", StringComparison.Ordinal) || id.Contains("GRID", StringComparison.Ordinal);
+
+        return regime switch
+        {
+            MarketRegime.BullTrend => isTrend ? 1.0m : (isMeanReversion ? 0.5m : 0.7m),
+            MarketRegime.BearTrend => isTrend ? 0.2m : (isMeanReversion ? 0.3m : 0.2m),
+            MarketRegime.MeanRevertingRange => isMeanReversion ? 1.0m : (isTrend ? 0.4m : 0.6m),
+            MarketRegime.HighVolatilityChop => 0.3m,
+            MarketRegime.IlliquidOrStale => 0.1m,
+            _ => 0.5m,
+        };
+    }
+
+    public static PortfolioRebalancePlan PlanRebalanceWithRegime(
+        IReadOnlyList<(string StrategyId, decimal CurrentNotional, decimal ProposedWeight)> strategyInputs,
+        decimal totalCapitalNotional,
+        MarketRegime regime,
+        decimal hysteresisThreshold = DefaultHysteresisThreshold,
+        decimal maxStrategyCap = DefaultMaxStrategyCap)
+    {
+        ArgumentNullException.ThrowIfNull(strategyInputs);
+
+        var adjustedInputs = new List<(string StrategyId, decimal CurrentNotional, decimal ProposedWeight)>(strategyInputs.Count);
+        foreach (var (strategyId, currentNotional, proposedWeight) in strategyInputs)
+        {
+            var multiplier = ResolveRegimeMultiplier(strategyId, regime);
+            var adjustedWeight = Math.Round(proposedWeight * multiplier, 4);
+            adjustedInputs.Add((strategyId, currentNotional, adjustedWeight));
+        }
+
+        return PlanRebalance(adjustedInputs, totalCapitalNotional, hysteresisThreshold, maxStrategyCap);
+    }
 
     public static PortfolioRebalancePlan PlanRebalance(
         IReadOnlyList<(string StrategyId, decimal CurrentNotional, decimal ProposedWeight)> strategyInputs,

@@ -73,13 +73,15 @@ public sealed class TestnetOutboxMessageExecutor(
             ["trace_id"] = Activity.Current?.TraceId.ToString()
         });
 
+        var timeInForce = command.PostOnly ? "GTX" : "GTC";
         var request = new BinanceSpotOrderRequest(
             command.Symbol.Value,
             command.Side == OrderSide.Buy ? BinanceSpotOrderSide.Buy : BinanceSpotOrderSide.Sell,
             command.Type == OrderType.Limit ? BinanceSpotOrderType.Limit : BinanceSpotOrderType.Market,
             command.Quantity.Value,
             command.ClientOrderId.Value,
-            command.Type == OrderType.Limit ? command.ReferencePrice.Value : null);
+            command.Type == OrderType.Limit ? command.ReferencePrice.Value : null,
+            timeInForce: timeInForce);
 
         var order = Order.Create(
             command.OrderId,

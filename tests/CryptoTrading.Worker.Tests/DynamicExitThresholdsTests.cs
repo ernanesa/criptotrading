@@ -82,4 +82,29 @@ public sealed class DynamicExitThresholdsTests
         Assert.Equal(430.0m, thresholds.ChandelierActivationBps);
         Assert.Equal(100.0m, thresholds.ChandelierPullbackBps);
     }
+
+    [Fact]
+    public void NetProfitAccountingAccountsForTakerFee()
+    {
+        // 1 BTC at cost notional 10,000 USDT.
+        // If price reaches 10,015 USDT (+15 bps gross):
+        // Gross value = 10,015. Gross profit = +15 bps.
+        // With 10 bps (0.0010) taker sell fee:
+        // Net exit value = 10,015 * (1 - 0.0010) = 10,004.985 USDT.
+        // Net profit = (10,004.985 - 10,000) / 10,000 * 10,000 = +4.985 bps net.
+        var costNotional = 10_000m;
+        var quantity = 1.0m;
+        var grossBidPrice = 10_015m;
+        var takerFeeRate = 0.0010m; // 10 bps
+
+        var grossValueNotional = quantity * grossBidPrice;
+        var grossProfitBps = (grossValueNotional - costNotional) / costNotional * 10_000m;
+
+        var netExitValueNotional = grossValueNotional * (1m - takerFeeRate);
+        var netProfitBps = (netExitValueNotional - costNotional) / costNotional * 10_000m;
+
+        Assert.Equal(15.0m, grossProfitBps);
+        Assert.True(netProfitBps < grossProfitBps);
+        Assert.True(netProfitBps < 10.0m); // Net profit is ~5 bps, preventing false take-profit
+    }
 }

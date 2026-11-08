@@ -22,6 +22,7 @@ public enum GridReason
     SellLevelTriggered,
     InventoryCapReached,
     InventoryDepleted,
+    MaxDrawdownStopTriggered,
 }
 
 /// <summary>
@@ -38,7 +39,9 @@ public sealed record AdaptiveGridParameters
         decimal quantityPerLevel,
         decimal maxInventoryQuantity,
         decimal feeRate,
-        decimal slippageRate)
+        decimal slippageRate,
+        bool enableVolatilityScaling = false,
+        decimal? maxInventoryDrawdownBps = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(strategyId);
         ArgumentException.ThrowIfNullOrWhiteSpace(version);
@@ -69,6 +72,13 @@ public sealed record AdaptiveGridParameters
         ValidateRate(feeRate, nameof(feeRate));
         ValidateRate(slippageRate, nameof(slippageRate));
 
+        if (maxInventoryDrawdownBps is <= 0m or >= 10_000m)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxInventoryDrawdownBps),
+                "Max inventory drawdown must be between 0 and 10,000 bps.");
+        }
+
         StrategyId = strategyId.Trim();
         Version = version.Trim();
         Symbol = symbol;
@@ -78,6 +88,8 @@ public sealed record AdaptiveGridParameters
         MaxInventoryQuantity = maxInventoryQuantity;
         FeeRate = feeRate;
         SlippageRate = slippageRate;
+        EnableVolatilityScaling = enableVolatilityScaling;
+        MaxInventoryDrawdownBps = maxInventoryDrawdownBps;
     }
 
     /// <summary>Approved default baseline parameters for BTCUSDT Adaptive Grid.</summary>
@@ -110,13 +122,17 @@ public sealed record AdaptiveGridParameters
 
     public decimal SlippageRate { get; }
 
+    public bool EnableVolatilityScaling { get; }
+
+    public decimal? MaxInventoryDrawdownBps { get; }
+
     /// <summary>SHA-256 canonical fingerprint of every parameter affecting grid execution.</summary>
     public string ConfigurationFingerprint
     {
         get
         {
-            var canonical = string.Join(
-                '|',
+            var parts = new List<string>
+            {
                 StrategyId,
                 Version,
                 Symbol.Value,
@@ -125,8 +141,16 @@ public sealed record AdaptiveGridParameters
                 QuantityPerLevel.ToString("G29", CultureInfo.InvariantCulture),
                 MaxInventoryQuantity.ToString("G29", CultureInfo.InvariantCulture),
                 FeeRate.ToString("G29", CultureInfo.InvariantCulture),
-                SlippageRate.ToString("G29", CultureInfo.InvariantCulture));
+                SlippageRate.ToString("G29", CultureInfo.InvariantCulture)
+            };
 
+            if (EnableVolatilityScaling || MaxInventoryDrawdownBps.HasValue)
+            {
+                parts.Add(EnableVolatilityScaling ? "1" : "0");
+                parts.Add(MaxInventoryDrawdownBps?.ToString("G29", CultureInfo.InvariantCulture) ?? "none");
+            }
+
+            var canonical = string.Join('|', parts);
             return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
         }
     }
@@ -170,6 +194,8 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
     private decimal _currentInventory;
     private int _activeGridLevel;
     private DateTimeOffset _lastTimestampUtc;
+    private decimal _totalEntryNotional;
+    private readonly List<decimal> _recentPrices = new();
 
     public AdaptiveGridStrategy(AdaptiveGridParameters parameters)
     {
@@ -187,19 +213,57 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
     public StrategyExecutionSignal GenerateSignal(CloseBar bar, int barIndex)
     {
         ArgumentNullException.ThrowIfNull(bar);
+        var close = bar.ClosePrice.Value;
+        _lastTimestampUtc = bar.CloseTimeUtc;
+
+        _recentPrices.Add(close);
+        if (_recentPrices.Count > 20)
+        {
+            _recentPrices.RemoveAt(0);
+        }
+
         if (_anchorPrice is null || barIndex == 0)
         {
-            _anchorPrice = bar.ClosePrice.Value;
+            _anchorPrice = close;
             _activeGridLevel = 0;
-            _lastTimestampUtc = bar.CloseTimeUtc;
             return new StrategyExecutionSignal(barIndex, StrategyExecutionAction.NoTrade, reasonCode: GridReason.Initialized.ToString());
         }
 
-        var close = bar.ClosePrice.Value;
+        // Check Max Drawdown Stop
+        if (Parameters.MaxInventoryDrawdownBps is { } maxDd && _currentInventory > 0m && _totalEntryNotional > 0m)
+        {
+            var avgEntry = _totalEntryNotional / _currentInventory;
+            var ddBps = (avgEntry - close) / avgEntry * 10_000m;
+            if (ddBps >= maxDd)
+            {
+                var liquidateQty = _currentInventory;
+                _anchorPrice = close;
+                _activeGridLevel = 0;
+                return new StrategyExecutionSignal(
+                    barIndex,
+                    StrategyExecutionAction.SellBaseQuantity,
+                    liquidateQty,
+                    reasonCode: GridReason.MaxDrawdownStopTriggered.ToString());
+            }
+        }
+
+        var effectiveSpacing = Parameters.GridSpacingRate;
+        if (Parameters.EnableVolatilityScaling && _recentPrices.Count >= 2)
+        {
+            decimal totalPctReturn = 0m;
+            for (var i = 1; i < _recentPrices.Count; i++)
+            {
+                totalPctReturn += Math.Abs(_recentPrices[i] - _recentPrices[i - 1]) / _recentPrices[i - 1];
+            }
+            var avgVol = totalPctReturn / (_recentPrices.Count - 1);
+            var expectedVol = Parameters.GridSpacingRate * 0.25m;
+            var ratio = avgVol / expectedVol;
+            effectiveSpacing = Parameters.GridSpacingRate * Math.Clamp(ratio, 0.5m, 2.5m);
+        }
+
         var anchor = _anchorPrice.Value;
-        var calculatedLevel = (int)Math.Floor((double)((close - anchor) / (anchor * Parameters.GridSpacingRate)));
+        var calculatedLevel = (int)Math.Floor((double)((close - anchor) / (anchor * effectiveSpacing)));
         calculatedLevel = Math.Clamp(calculatedLevel, -Parameters.MaxLevels, Parameters.MaxLevels);
-        _lastTimestampUtc = bar.CloseTimeUtc;
 
         if (calculatedLevel < _activeGridLevel)
         {
@@ -258,10 +322,21 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
         if (feedback.Action is StrategyExecutionAction.BuyBaseQuantity or StrategyExecutionAction.EnterLong)
         {
             _currentInventory = Math.Min(Parameters.MaxInventoryQuantity, _currentInventory + feedback.ExecutedQuantity);
+            _totalEntryNotional += feedback.ExecutedQuantity * (feedback.ExecutedPrice > 0m ? feedback.ExecutedPrice : (_anchorPrice ?? 0m));
         }
         else if (feedback.Action is StrategyExecutionAction.SellBaseQuantity or StrategyExecutionAction.ExitLong)
         {
-            _currentInventory = Math.Max(0m, _currentInventory - feedback.ExecutedQuantity);
+            var reducedQty = Math.Min(_currentInventory, feedback.ExecutedQuantity);
+            if (_currentInventory > 0m)
+            {
+                var avgPrice = _totalEntryNotional / _currentInventory;
+                _totalEntryNotional = Math.Max(0m, _totalEntryNotional - (reducedQty * avgPrice));
+            }
+            _currentInventory = Math.Max(0m, _currentInventory - reducedQty);
+            if (_currentInventory == 0m)
+            {
+                _totalEntryNotional = 0m;
+            }
         }
     }
 
@@ -272,6 +347,8 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
         new Dictionary<string, string>
         {
             ["AnchorPrice"] = (_anchorPrice ?? 0m).ToString("G29", CultureInfo.InvariantCulture),
+            ["TotalEntryNotional"] = _totalEntryNotional.ToString("G29", CultureInfo.InvariantCulture),
+            ["RecentPrices"] = string.Join(',', _recentPrices.Select(p => p.ToString("G29", CultureInfo.InvariantCulture))),
             ["StrategyId"] = Parameters.StrategyId,
             ["Version"] = Parameters.Version,
         });
@@ -282,11 +359,29 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
         _currentInventory = snapshot.CurrentInventory;
         _activeGridLevel = snapshot.ActiveLevel;
         _lastTimestampUtc = snapshot.TimestampUtc;
-        if (snapshot.Metadata != null &&
-            snapshot.Metadata.TryGetValue("AnchorPrice", out var anchorText) &&
-            decimal.TryParse(anchorText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedAnchor))
+        if (snapshot.Metadata != null)
         {
-            _anchorPrice = parsedAnchor;
+            if (snapshot.Metadata.TryGetValue("AnchorPrice", out var anchorText) &&
+                decimal.TryParse(anchorText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedAnchor))
+            {
+                _anchorPrice = parsedAnchor;
+            }
+            if (snapshot.Metadata.TryGetValue("TotalEntryNotional", out var entryNotionalText) &&
+                decimal.TryParse(entryNotionalText, NumberStyles.Number, CultureInfo.InvariantCulture, out var parsedNotional))
+            {
+                _totalEntryNotional = parsedNotional;
+            }
+            if (snapshot.Metadata.TryGetValue("RecentPrices", out var recentText) && !string.IsNullOrWhiteSpace(recentText))
+            {
+                _recentPrices.Clear();
+                foreach (var part in recentText.Split(',', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (decimal.TryParse(part, NumberStyles.Number, CultureInfo.InvariantCulture, out var price))
+                    {
+                        _recentPrices.Add(price);
+                    }
+                }
+            }
         }
     }
 
@@ -304,15 +399,18 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
         var anchorPrice = bars[0].ClosePrice.Value;
         var roundTripCost = (Parameters.FeeRate + Parameters.SlippageRate) * 2m;
         var currentInventory = 0m;
+        var totalEntryNotional = 0m;
         var activeGridLevel = 0;
+        var recentPrices = new List<decimal>();
 
         for (var index = 0; index < bars.Count; index++)
         {
             var close = bars[index].ClosePrice.Value;
-            var calculatedLevel = (int)Math.Floor((double)((close - anchorPrice) / (anchorPrice * Parameters.GridSpacingRate)));
-
-            // Constrain within [-maxLevels, +maxLevels]
-            calculatedLevel = Math.Clamp(calculatedLevel, -Parameters.MaxLevels, Parameters.MaxLevels);
+            recentPrices.Add(close);
+            if (recentPrices.Count > 20)
+            {
+                recentPrices.RemoveAt(0);
+            }
 
             var signal = GridSignal.NoTrade;
             var reason = GridReason.BetweenLevels;
@@ -323,40 +421,103 @@ public sealed class AdaptiveGridStrategy : IStatefulStrategy
                 reason = GridReason.Initialized;
                 activeGridLevel = 0;
             }
-            else if (calculatedLevel < activeGridLevel)
+            else
             {
-                // Price dropped down across a level boundary -> Buy grid level
-                if (currentInventory + Parameters.QuantityPerLevel <= Parameters.MaxInventoryQuantity)
+                // Check Max Drawdown Stop
+                if (Parameters.MaxInventoryDrawdownBps is { } maxDd && currentInventory > 0m && totalEntryNotional > 0m)
                 {
-                    signal = GridSignal.BuyGridLevel;
-                    reason = GridReason.BuyLevelTriggered;
-                    targetQuantity = Parameters.QuantityPerLevel;
-                    currentInventory += Parameters.QuantityPerLevel;
-                    activeGridLevel = calculatedLevel;
+                    var avgEntry = totalEntryNotional / currentInventory;
+                    var ddBps = (avgEntry - close) / avgEntry * 10_000m;
+                    if (ddBps >= maxDd)
+                    {
+                        signal = GridSignal.SellGridLevel;
+                        reason = GridReason.MaxDrawdownStopTriggered;
+                        targetQuantity = currentInventory;
+                        currentInventory = 0m;
+                        totalEntryNotional = 0m;
+                        anchorPrice = close;
+                        activeGridLevel = 0;
+
+                        decisions[index] = new(
+                            bars[index].Symbol,
+                            bars[index].CloseTimeUtc,
+                            index,
+                            bars[index].ClosePrice,
+                            anchorPrice,
+                            activeGridLevel,
+                            currentInventory,
+                            signal,
+                            reason,
+                            targetQuantity,
+                            Parameters.FeeRate,
+                            Parameters.SlippageRate,
+                            roundTripCost,
+                            Parameters.StrategyId,
+                            Parameters.Version,
+                            Parameters.ConfigurationFingerprint);
+                        continue;
+                    }
                 }
-                else
+
+                var effectiveSpacing = Parameters.GridSpacingRate;
+                if (Parameters.EnableVolatilityScaling && recentPrices.Count >= 2)
                 {
-                    signal = GridSignal.NoTrade;
-                    reason = GridReason.InventoryCapReached;
-                    activeGridLevel = calculatedLevel;
+                    decimal totalPctReturn = 0m;
+                    for (var i = 1; i < recentPrices.Count; i++)
+                    {
+                        totalPctReturn += Math.Abs(recentPrices[i] - recentPrices[i - 1]) / recentPrices[i - 1];
+                    }
+                    var avgVol = totalPctReturn / (recentPrices.Count - 1);
+                    var expectedVol = Parameters.GridSpacingRate * 0.25m;
+                    var ratio = avgVol / expectedVol;
+                    effectiveSpacing = Parameters.GridSpacingRate * Math.Clamp(ratio, 0.5m, 2.5m);
                 }
-            }
-            else if (calculatedLevel > activeGridLevel)
-            {
-                // Price rose up across a level boundary -> Sell grid level
-                if (currentInventory >= Parameters.QuantityPerLevel)
+
+                var calculatedLevel = (int)Math.Floor((double)((close - anchorPrice) / (anchorPrice * effectiveSpacing)));
+                calculatedLevel = Math.Clamp(calculatedLevel, -Parameters.MaxLevels, Parameters.MaxLevels);
+
+                if (calculatedLevel < activeGridLevel)
                 {
-                    signal = GridSignal.SellGridLevel;
-                    reason = GridReason.SellLevelTriggered;
-                    targetQuantity = Parameters.QuantityPerLevel;
-                    currentInventory -= Parameters.QuantityPerLevel;
-                    activeGridLevel = calculatedLevel;
+                    // Price dropped down across a level boundary -> Buy grid level
+                    if (currentInventory + Parameters.QuantityPerLevel <= Parameters.MaxInventoryQuantity)
+                    {
+                        signal = GridSignal.BuyGridLevel;
+                        reason = GridReason.BuyLevelTriggered;
+                        targetQuantity = Parameters.QuantityPerLevel;
+                        currentInventory += Parameters.QuantityPerLevel;
+                        totalEntryNotional += Parameters.QuantityPerLevel * close;
+                        activeGridLevel = calculatedLevel;
+                    }
+                    else
+                    {
+                        signal = GridSignal.NoTrade;
+                        reason = GridReason.InventoryCapReached;
+                        activeGridLevel = calculatedLevel;
+                    }
                 }
-                else
+                else if (calculatedLevel > activeGridLevel)
                 {
-                    signal = GridSignal.NoTrade;
-                    reason = GridReason.InventoryDepleted;
-                    activeGridLevel = calculatedLevel;
+                    // Price rose up across a level boundary -> Sell grid level
+                    if (currentInventory >= Parameters.QuantityPerLevel)
+                    {
+                        signal = GridSignal.SellGridLevel;
+                        reason = GridReason.SellLevelTriggered;
+                        targetQuantity = Parameters.QuantityPerLevel;
+                        var avgEntry = currentInventory > 0m ? totalEntryNotional / currentInventory : close;
+                        totalEntryNotional = Math.Max(0m, totalEntryNotional - (Parameters.QuantityPerLevel * avgEntry));
+                        currentInventory -= Parameters.QuantityPerLevel;
+                        if (currentInventory == 0m)
+                        {
+                            totalEntryNotional = 0m;
+                        }
+                        activeGridLevel = calculatedLevel;
+                    }
+                    else
+                    {
+                        signal = GridSignal.NoTrade;
+                        reason = GridReason.InventoryDepleted;
+                        activeGridLevel = calculatedLevel;
+                    }
                 }
             }
 

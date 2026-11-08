@@ -138,7 +138,8 @@ public sealed class PaperOutboxMessageExecutor(
             ReadOptionalDateTimeOffset(root, "commissionObservedAtUtc"),
             ReadOptionalDateTimeOffset(root, "commissionValidUntilUtc"),
             ReadOptionalInt32(root, "executionAttempt") ?? 0,
-            ReadOptionalDateTimeOffset(root, "executionExpiresAtUtc"));
+            ReadOptionalDateTimeOffset(root, "executionExpiresAtUtc"),
+            ReadOptionalBoolean(root, "postOnly") ?? false);
 
         if (command.Quantity.Value <= 0m)
         {
@@ -188,6 +189,11 @@ public sealed class PaperOutboxMessageExecutor(
     private static DateTimeOffset? ReadOptionalDateTimeOffset(JsonElement root, string property) =>
         TryReadValue(root, property, out var value) && value.ValueKind != JsonValueKind.Null
             ? value.GetDateTimeOffset()
+            : null;
+
+    private static bool? ReadOptionalBoolean(JsonElement root, string property) =>
+        TryReadValue(root, property, out var value) && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+            ? value.GetBoolean()
             : null;
 
     private static T ReadEnum<T>(JsonElement root, string property) where T : struct, Enum
