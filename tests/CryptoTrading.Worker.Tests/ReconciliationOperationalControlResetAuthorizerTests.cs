@@ -36,6 +36,65 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     }
 
     [Fact]
+    public void RestoredTransientStopCanBeAutomaticallyCleared()
+    {
+        var control = new InMemoryOperationalControl(_authorizer);
+        var now = DateTimeOffset.UtcNow;
+        control.EnterSafeMode(new OperationalControlCommand("worker-bootstrap", "RESTORED_TRANSIENT_STOP:abc", IdempotencyKey.New(), now));
+        var reset = new OperationalControlCommand("account-reconciliation", "Reconciliation healthy", IdempotencyKey.New(), now);
+        var authorization = new OperationalControlResetAuthorization("account-reconciliation", "reconciliation-auto-recovery:test");
+
+        var result = control.Reset(reset, authorization);
+        Assert.True(result.StateChanged);
+        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+    }
+
+    [Fact]
+    public void OperatorManualResetCanClearDurableStop()
+    {
+        var control = new InMemoryOperationalControl(_authorizer);
+        var now = DateTimeOffset.UtcNow;
+        control.EnterSafeMode(new OperationalControlCommand("worker-bootstrap", "RESTORED_DURABLE_STOP:abc", IdempotencyKey.New(), now));
+        var reset = new OperationalControlCommand("operator", "Operator authorized reset", IdempotencyKey.New(), now);
+        var authorization = new OperationalControlResetAuthorization("operator", "operator-manual-reset:test");
+
+        var result = control.Reset(reset, authorization);
+        Assert.True(result.StateChanged);
+        Assert.Equal(OperationalMode.Normal, control.Snapshot.Mode);
+    }
+
+    [Theory]
+    [InlineData("account-reconciliation", "PERIODIC_RECONCILIATION_FAILURE", OperationalMode.SafeMode, true)]
+    [InlineData("account-reconciliation", "Binance API rate limit exceeded: RATE_LIMIT_EXCEEDED", OperationalMode.SafeMode, true)]
+    [InlineData("periodic-reconciliation", "Account reconciliation stale snapshot (correlation 123)", OperationalMode.SafeMode, true)]
+    [InlineData("account-stream", "ACCOUNT_STREAM_CONNECTIONLOST", OperationalMode.SafeMode, true)]
+    [InlineData("account-stream", "ACCOUNT_STREAM_TIMEOUT", OperationalMode.SafeMode, true)]
+    [InlineData("autonomy-cycle", "A2 failure: Binance error (severity=Transient)", OperationalMode.SafeMode, true)]
+    [InlineData("worker-bootstrap", "RESTORED_TRANSIENT_STOP:123:test", OperationalMode.SafeMode, true)]
+    [InlineData("account-stream", "ACCOUNT_STREAM_FAILURE", OperationalMode.SafeMode, false)]
+    [InlineData("supervisor", "POSITION_BASIS_DRIFT", OperationalMode.SafeMode, false)]
+    [InlineData("supervisor", "FEE_DRIFT", OperationalMode.SafeMode, false)]
+    [InlineData("risk", "DAILY_LOSS_LIMIT", OperationalMode.SafeMode, false)]
+    [InlineData("risk", "MAX_DRAWDOWN", OperationalMode.SafeMode, false)]
+    [InlineData("autonomy-cycle", "A2 failure: UNKNOWN_SYSTEM_FAILURE", OperationalMode.SafeMode, false)]
+    [InlineData("operator", "Manual operator stop", OperationalMode.SafeMode, false)]
+    [InlineData("account-reconciliation", "PERIODIC_RECONCILIATION_FAILURE", OperationalMode.KillSwitch, false)]
+    public void PersistenceMigrationIsTransientStopEnforcesFailClosedAllowlist(string actor, string reason, OperationalMode mode, bool expectedTransient)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var auditEvent = new OperationalControlAuditEvent(
+            Guid.NewGuid(),
+            OperationalMode.Normal,
+            mode,
+            actor,
+            reason,
+            IdempotencyKey.New(),
+            now,
+            null);
+        Assert.Equal(expectedTransient, PersistenceMigrationHostedService.IsTransientStop(auditEvent));
+    }
+
+    [Fact]
     public async Task AccountingFailureCannotClearOrDowngradeKillSwitchAsync()
     {
         var control = new InMemoryOperationalControl(_authorizer);

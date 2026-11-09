@@ -93,13 +93,15 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
             string.Equals(current.ChangedBy, "periodic-reconciliation", StringComparison.OrdinalIgnoreCase))
         {
             return string.Equals(current.Reason, "PERIODIC_RECONCILIATION_FAILURE", StringComparison.OrdinalIgnoreCase) ||
+                current.Reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase) ||
                 current.Reason.StartsWith("Account reconciliation stale snapshot", StringComparison.OrdinalIgnoreCase);
         }
 
         // 3. Autonomy cycle transient failures
         if (string.Equals(current.ChangedBy, "autonomy-cycle", StringComparison.OrdinalIgnoreCase))
         {
-            if (current.Reason.Contains("severity=Transient", StringComparison.OrdinalIgnoreCase))
+            if (current.Reason.Contains("severity=Transient", StringComparison.OrdinalIgnoreCase) ||
+                current.Reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -109,6 +111,12 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
             {
                 return true;
             }
+        }
+
+        // 4. Restored transient bootstrap stop
+        if (string.Equals(current.ChangedBy, "worker-bootstrap", StringComparison.OrdinalIgnoreCase))
+        {
+            return current.Reason.StartsWith("RESTORED_TRANSIENT_STOP", StringComparison.OrdinalIgnoreCase);
         }
 
         return false;
@@ -135,6 +143,14 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
         if (current.Mode != OperationalMode.SafeMode)
         {
             return false;
+        }
+
+        // Operator manual reset override
+        if (string.Equals(authorization.Actor, "operator", StringComparison.Ordinal) &&
+            string.Equals(resetCommand.Actor, "operator", StringComparison.Ordinal))
+        {
+            return !string.IsNullOrWhiteSpace(authorization.ApprovalId) &&
+                authorization.ApprovalId.StartsWith("operator-manual-reset:", StringComparison.Ordinal);
         }
 
         if (!string.Equals(authorization.Actor, "account-reconciliation", StringComparison.Ordinal) ||

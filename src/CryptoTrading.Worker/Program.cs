@@ -1,6 +1,7 @@
 using CryptoTrading.Configuration;
 using CryptoTrading.Domain.Accounting;
 using CryptoTrading.Domain.Execution;
+using CryptoTrading.Domain.Primitives;
 using CryptoTrading.Domain.Research;
 using CryptoTrading.Domain.Risk;
 using CryptoTrading.Exchange.Binance;
@@ -64,6 +65,77 @@ builder.Services.AddTradingConfiguration(builder.Configuration);
 // The authenticated account client is registered only when the explicit,
 // read-only reconciliation gate is enabled.
 var resolvedPostgresConnectionString = PostgresConnectionConfiguration.Resolve(builder.Configuration);
+
+if (args.Length > 0 && string.Equals(args[0], "--reset-operational-mode", StringComparison.Ordinal))
+{
+    if (string.IsNullOrWhiteSpace(resolvedPostgresConnectionString))
+    {
+        await Console.Error.WriteLineAsync("Cannot reset operational mode: PostgreSQL connection string is not configured.").ConfigureAwait(false);
+        Environment.Exit(1);
+    }
+
+    var reason = args.Length > 1 ? args[1] : "Operator authorized manual reset to Normal mode via CLI";
+    var store = new PostgresTradingStore(new PostgresPersistenceOptions(resolvedPostgresConnectionString));
+    try
+    {
+        var previous = await store.ReadLatestOperationalControlAuditEventAsync().ConfigureAwait(false);
+        if (previous is null || previous.To == OperationalMode.Normal)
+        {
+            await Console.Out.WriteLineAsync(JsonSerializer.Serialize(new
+            {
+                status = "SKIPPED",
+                message = "Operational control is already in Normal mode. No transition appended.",
+                mode = "Normal"
+            })).ConfigureAwait(false);
+            return;
+        }
+
+        if (previous.To == OperationalMode.KillSwitch)
+        {
+            await Console.Error.WriteLineAsync(JsonSerializer.Serialize(new
+            {
+                status = "ERROR",
+                message = "Cannot reset: system is in KillSwitch mode. KillSwitch requires manual risk verification and cannot be reset via routine SafeMode reset command.",
+                mode = "KillSwitch",
+                lastEventId = previous.EventId,
+                lastReason = previous.Reason
+            })).ConfigureAwait(false);
+            Environment.Exit(1);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var eventId = Guid.NewGuid();
+        var idempotencyKey = new IdempotencyKey($"operator-reset:{Guid.NewGuid():N}");
+        var approvalId = $"operator-manual-reset:{Guid.NewGuid():N}";
+        var auditEvent = new OperationalControlAuditEvent(
+            eventId,
+            previous.To,
+            OperationalMode.Normal,
+            "operator",
+            reason,
+            idempotencyKey,
+            now,
+            approvalId);
+
+        _ = await store.AppendOperationalControlAuditEventAsync(auditEvent).ConfigureAwait(false);
+        await Console.Out.WriteLineAsync(JsonSerializer.Serialize(new
+        {
+            status = "SUCCESS",
+            mode = "Normal",
+            previousMode = previous.To.ToString(),
+            actor = "operator",
+            reason,
+            eventId = eventId.ToString("D"),
+            occurredAtUtc = now,
+            notice = "If the worker daemon is currently running, restart it to load the Normal operational mode immediately."
+        })).ConfigureAwait(false);
+        return;
+    }
+    finally
+    {
+        await store.DisposeAsync().ConfigureAwait(false);
+    }
+}
 
 builder.Services.AddOptions<WorkerRuntimeOptions>()
     .Configure(options =>

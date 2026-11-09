@@ -51,7 +51,7 @@ internal sealed class ReconciliationStartupHostedService(
             }
             catch (Exception ex) when (FailureClassifier.Classify(ex).Severity == FailureSeverity.Transient)
             {
-                logger.LogWarning(ex, "Startup reconciliation encountered transient rate or network limitation. Delegating reconciliation to periodic service.");
+                ReconciliationStartupLog.TransientRateLimitDeferred(logger, ex);
                 await runtimeSupervisor.MarkReconciliationAsync(
                     true,
                     "startup-reconciliation-deferred-transient",
@@ -186,6 +186,9 @@ internal sealed class DenyOperationalControlResetAuthorizer : IOperationalContro
 
 internal static partial class ReconciliationStartupLog
 {
+    [LoggerMessage(LogLevel.Warning, "Startup reconciliation encountered transient rate or network limitation. Delegating reconciliation to periodic service.")]
+    public static partial void TransientRateLimitDeferred(ILogger logger, Exception ex);
+
     [LoggerMessage(LogLevel.Information, "Read-only account reconciliation healthy. CorrelationId={CorrelationId} Events={EventCount} ReportPath={ReportPath}")]
     public static partial void Healthy(ILogger logger, string correlationId, int eventCount, string reportPath);
 
