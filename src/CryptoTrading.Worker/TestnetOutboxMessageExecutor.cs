@@ -121,21 +121,8 @@ public sealed class TestnetOutboxMessageExecutor(
         }
         try
         {
+            await submissionGuard.ValidateFinalAsync(command, message, cancellationToken).ConfigureAwait(false);
             await ProjectSubmittedAsync(order, message, command, cancellationToken).ConfigureAwait(false);
-            try
-            {
-                await submissionGuard.ValidateFinalAsync(command, message, cancellationToken).ConfigureAwait(false);
-            }
-            catch (ExecutionDispatchBlockedException)
-            {
-                await projection.TransitionAndProjectAsync(
-                    order,
-                    OrderStatus.Rejected,
-                    new IdempotencyKey($"rejected:{message.MessageId:N}"),
-                    DateTimeOffset.UtcNow,
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
-                throw;
-            }
             var result = await client.SubmitAsync(request, cancellationToken).ConfigureAwait(false);
             try
             {

@@ -652,7 +652,7 @@ public sealed class AdaptiveDecisionCycle
                                              orderBookImbalance >= 0.35m &&
                                              request.MarketBreadthRatio is >= 0.60m;
 
-        var hasAggressiveTakerDemand = indicators.CvdImbalance >= 0.08m && indicators.RelativeVolume >= 1.05m;
+        var hasAggressiveTakerDemand = indicators.CvdImbalance >= 0.05m && indicators.RelativeVolume >= 0.90m;
         var hasNegativeTakerDelta = indicators.CvdImbalance < -0.05m;
         var isWeakBreadth = request.MarketBreadthRatio is { } breadthRatio && breadthRatio < 0.40m;
 
@@ -669,14 +669,14 @@ public sealed class AdaptiveDecisionCycle
             indicators.VwapDeviationBps >= -10m &&
             indicators.RelativeVolume >= 0.15m &&
             (mlEval.HasCalibratedProbability ? mlEval.MlWinProbability >= 0.51m : true) &&
-            (orderBookImbalance >= 0.25m ||
-             (orderBookImbalance >= 0.15m && microPriceDivergenceBps >= 0.35m) ||
-             (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.10m && microPriceDivergenceBps >= 0.15m) ||
+            (orderBookImbalance >= 0.20m ||
+             (orderBookImbalance >= 0.12m && microPriceDivergenceBps >= 0.25m) ||
+             (hasCrossAssetLeaderMomentum && orderBookImbalance >= 0.08m && microPriceDivergenceBps >= 0.10m) ||
              (hasAggressiveTakerDemand && orderBookImbalance >= -0.25m && microPriceDivergenceBps >= 0.0m)) &&
-            ((regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate > 0m && indicators.Rsi >= 48m) ||
+            ((regime.Regime == MarketRegime.BullTrend && regime.TrendSlopeRate > 0m && indicators.Rsi >= 46m) ||
              (regime.Regime == MarketRegime.MeanRevertingRange &&
-              (request.ExecutionMarket?.OrderBookImbalance >= 0.15m || orderBookImbalance >= 0.15m) &&
-              indicators.Rsi >= 35m)))
+              (request.ExecutionMarket?.OrderBookImbalance >= 0.10m || orderBookImbalance >= 0.10m) &&
+              indicators.Rsi >= 32m)))
         {
             var updatedCandidates = orchestration.Candidates.Select(c =>
                 string.Equals(c.StrategyId, trendFollowingId, StringComparison.OrdinalIgnoreCase)

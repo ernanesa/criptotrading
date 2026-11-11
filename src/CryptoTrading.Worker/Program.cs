@@ -151,7 +151,7 @@ builder.Services.AddOptions<WorkerRuntimeOptions>()
         options.ShadowReportDirectory = builder.Configuration["WORKER_SHADOW_REPORT_DIRECTORY"] ?? "artifacts/shadow";
         options.PollIntervalMilliseconds = builder.Configuration.GetValue("WORKER_POLL_INTERVAL_MS", 1_000);
         options.BatchSize = builder.Configuration.GetValue("WORKER_OUTBOX_BATCH_SIZE", 25);
-        options.LeaseSeconds = builder.Configuration.GetValue("WORKER_OUTBOX_LEASE_SECONDS", 30);
+        options.LeaseSeconds = builder.Configuration.GetValue("WORKER_OUTBOX_LEASE_SECONDS", 60);
         options.MaxOutboxAttempts = builder.Configuration.GetValue("WORKER_MAX_OUTBOX_ATTEMPTS", 5);
         options.ReconciliationEnabled = builder.Configuration.GetValue("WORKER_RECONCILIATION_ENABLED", false);
         options.RiskPolicyRequired = builder.Configuration.GetValue("WORKER_RISK_POLICY_REQUIRED", false);

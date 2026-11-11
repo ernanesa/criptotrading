@@ -38,7 +38,7 @@ public sealed class WorkerRuntimeOptions
 
     public int BatchSize { get; set; } = 25;
 
-    public int LeaseSeconds { get; set; } = 30;
+    public int LeaseSeconds { get; set; } = 60;
 
     public int MaxOutboxAttempts { get; set; } = 5;
 

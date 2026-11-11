@@ -194,6 +194,16 @@ internal sealed class ExecutionSubmissionGuard(
                 continue;
             }
 
+            if (options.Value.IsolateConfiguredUniverseEquity)
+            {
+                if (trackedOpenPositions.TryGetValue(otherSymbol, out var trackedOtherQty) && trackedOtherQty > 0.00000001m)
+                {
+                    otherSymbolsToFetch.Add((otherSymbol, trackedOtherQty));
+                }
+
+                continue;
+            }
+
             var otherBase = otherSymbol.EndsWith(quote, StringComparison.OrdinalIgnoreCase) ? otherSymbol[..^quote.Length] : otherSymbol;
             var otherBal = snapshot.Balances.FirstOrDefault(b => string.Equals(b.Asset, otherBase, StringComparison.OrdinalIgnoreCase));
             if (otherBal is null)
@@ -264,7 +274,10 @@ internal sealed class ExecutionSubmissionGuard(
         var effectivePositionQuantity = options.Value.IsolateConfiguredUniverseEquity
             ? (currentSymbolIsOpen ? (trackedOpenPositions.TryGetValue(command.Symbol.Value, out var qty) ? qty : 0m) : 0m)
             : positionQuantity;
-        decimal? currentEquityNotional = unsupportedAsset ? null : quoteQuantity + positionQuantity * mid + totalOtherPositionsNotional;
+        var effectiveOtherPositionsNotional = options.Value.IsolateConfiguredUniverseEquity
+            ? trackedOtherPositionsNotional
+            : totalOtherPositionsNotional;
+        decimal? currentEquityNotional = unsupportedAsset ? null : quoteQuantity + effectivePositionQuantity * mid + effectiveOtherPositionsNotional;
         var accounting = await riskContexts.RecordAutonomyRiskContextAsync(
             $"equity:{options.Value.ReconciliationAccount}:{command.Symbol.Value}:{quote}",
             command.Symbol, new Asset(quote), new DateTimeOffset(evaluatedAt.UtcDateTime.Date, TimeSpan.Zero),

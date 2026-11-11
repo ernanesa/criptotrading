@@ -293,15 +293,15 @@ public static class MultiStrategyDecisionOrchestrator
                    bars[^1].ClosePrice.Value >= bars[^2].ClosePrice.Value) ||
                   (bars.Count >= 20 &&
                    regime.Regime == MarketRegime.MeanRevertingRange &&
-                   indicators.Rsi <= 32m &&
-                   indicators.VwapDeviationBps <= -10m &&
-                   entryZScore <= -1.05m &&
+                   indicators.Rsi <= 38m &&
+                   indicators.VwapDeviationBps <= -6m &&
+                   entryZScore <= -0.85m &&
                    bars[^1].ClosePrice.Value >= bars[^2].ClosePrice.Value) ||
                   (bars.Count >= 20 &&
                    regime.Regime == MarketRegime.MeanRevertingRange &&
-                   indicators.LowerShadowRatio >= 0.45m &&
-                   indicators.CvdImbalance >= 0.10m &&
-                   entryZScore <= -0.90m &&
+                   indicators.LowerShadowRatio >= 0.35m &&
+                   indicators.CvdImbalance >= 0.04m &&
+                   entryZScore <= -0.75m &&
                    bars[^1].ClosePrice.Value >= bars[^2].ClosePrice.Value)))
         {
             meanRevSignal = MeanReversionSignal.EnterLong;

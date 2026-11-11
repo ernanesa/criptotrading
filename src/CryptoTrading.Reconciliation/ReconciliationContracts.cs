@@ -581,9 +581,10 @@ public sealed class AccountReconciliationService
         {
             var hasDivergentOrders = events.OfType<OpenOrderReconciliationMismatch>().Any(static m =>
                 m.ReasonCode != "STALE_SNAPSHOT" ||
-                m.LocalOrderId is null ||
-                m.ExchangeOrderId is null ||
-                !string.Equals(m.LocalStatus, m.ExchangeStatus, StringComparison.OrdinalIgnoreCase));
+                (m.LocalOrderId != 0 &&
+                 (m.LocalOrderId is null ||
+                  m.ExchangeOrderId is null ||
+                  !string.Equals(m.LocalStatus, m.ExchangeStatus, StringComparison.OrdinalIgnoreCase))));
 
             var hasBalanceDrift = events.OfType<ReconciliationMismatch>().Any(m =>
                 Math.Abs(m.Delta) > options.AbsoluteTolerance ||

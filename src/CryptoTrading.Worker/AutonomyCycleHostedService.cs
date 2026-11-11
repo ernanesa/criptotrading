@@ -82,6 +82,7 @@ internal sealed class AutonomyCycleHostedService(
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastClosedTradeAtBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DynamicExitThresholds> dynamicExitThresholdsBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, decimal> cachedTakerFeeRateBySymbol = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (BinanceCommissionSnapshot Snapshot, DateTimeOffset CachedAtUtc)> cachedCommissionBySymbol = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> lastProcessedCloseByScope = new(StringComparer.Ordinal);
     private sealed record CachedRiskPolicy(RiskPolicyDocument Document, DateTimeOffset CachedAtUtc);
     private CachedRiskPolicy? cachedActiveRiskPolicy;
@@ -811,7 +812,19 @@ internal sealed class AutonomyCycleHostedService(
             : Task.FromResult<IReadOnlyList<ExecutionReplanCandidate>>([]);
         var candidates = await replanTask.ConfigureAwait(false);
         var account = preloadedAccount ?? await accountClient.GetAccountAsync(cancellationToken).ConfigureAwait(false);
-        var commission = await accountClient.GetCommissionAsync(symbol, cancellationToken).ConfigureAwait(false);
+        BinanceCommissionSnapshot commission;
+        var commissionValuationNow = valuationTimeProvider.GetUtcNow();
+        if (cachedCommissionBySymbol.TryGetValue(symbol, out var cachedComm) &&
+            commissionValuationNow >= cachedComm.CachedAtUtc &&
+            commissionValuationNow - cachedComm.CachedAtUtc < TimeSpan.FromMinutes(3))
+        {
+            commission = cachedComm.Snapshot;
+        }
+        else
+        {
+            commission = await accountClient.GetCommissionAsync(symbol, cancellationToken).ConfigureAwait(false);
+            cachedCommissionBySymbol[symbol] = (commission, commissionValuationNow);
+        }
         ExecutionReplanCandidate? replanCandidate = candidates.LastOrDefault(c =>
             string.Equals(c.Symbol.Value, symbol, StringComparison.OrdinalIgnoreCase));
 
@@ -895,6 +908,7 @@ internal sealed class AutonomyCycleHostedService(
                         var restTicker = await marketClient.GetBookTickerAsync(otherSymbol, cancellationToken).ConfigureAwait(false);
                         if (PortfolioTickerValidation.IsValid(restTicker, otherSymbol, valuationTimeProvider.GetUtcNow(), policyDocument.Policy.MaxMarketDataAge))
                         {
+                            streamBookTickers[otherSymbol] = restTicker;
                             otherMid = (restTicker.BidPrice + restTicker.AskPrice) / 2m;
                             usedOtherTickers.Add((otherSymbol, restTicker));
                         }
@@ -963,6 +977,10 @@ internal sealed class AutonomyCycleHostedService(
                 bookTicker = await marketClient.GetBookTickerAsync(
                     symbol,
                     cancellationToken).ConfigureAwait(false);
+                if (PortfolioTickerValidation.IsValid(bookTicker, symbol, valuationTimeProvider.GetUtcNow(), policyDocument.Policy.MaxMarketDataAge))
+                {
+                    streamBookTickers[symbol] = bookTicker;
+                }
             }
             catch (JsonException ex)
             {
@@ -1362,7 +1380,7 @@ internal sealed class AutonomyCycleHostedService(
                 marketRisk,
                 executionMarket,
                 policyDocument.Policy.MaxMarketDataAge,
-                TimeSpan.FromSeconds(42),
+                TimeSpan.FromSeconds(90),
                 availableQuoteLiquidity,
                 new FeeReservePolicy(runtime.AutonomyFeeReserveBps),
                 commissionSnapshot,
