@@ -154,6 +154,38 @@ public sealed class FailureClassifierTests
         Assert.Equal(TimeSpan.FromSeconds(1), result.SuggestedBackoff);
     }
 
+    [Theory]
+    [InlineData("Binance server clock drift (1250 ms) exceeds configured tolerance (1000 ms).")]
+    [InlineData("Timestamp for this request is outside of the recvWindow.")]
+    [InlineData("Timestamp for this request was 1000ms ahead of the server's time.")]
+    public void ClassifyClockDriftMessageReturnsTransientClockSync(string message)
+    {
+        var ex = new InvalidOperationException(message);
+        var result = FailureClassifier.Classify(ex);
+
+        Assert.Equal(FailureSeverity.Transient, result.Severity);
+        Assert.Equal(RuntimeState.Degraded, result.TargetState);
+        Assert.Equal("ResyncClockAndRetry", result.Action);
+        Assert.Equal("CLOCK_SYNC_TRANSIENT_DRIFT", result.ReasonCode);
+        Assert.Equal(TimeSpan.FromSeconds(2), result.SuggestedBackoff);
+    }
+
+    [Fact]
+    public void ClassifyClockDriftExceptionTypeReturnsTransientClockSync()
+    {
+        var ex = new FakeClockDriftException("Clock drift detected during synchronization");
+        var result = FailureClassifier.Classify(ex);
+
+        Assert.Equal(FailureSeverity.Transient, result.Severity);
+        Assert.Equal(RuntimeState.Degraded, result.TargetState);
+        Assert.Equal("ResyncClockAndRetry", result.Action);
+        Assert.Equal("CLOCK_SYNC_TRANSIENT_DRIFT", result.ReasonCode);
+        Assert.Equal(TimeSpan.FromSeconds(2), result.SuggestedBackoff);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "Test helper only.")]
+    private sealed class FakeClockDriftException(string message) : InvalidOperationException(message);
+
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1032:Implement standard exception constructors", Justification = "Test helper only.")]
     private sealed class FakeSqlException(string sqlState) : Exception("DB Error")
     {

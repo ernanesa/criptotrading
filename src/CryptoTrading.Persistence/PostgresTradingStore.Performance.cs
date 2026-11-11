@@ -280,7 +280,9 @@ public sealed partial class PostgresTradingStore : IPortfolioPerformanceStore, I
     {
         "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
         "AVAXUSDT", "LINKUSDT", "NEARUSDT", "SUIUSDT", "DOTUSDT", "UNIUSDT", "AAVEUSDT",
-        "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "APTUSDT", "SHIBUSDT"
+        "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "APTUSDT", "SHIBUSDT",
+        "TRXUSDT", "LTCUSDT", "FETUSDT", "HBARUSDT", "RENDERUSDT", "ATOMUSDT", "BCHUSDT",
+        "ICPUSDT", "ENAUSDT", "SEIUSDT"
     };
 
     private static void ValidateSnapshot(PortfolioNavSnapshot snapshot)

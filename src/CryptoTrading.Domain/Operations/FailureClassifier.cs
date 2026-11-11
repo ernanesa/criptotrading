@@ -160,6 +160,18 @@ public static class FailureClassifier
                 "SECURITY_WITHDRAWALS_OR_KILL_SWITCH");
         }
 
+        if (exception.GetType().Name.Contains("ClockDrift", StringComparison.OrdinalIgnoreCase) ||
+            exception.Message.Contains("clock drift", StringComparison.OrdinalIgnoreCase) ||
+            exception.Message.Contains("Timestamp for this request", StringComparison.OrdinalIgnoreCase))
+        {
+            return new FailureClassification(
+                FailureSeverity.Transient,
+                RuntimeState.Degraded,
+                "ResyncClockAndRetry",
+                "CLOCK_SYNC_TRANSIENT_DRIFT",
+                TimeSpan.FromSeconds(2));
+        }
+
         if (exception.Message.Contains("drift", StringComparison.OrdinalIgnoreCase) ||
             exception.Message.Contains("UNKNOWN_ORDER", StringComparison.OrdinalIgnoreCase) ||
             exception.Message.Contains("stale", StringComparison.OrdinalIgnoreCase) ||

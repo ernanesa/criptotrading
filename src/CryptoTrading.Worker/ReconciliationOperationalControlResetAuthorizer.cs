@@ -94,6 +94,7 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
         {
             return string.Equals(current.Reason, "PERIODIC_RECONCILIATION_FAILURE", StringComparison.OrdinalIgnoreCase) ||
                 current.Reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase) ||
+                current.Reason.Contains("CLOCK_SYNC_TRANSIENT_DRIFT", StringComparison.OrdinalIgnoreCase) ||
                 current.Reason.StartsWith("Account reconciliation stale snapshot", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -101,7 +102,8 @@ internal sealed class ReconciliationOperationalControlResetAuthorizer : IOperati
         if (string.Equals(current.ChangedBy, "autonomy-cycle", StringComparison.OrdinalIgnoreCase))
         {
             if (current.Reason.Contains("severity=Transient", StringComparison.OrdinalIgnoreCase) ||
-                current.Reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase))
+                current.Reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase) ||
+                current.Reason.Contains("CLOCK_SYNC_TRANSIENT_DRIFT", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }

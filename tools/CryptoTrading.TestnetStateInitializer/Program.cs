@@ -297,6 +297,71 @@ if (args.Contains("--register-v7-high-utilization-risk-policy", StringComparer.O
     }
 }
 
+if (args.Contains("--register-v8-30symbols-risk-policy", StringComparer.Ordinal))
+{
+    try
+    {
+        await using var s = new PostgresTradingStore(new PostgresPersistenceOptions(connectionString));
+        var policyTime = DateTimeOffset.UtcNow;
+        var symbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,NEARUSDT,SUIUSDT,DOTUSDT,UNIUSDT,AAVEUSDT,INJUSDT,ARBUSDT,OPUSDT,TIAUSDT,APTUSDT,SHIBUSDT,TRXUSDT,LTCUSDT,FETUSDT,HBARUSDT,RENDERUSDT,ATOMUSDT,BCHUSDT,ICPUSDT,ENAUSDT,SEIUSDT";
+        var budgetPolicy = new BudgetPolicy(
+            owner: "Ernane",
+            nominalBudgetBrl: 56000.00m,
+            hardCapUsdt: 9000.00m,
+            fxSafetyHaircutRate: 0.02m,
+            maxOpenPositions: 18,
+            maxDailyLossBrl: 1800.00m,
+            maxCumulativeDrawdownBrl: 3600.00m,
+            maxRiskPerTradeBrl: 350.00m,
+            takerFeeBps: 10.0m,
+            feeReserveBufferBps: 25.0m,
+            minOrderNotionalUsdt: 5.00m,
+            allowedSymbol: symbols);
+        var riskPolicy = new RiskPolicy(
+            version: "v8-sota-high-utilization-90pct-30sym",
+            maxOrderNotional: 500m,
+            maxExposureNotional: 9000m,
+            maxDailyLoss: 300m,
+            maxDrawdown: 600m,
+            maxMarketDataAge: TimeSpan.FromMinutes(5),
+            withdrawalsEnabled: false,
+            budgetPolicy: budgetPolicy);
+        try
+        {
+            var draft = RiskPolicyDocument.CreateDraft(riskPolicy, policyTime.AddMinutes(-5), policyTime.AddDays(90), "policy-author");
+            await s.SaveRiskPolicyAsync(draft).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            // Draft already registered in database
+        }
+        _ = await s.ApproveRiskPolicyAsync(riskPolicy.Version, "approval-v8-sota-30symbols", "Ernane", DateTimeOffset.UtcNow).ConfigureAwait(false);
+        var activePolicy = await s.ActivateRiskPolicyAsync(riskPolicy.Version, DateTimeOffset.UtcNow).ConfigureAwait(false);
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "OK",
+            version = activePolicy.Policy.Version,
+            documentHash = activePolicy.DocumentHash,
+            maxOpenPositions = activePolicy.Policy.BudgetPolicy?.MaxOpenPositions,
+            hardCapUsdt = activePolicy.Policy.BudgetPolicy?.HardCapUsdt,
+            maxExposureNotional = activePolicy.Policy.MaxExposureNotional,
+            maxOrderNotional = activePolicy.Policy.MaxOrderNotional,
+            allowedSymbol = activePolicy.Policy.BudgetPolicy?.AllowedSymbol
+        }));
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            status = "FAIL",
+            errorType = ex.GetType().Name,
+            message = ex.Message
+        }));
+        return 1;
+    }
+}
+
 if (args.Contains("--reset-equity-high-water-marks", StringComparer.Ordinal))
 {
     try

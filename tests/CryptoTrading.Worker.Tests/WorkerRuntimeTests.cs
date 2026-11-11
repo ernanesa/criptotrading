@@ -652,6 +652,34 @@ public sealed class WorkerRuntimeTests
         validExpanded.Validate();
         Assert.Equal(7, validExpanded.ResolveAutonomySymbols().Count);
 
+        var validAll30Symbols = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbols = WorkerRuntimeOptions.DefaultAutonomySymbols
+        };
+        validAll30Symbols.Validate();
+        Assert.Equal(30, validAll30Symbols.ResolveAutonomySymbols().Count);
+
+        var validNewCurated = new WorkerRuntimeOptions
+        {
+            AutonomyEnabled = true,
+            PersistenceEnabled = true,
+            ApplyMigrations = true,
+            PostgresConnectionString = "Host=localhost",
+            RiskPolicyRequired = true,
+            ReconciliationEnabled = true,
+            AccountStreamEnabled = true,
+            AutonomySymbols = "TRXUSDT, LTCUSDT, FETUSDT, HBARUSDT, RENDERUSDT, ATOMUSDT, BCHUSDT, ICPUSDT, ENAUSDT, SEIUSDT"
+        };
+        validNewCurated.Validate();
+        Assert.Equal(10, validNewCurated.ResolveAutonomySymbols().Count);
+
         var unauthorizedLegacy = new WorkerRuntimeOptions
         {
             AutonomyEnabled = true,

@@ -69,6 +69,8 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [InlineData("periodic-reconciliation", "Account reconciliation stale snapshot (correlation 123)", OperationalMode.SafeMode, true)]
     [InlineData("account-stream", "ACCOUNT_STREAM_CONNECTIONLOST", OperationalMode.SafeMode, true)]
     [InlineData("account-stream", "ACCOUNT_STREAM_TIMEOUT", OperationalMode.SafeMode, true)]
+    [InlineData("account-reconciliation", "CLOCK_SYNC_TRANSIENT_DRIFT", OperationalMode.SafeMode, true)]
+    [InlineData("autonomy-cycle", "A2 failure: CLOCK_SYNC_TRANSIENT_DRIFT (severity=Transient, consecutive=5)", OperationalMode.SafeMode, true)]
     [InlineData("autonomy-cycle", "A2 failure: Binance error (severity=Transient)", OperationalMode.SafeMode, true)]
     [InlineData("worker-bootstrap", "RESTORED_TRANSIENT_STOP:123:test", OperationalMode.SafeMode, true)]
     [InlineData("account-stream", "ACCOUNT_STREAM_FAILURE", OperationalMode.SafeMode, false)]
@@ -212,6 +214,33 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
         Assert.False(result);
     }
 
+    [Theory]
+    [InlineData("account-reconciliation", "CLOCK_SYNC_TRANSIENT_DRIFT")]
+    [InlineData("periodic-reconciliation", "Binance API transient clock drift: CLOCK_SYNC_TRANSIENT_DRIFT")]
+    public void IsAuthorizedWhenSafeModeEnteredByReconciliationClockDriftReturnsTrue(string changedBy, string reason)
+    {
+        var current = new OperationalControlSnapshot(
+            OperationalMode.SafeMode,
+            Revision: 1,
+            ChangedAtUtc: DateTimeOffset.UtcNow.AddMinutes(-1),
+            ChangedBy: changedBy,
+            Reason: reason);
+
+        var command = new OperationalControlCommand(
+            "account-reconciliation",
+            "Reconciliation auto-recovery: balance and orders healthy.",
+            IdempotencyKey.New(),
+            DateTimeOffset.UtcNow);
+
+        var authorization = new OperationalControlResetAuthorization(
+            "account-reconciliation",
+            "reconciliation-auto-recovery:test-run-123");
+
+        var result = _authorizer.IsAuthorized(current, command, authorization);
+
+        Assert.True(result);
+    }
+
     [Fact]
     public void IsAuthorizedWhenSafeModeEnteredByPeriodicReconciliationFailureReturnsTrue()
     {
@@ -247,6 +276,8 @@ public sealed class ReconciliationOperationalControlResetAuthorizerTests
     [InlineData("Binance kline quality gate rejected the REST snapshot: OutOfOrder.")]
     [InlineData("Binance REST kline snapshot has a gap after the durable autonomy checkpoint.")]
     [InlineData("A2 failure: Stale market data snapshot (severity=Transient, consecutive=1)")]
+    [InlineData("A2 failure: CLOCK_SYNC_TRANSIENT_DRIFT (severity=Transient, consecutive=5)")]
+    [InlineData("A2 failure: CLOCK_SYNC_TRANSIENT_DRIFT (consecutive=5)")]
     public void IsAuthorizedWhenSafeModeEnteredByAutonomyTransientNetworkFailureReturnsTrue(string reason)
     {
         var current = new OperationalControlSnapshot(

@@ -83,6 +83,7 @@ internal sealed class PersistenceMigrationHostedService(
         {
             return string.Equals(reason, "PERIODIC_RECONCILIATION_FAILURE", StringComparison.OrdinalIgnoreCase) ||
                    reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase) ||
+                   reason.Contains("CLOCK_SYNC_TRANSIENT_DRIFT", StringComparison.OrdinalIgnoreCase) ||
                    reason.StartsWith("Account reconciliation stale snapshot", StringComparison.OrdinalIgnoreCase);
         }
 
@@ -91,6 +92,7 @@ internal sealed class PersistenceMigrationHostedService(
         {
             return reason.Contains("severity=Transient", StringComparison.OrdinalIgnoreCase) ||
                    reason.Contains("RATE_LIMIT_EXCEEDED", StringComparison.OrdinalIgnoreCase) ||
+                   reason.Contains("CLOCK_SYNC_TRANSIENT_DRIFT", StringComparison.OrdinalIgnoreCase) ||
                    reason.Contains("Binance kline quality gate rejected the REST snapshot", StringComparison.OrdinalIgnoreCase) ||
                    reason.Contains("Binance REST kline snapshot has a gap after the durable autonomy checkpoint", StringComparison.OrdinalIgnoreCase);
         }

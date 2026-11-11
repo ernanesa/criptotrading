@@ -86,6 +86,8 @@ public sealed class WorkerRuntimeOptions
                 ["WORKER_ML_ARTIFACT_PATH requires a .mlmodel.json catalog and WORKER_ML_ARTIFACT_SHA256 must be its explicit 64-character hexadecimal digest."]);
     }
 
+    public const string DefaultAutonomySymbols = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,LINKUSDT,NEARUSDT,SUIUSDT,DOTUSDT,UNIUSDT,AAVEUSDT,INJUSDT,ARBUSDT,OPUSDT,TIAUSDT,APTUSDT,SHIBUSDT,TRXUSDT,LTCUSDT,FETUSDT,HBARUSDT,RENDERUSDT,ATOMUSDT,BCHUSDT,ICPUSDT,ENAUSDT,SEIUSDT";
+
     public string AutonomySymbol { get; set; } = "BTCUSDT";
 
     /// <summary>Comma or whitespace-separated list of symbols scanned by the multi-asset autonomy engine.</summary>
@@ -349,7 +351,9 @@ public sealed class WorkerRuntimeOptions
             {
                 "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT",
                 "AVAXUSDT", "LINKUSDT", "NEARUSDT", "SUIUSDT", "DOTUSDT", "UNIUSDT", "AAVEUSDT",
-                "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "APTUSDT", "SHIBUSDT"
+                "INJUSDT", "ARBUSDT", "OPUSDT", "TIAUSDT", "APTUSDT", "SHIBUSDT",
+                "TRXUSDT", "LTCUSDT", "FETUSDT", "HBARUSDT", "RENDERUSDT", "ATOMUSDT",
+                "BCHUSDT", "ICPUSDT", "ENAUSDT", "SEIUSDT"
             };
 
             foreach (var symbol in symbols)
