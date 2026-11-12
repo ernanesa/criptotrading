@@ -1,6 +1,7 @@
 #pragma warning disable CA1515 // Public contract enables host-level safety tests.
 #pragma warning disable CA1031 // Defensive ticker catch in multi-asset position valuation.
 
+using System.Collections.Concurrent;
 using CryptoTrading.Domain.Execution;
 using CryptoTrading.Domain.Orders;
 using CryptoTrading.Domain.Primitives;
@@ -41,6 +42,7 @@ internal sealed class ExecutionSubmissionGuard(
     ICapitalReservationStore? capitalReservations = null) : IExecutionSubmissionGuard
 {
     private static readonly string[] SupportedQuoteAssets = ["USDT", "FDUSD", "USDC", "TUSD", "BUSD", "BTC", "ETH", "BNB", "BRL"];
+    private readonly ConcurrentDictionary<string, (BinanceBookTicker Ticker, DateTimeOffset CachedAt)> otherTickersCache = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task ValidateFinalAsync(SubmitOrderCommand command, LeasedOutboxMessage message, CancellationToken cancellationToken = default)
     {
@@ -194,16 +196,6 @@ internal sealed class ExecutionSubmissionGuard(
                 continue;
             }
 
-            if (options.Value.IsolateConfiguredUniverseEquity)
-            {
-                if (trackedOpenPositions.TryGetValue(otherSymbol, out var trackedOtherQty) && trackedOtherQty > 0.00000001m)
-                {
-                    otherSymbolsToFetch.Add((otherSymbol, trackedOtherQty));
-                }
-
-                continue;
-            }
-
             var otherBase = otherSymbol.EndsWith(quote, StringComparison.OrdinalIgnoreCase) ? otherSymbol[..^quote.Length] : otherSymbol;
             var otherBal = snapshot.Balances.FirstOrDefault(b => string.Equals(b.Asset, otherBase, StringComparison.OrdinalIgnoreCase));
             if (otherBal is null)
@@ -223,9 +215,24 @@ internal sealed class ExecutionSubmissionGuard(
             BinanceBookTicker[] otherTickers;
             try
             {
-                var tickerTasks = otherSymbolsToFetch
-                    .Select(item => market.GetBookTickerAsync(item.Symbol, cancellationToken))
-                    .ToArray();
+                var tickerTasks = otherSymbolsToFetch.Select(async item =>
+                {
+                    if (otherTickersCache.TryGetValue(item.Symbol, out var cached) &&
+                        UtcNow >= cached.CachedAt &&
+                        UtcNow - cached.CachedAt < TimeSpan.FromSeconds(5) &&
+                        PortfolioTickerValidation.IsValid(cached.Ticker, item.Symbol, UtcNow, policy.Policy.MaxMarketDataAge))
+                    {
+                        return cached.Ticker;
+                    }
+
+                    var fetched = await market.GetBookTickerAsync(item.Symbol, cancellationToken).ConfigureAwait(false);
+                    if (PortfolioTickerValidation.IsValid(fetched, item.Symbol, UtcNow, policy.Policy.MaxMarketDataAge))
+                    {
+                        otherTickersCache[item.Symbol] = (fetched, UtcNow);
+                    }
+
+                    return fetched;
+                }).ToArray();
                 otherTickers = await Task.WhenAll(tickerTasks).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -277,7 +284,7 @@ internal sealed class ExecutionSubmissionGuard(
         var effectiveOtherPositionsNotional = options.Value.IsolateConfiguredUniverseEquity
             ? trackedOtherPositionsNotional
             : totalOtherPositionsNotional;
-        decimal? currentEquityNotional = unsupportedAsset ? null : quoteQuantity + effectivePositionQuantity * mid + effectiveOtherPositionsNotional;
+        decimal? currentEquityNotional = unsupportedAsset ? null : quoteQuantity + positionQuantity * mid + totalOtherPositionsNotional;
         var accounting = await riskContexts.RecordAutonomyRiskContextAsync(
             $"equity:{options.Value.ReconciliationAccount}:{command.Symbol.Value}:{quote}",
             command.Symbol, new Asset(quote), new DateTimeOffset(evaluatedAt.UtcDateTime.Date, TimeSpan.Zero),
@@ -318,8 +325,7 @@ internal sealed class ExecutionSubmissionGuard(
         }
         if (policy.Policy.BudgetPolicy is { } budgetPolicy && command.Side == OrderSide.Buy)
         {
-            decimal aggregateOpenPositionsUsdt = effectivePositionQuantity * mid +
-                (options.Value.IsolateConfiguredUniverseEquity ? trackedOtherPositionsNotional : totalOtherPositionsNotional);
+            decimal aggregateOpenPositionsUsdt = effectivePositionQuantity * mid + effectiveOtherPositionsNotional;
             await ValidateAndReserveOperatorBudgetAsync(
                 command,
                 message,
